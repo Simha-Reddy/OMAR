@@ -1,0 +1,43 @@
+{
+  "__comment": [
+    "Workflow Description:",
+    "This workflow starts with the 'fruitList' module, which produces a list of fruits (e.g., ['apple', 'banana', 'orange']).",
+    "For each fruit, it runs both 'fruitDetails' and 'fruitColor' in parallel.",
+    "After 'fruitDetails', if the fruit is 'orange', it conditionally runs 'fruitVitaminC' for that item only.",
+    "The flow is a directed acyclic graph (DAG) and supports per-item branching.",
+    "",
+    "Diagram:",
+    "",
+    "  fruitList",
+    "     |",
+    "     +-------------------+",
+    "     |                   |",
+    "fruitDetails         fruitColor",
+    "     |",
+    "     | (if item == 'orange')",
+    "fruitVitaminC"
+  ],
+  "start": "fruitList",
+  "nodes": {
+    "fruitList": {
+      "next": [
+        { "module": "fruitDetails" },
+        { "module": "fruitColor" }
+      ]
+    },
+    "fruitDetails": {
+      "next": [
+        {
+          "module": "fruitVitaminC",
+          "if": "item == 'orange'"
+        }
+      ]
+    },
+    "fruitColor": {
+      "next": []
+    },
+    "fruitVitaminC": {
+      "next": []
+    }
+  }
+}
