@@ -16,6 +16,7 @@ import sys # to handle frozen state in PyInstaller
 import subprocess # for running background processes like transcription
 import glob # for file globbing as part of cleanup of old session data
 from vista_api import get_jwt_token, call_rpc
+from vista_to_FHIR import vpr_to_fully_compliant_fhir_bundle
 
 # Load environment variables
 load_dotenv()
@@ -444,8 +445,6 @@ def run_module_by_name(module_name, data, chunks, vectors, inverted_index, clien
             prompt_vars["top_chunks"] = ""
     # Always remove chunkText so it is never appended
     prompt_vars.pop("chunkText", None)
-
-    # ...existing code...
 
     # Format the prompt
     try:
@@ -1010,11 +1009,12 @@ def save_session():
 @app.route('/load_session', methods=['GET'])
 def load_session():
     """
-    Load session data (scribe and explore) from the server.
+    Load session data (scribe, explore, and patient_record) from the server.
     """
     scribe = session.get('scribe', {})
     explore = session.get('explore', {})
-    return jsonify({"scribe": scribe, "explore": explore}), 200
+    patient_record = session.get('patient_record', {})
+    return jsonify({"scribe": scribe, "explore": explore, "patient_record": patient_record}), 200
 
 @app.route('/clear_session', methods=['POST'])
 def clear_session():
@@ -1072,20 +1072,23 @@ def select_patient():
         return jsonify({"error": "No patient DFN provided"}), 400
     try:
         token = get_jwt_token()
-        # Use provider DUZ and station, pass patient DFN as parameter
-        rpc = "SDES GET PATIENT DEMOGRAPHICS"
-        parameters = [{"string": patient_dfn}]
-        result = call_rpc(token, station, provider_duz, "SDECRPC", rpc, parameters)
-        patient_name = result.get("data", {}).get("name", "Unknown")
-        session["patient"] = {
-            "user_id": provider_duz,
-            "station": station,
-            "dfn": patient_dfn,
-            "name": patient_name
-        }
-        return jsonify({"name": patient_name})
+        rpc = "VPR GET PATIENT DATA JSON"
+        parameters = [{"namedArray": {"patientId": patient_dfn}}]
+        result = call_rpc(token, station, provider_duz, "LHS RPC CONTEXT", rpc, parameters)
+        print("[DEBUG] Raw VPR result:", json.dumps(result)[:1000])  # Print first 1000 chars
+        fhir_result = vpr_to_fully_compliant_fhir_bundle(result)
+        print("[DEBUG] FHIR bundle result:", json.dumps(fhir_result)[:1000])  # Print first 1000 chars
+        print("[DEBUG] FHIR bundle Patient preview:", json.dumps(fhir_result.get('entry', [{}])[0].get('resource', {}), indent=2))
+        session["patient_record"] = fhir_result
+        print("[DEBUG] Saved patient_record to session.")
+        return jsonify(fhir_result)
     except Exception as e:
+        print("[ERROR] select_patient exception:", str(e))
         return jsonify({"error": str(e)}), 500
+
+@app.route('/session_data', methods=['GET'])
+def session_data():
+    return jsonify(dict(session))
 
 @app.route("/get_patient", methods=["GET"])
 def get_patient():

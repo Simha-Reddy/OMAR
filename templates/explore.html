@@ -72,17 +72,21 @@
     </div>
 
     <!-- Add this after your main flex row, before the button-row or at the end of .container -->
-    <div id="dynamicModules" style="margin-top:32px;"></div>
-    <div class="panel" id="patientLookupPanel" style="margin-top:32px;">
-        <h3>Patient Lookup</h3>
-        <input type="text" id="patientSearchInput" placeholder="Enter patient name or ICN">
-        <select id="patientSearchType">
-            <option value="name">Name</option>
-            <option value="icn">ICN</option>
-        </select>
-        <button id="lookupPatientBtn">Lookup</button>
-        <div id="patientLookupResults"></div>
+
+    <!-- Labs and Vitals modules -->
+    <div style="margin-top:32px;">
+        <!-- Vitals Module Only -->
+        <div class="panel" id="vitalsModule">
+            <h3>Vitals</h3>
+            <div id="vitalsChartContainer" style="width:100%;height:340px;min-width:320px;min-height:240px;">Loading vitals chart...</div>
+            <div style="margin-top:10px;">
+                <label for="vitalTypeSelect">Show vital sign:</label>
+                <select id="vitalTypeSelect"></select>
+            </div>
+        </div>
     </div>
+
+    <div id="dynamicModules" style="margin-top:32px;"></div>
 </div>
 <div id="exploreSearchResults" style="margin-top:18px;"></div>
 
@@ -113,9 +117,20 @@
     </div>
   </div>
 </div>
+<!-- Patient Record Modules: Active Problems, Medications, Labs -->
+<div id="patientRecordModules" style="margin-top: 24px;"></div>
+<div id="patientRecordDisplay" style="margin-top: 20px; padding: 10px; border: 1px solid #ccc; border-radius: 5px; background-color: #f9f9f9;">
+    <h3>Patient Record</h3>
+    <pre id="patientRecordJson" style="white-space: pre-wrap; word-wrap: break-word;"></pre>
+</div>
 <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
+<!-- ECharts loader and vitals chart integration -->
+<script src="https://cdn.jsdelivr.net/npm/echarts@5.5.0/dist/echarts.min.js"></script>
+<script src="/static/vitals_chart.js"></script>
 <script src="/static/SessionManager.js"></script>
 <script src="/static/explore.js"></script>
 <script src="/static/app.js"></script>
+<script src="/static/patient.js"></script>
+<script src="/static/selectpatient.js"></script>
 </body>
 </html>

@@ -157,22 +157,19 @@ document.addEventListener("DOMContentLoaded", function() {
 document.addEventListener("DOMContentLoaded", async () => {
     console.log("Page loaded. Attempting to restore session...");
 
-    if (typeof SessionManager !== "undefined") {
-        try {
-            await SessionManager.loadFromSession();
-            console.log("Session data restored from server.");
-        } catch (err) {
-            console.error("Failed to restore session data from server:", err);
-        }
-    } else {
-        console.error("⚠️ SessionManager is not defined. Ensure SessionManager.js is loaded before app.js.");
-    }
-
     // --- Recording Button (all pages with recordBtn) ---
     const btn = document.getElementById('recordBtn');
     if (btn) {
         const isRecording = await getRecordingStatus();
         setRecordBtnState(isRecording);
         btn.onclick = toggleRecording;
+    }
+
+    // Remove any redundant session restoration logic
+    if (typeof SessionManager !== "undefined") {
+        // Delegate session restoration to SessionManager
+        SessionManager.loadFromSession();
+    } else {
+        console.error("⚠️ SessionManager is not defined. Ensure SessionManager.js is loaded before app.js.");
     }
 });

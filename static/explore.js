@@ -1,3 +1,25 @@
+// --- Labs and Vitals Module Rendering (using real FHIR data) ---
+document.addEventListener("DOMContentLoaded", async function () {
+    // Fetch patient FHIR bundle from session (same as patient.js)
+    let patientRecord = null;
+    try {
+        const res = await fetch("/session_data");
+        const sessionData = await res.json();
+        patientRecord = sessionData.patient_record;
+    } catch (e) {
+        console.error("Could not load patient FHIR bundle for Labs/Vitals modules", e);
+        return;
+    }
+    if (!patientRecord) return;
+
+
+
+    // --- Render Vitals Chart Only ---
+    const vitalsChartContainer = document.getElementById('vitalsChartContainer');
+    if (vitalsChartContainer && window.getVitals && window.renderVitalsChart) {
+        window.renderVitalsChart('vitalsChartContainer', patientRecord);
+    }
+});
 document.addEventListener("DOMContentLoaded", async () => {
     console.log("Initializing Explore page...");
 

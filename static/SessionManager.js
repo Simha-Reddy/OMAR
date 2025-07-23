@@ -65,6 +65,11 @@ const SessionManager = {
         this.lastLoadedData = data; // <-- Store for later
         this.restoreData(data);
         console.log('Session loaded from server:', data);
+
+        // Call displayPatientInfo to update patient name and record
+        if (typeof displayPatientInfo === "function") {
+          displayPatientInfo(data.patient_record);
+        }
       } else {
         console.error('Failed to load session from server.');
       }
