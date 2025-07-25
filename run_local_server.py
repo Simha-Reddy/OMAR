@@ -593,11 +593,13 @@ def process_chart_chunk():
         session["outputs"][field] = module_result
 
     print(">>> Returning JSON to client")
+    response = {"chunks": chunks}
     if len(selected_fields) == 1:
         field = selected_fields[0]
-        return jsonify({field: session["outputs"][field]})
+        response[field] = session["outputs"][field]
     else:
-        return jsonify(session["outputs"])
+        response.update(session["outputs"])
+    return jsonify(response)
 
 @app.route("/settings")
 def settings():
@@ -716,7 +718,7 @@ def list_custom_templates():
     folder = os.path.join("templates", "custom")
     if not os.path.exists(folder):
         return jsonify([])
-    files = [os.path.splitext(f)[0] for f in os.listdir(folder) if f.endswith((".txt", ".md"))]
+    files = [os.path.splitext(f)[0] for f in os.listdir(folder) if f.endsWith((".txt", ".md"))]
     return jsonify(files)
 
 @app.route('/templates/custom/<filename>')
@@ -812,10 +814,12 @@ def convert_pdf_to_markdown(pdf_path):
             # Extract tables first
             tables = page.extract_tables()
             for table in tables:
-                markdown_text.append("\n| " + " | ".join(table[0]) + " |\n")
+                # Safely join header row
+                markdown_text.append("\n| " + " | ".join(str(cell) if cell is not None else "" for cell in table[0]) + " |\n")
                 markdown_text.append("|" + "|".join(["---"] * len(table[0])) + "|\n")
                 for row in table[1:]:
-                    markdown_text.append("| " + " | ".join(row) + " |\n")
+                    # Safely join data rows
+                    markdown_text.append("| " + " | ".join(str(cell) if cell is not None else "" for cell in row) + " |\n")
                 markdown_text.append("\n")
             # Then extract text
             text = page.extract_text()
@@ -823,12 +827,13 @@ def convert_pdf_to_markdown(pdf_path):
                 continue
             lines = text.split('\n')
             for line in lines:
-            # Section header: ALL CAPS or matches known section names
+                # Section header: ALL CAPS or matches known section names
                 if line.isupper() or re.match(r'^(HPI|ASSESSMENT|PLAN|LABS?|RADIOLOGY|MEDICATIONS?)[:\s-]*$', line.strip(), re.I):
                     markdown_text.append(f"\n### {line.strip()}\n")
                 else:
                     markdown_text.append(line + "\n")
-            markdown_text.append  # Page separatornpen  # Page separatorn("\  # Page separatorn---  # Page separator\n")  # Page separator
+            # Optionally add a page separator
+            # markdown_text.append("\n---\n")
     return "".join(markdown_text)
 
 @app.route("/end_session", methods=["POST"])

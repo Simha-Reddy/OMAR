@@ -230,7 +230,7 @@ function findAllModalMatches(query) {
 }
 
 // Render the modal page, highlighting only the current match on that page
-function renderChartModalPage(pageIdx, highlightSectionName, keyword) {
+function renderChartModalPage(pageIdx, highlightSectionName, keyword, offset) {
     if (pageIdx < 0 || pageIdx >= chartPages.length) return;
     const contentDiv = document.getElementById("chartModalContent");
     let pageText = chartPages[pageIdx];
@@ -239,6 +239,20 @@ function renderChartModalPage(pageIdx, highlightSectionName, keyword) {
     let pageNumLabel = `**Page ${pageIdx + 1}**\n\n`;
     pageText = pageText.replace(/^Page\s+\d+\s+of\s+\d+\s*/i, "");
     pageText = pageNumLabel + pageText;
+
+    // --- Insert chunk anchors ---
+    if (chartChunks && chartChunks.length) {
+        // For each chunk on this page, insert a span with its chunk_id at the start offset
+        let html = escapeHtml(pageText);
+        // Sort chunks by start offset descending so insertion doesn't mess up indices
+        const pageChunks = chartChunks.filter(c => c.page === pageIdx + 1);
+        pageChunks.sort((a, b) => b.start - a.start);
+        for (const chunk of pageChunks) {
+            const anchor = `<span id="${chunk.chunk_id}" class="chart-chunk-anchor"></span>`;
+            html = html.slice(0, chunk.start) + anchor + html.slice(chunk.start);
+        }
+        pageText = html;
+    }
 
     // Bold section headers and add spacing
     pageText = pageText.replace(
@@ -284,8 +298,8 @@ function renderChartModalPage(pageIdx, highlightSectionName, keyword) {
         });
     }
     contentDiv.innerHTML = typeof marked !== "undefined"
-        ? marked.parse(html)
-        : html.replace(/\n/g, "<br>");
+        ? marked.parse(pageText)
+        : pageText.replace(/\n/g, "<br>");
     document.getElementById("chartModalPageLabel").textContent = `Page ${pageIdx + 1} of ${chartPages.length}`;
 
     // Show match count
@@ -294,6 +308,44 @@ function renderChartModalPage(pageIdx, highlightSectionName, keyword) {
     // Attach modal handlers for new content
     attachChartModalHandlers();
     scrollToModalMatch();
+    // --- Scroll to offset if provided ---
+    if (typeof offset === "number" && !isNaN(offset)) {
+        setTimeout(() => {
+            // Find the text node at the offset and scroll to it
+            const node = contentDiv.childNodes[0]; // The main text node
+            if (node && node.nodeType === Node.ELEMENT_NODE) {
+                // Try to find the element at the offset
+                let charCount = 0;
+                let found = false;
+                function walk(node) {
+                    if (found) return;
+                    if (node.nodeType === Node.TEXT_NODE) {
+                        if (charCount + node.length >= offset) {
+                            // Create a span at the offset
+                            const span = document.createElement('span');
+                            span.style.background = '#ffe066';
+                            span.id = 'citation-offset-marker';
+                            const splitIdx = offset - charCount;
+                            const before = node.textContent.slice(0, splitIdx);
+                            const after = node.textContent.slice(splitIdx);
+                            const afterNode = node.splitText(splitIdx);
+                            node.parentNode.insertBefore(span, afterNode);
+                            span.appendChild(afterNode);
+                            found = true;
+                        } else {
+                            charCount += node.length;
+                        }
+                    } else if (node.nodeType === Node.ELEMENT_NODE) {
+                        for (let child of node.childNodes) walk(child);
+                    }
+                }
+                walk(node);
+                // Scroll to the marker
+                const marker = document.getElementById('citation-offset-marker');
+                if (marker) marker.scrollIntoView({ behavior: 'smooth', block: 'center' });
+            }
+        }, 200);
+    }
 }
 
 function updateModalMatchLabel() {
@@ -373,7 +425,7 @@ function attachChartModalHandlers() {
 }
 
 // When opening the modal, always recalculate matches for the current keyword
-window.openChartModal = function(pageIdx, sectionName, keyword) {
+window.openChartModal = function(pageIdx, sectionName, keyword, offset) {
     if (!chartPages || chartPages.length === 0) {
         alert("No chart data loaded. Please load or enter chart data first.");
         return;
@@ -401,7 +453,7 @@ window.openChartModal = function(pageIdx, sectionName, keyword) {
         modalCurrentIdx = 0;
     }
     document.getElementById("chartModal").style.display = "flex";
-    renderChartModalPage(currentModalPage, highlightSection, keywordHighlight);
+    renderChartModalPage(currentModalPage, highlightSection, keywordHighlight, offset);
 };
 
 window.closeChartModal = function() {
@@ -612,6 +664,7 @@ function updateChartPagesFromChunkText() {
 // --- Modal Chart Pagination State ---
 let chartPages = [];
 let chartPageSections = [];
+let chartChunks = [];
 let currentModalPage = 0;
 let highlightSection = null;
 let keywordHighlight = "";
@@ -887,6 +940,9 @@ async function submitChartChunk() {
 
         const data = await res.json();
         console.log("Returned data:", data);
+        if (data.chunks) {
+            chartChunks = data.chunks;
+        }
 
         if (status) status.textContent = "✅ Chart data indexed successfully.";
     } catch (err) {
@@ -1017,13 +1073,15 @@ function linkifyCitations(answerHtml) {
         // Split by semicolon or comma, but keep "Page N" together
         const parts = inner.split(/;\s*|,\s*(?=[Pp]age\s*\d+)/);
         const linked = parts.map(part => {
-            // Match (Section, Page N) or (Page N)
-            const match = part.match(/^(?:([A-Z0-9\s\-\(\)/,\.]+?),\s*)?[Pp]age\s*(\d+)$/i);
+            // Match (Section, Page N, Offset NNNN) or (Page N, Offset NNNN)
+            const match = part.match(/^(?:([A-Z0-9\s\-\(\)/,\.]+?),\s*)?[Pp]age\s*(\d+)(?:,?\s*Offset\s*(\d+))?/i);
             if (match) {
                 const section = match[1] ? match[1].trim() : "Page";
                 const page = match[2];
+                const offset = match[3] ? match[3] : null;
                 const id = chunkId(section, page);
-                return `<a href="#" class="citation-link" data-chunkid="${id}">${part.trim()}</a>`;
+                // Add data-page and data-offset for precise navigation
+                return `<a href="#" class="citation-link" data-chunkid="${id}" data-page="${page}"${offset ? ` data-offset="${offset}"` : ''}>${part.trim()}</a>`;
             } else {
                 return part; // Not a citation, leave as is
             }
@@ -1032,26 +1090,21 @@ function linkifyCitations(answerHtml) {
     });
 }
 
-// --- Citation click handler (modal version) ---
+// --- Citation click handler (chunk-based) ---
 document.addEventListener("click", function(e) {
     if (e.target.classList.contains("citation-link")) {
         e.preventDefault();
-        // Match "Section, Page N" or "Page N"
-        const match = e.target.textContent.match(/^(?:([^,]+),\s*)?[Pp]age\s*(\d+)$/);
-        if (match) {
-            let section = match[1] ? match[1].trim() : null;
-            const pageNum = parseInt(match[2], 10);
-
-            // If section is empty or just punctuation, treat as null
-            if (!section || /^[\s,;:.\-]+$/.test(section)) section = null;
-
-            openChartModal(pageNum - 1, section);
-        } else {
-            // Fallback: try to match just "Page N"
-            const pageMatch = e.target.textContent.match(/[Pp]age\s*(\d+)/);
-            if (pageMatch) {
-                const pageNum = parseInt(pageMatch[1], 10);
-                openChartModal(pageNum - 1, null);
+        const chunkId = e.target.getAttribute("data-chunkid");
+        if (chunkId) {
+            // Find the chunk in chartChunks
+            const chunk = chartChunks.find(c => c.chunk_id === chunkId);
+            if (chunk) {
+                // Open the modal to the correct page and scroll to the chunk anchor
+                openChartModal(chunk.page - 1, null, null);
+                setTimeout(() => {
+                    const anchor = document.getElementById(chunkId);
+                    if (anchor) anchor.scrollIntoView({ behavior: 'smooth', block: 'center' });
+                }, 300);
             }
         }
     }

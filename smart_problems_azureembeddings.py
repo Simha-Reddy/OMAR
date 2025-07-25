@@ -15,6 +15,7 @@ def sliding_window_chunk(text, window_size=2000, step_size=1000):
     """
     Splits text into overlapping chunks using a sliding window.
     Each chunk is window_size characters, sliding by step_size.
+    Adds 'start' (global offset), 'chunk_id', and assigns correct 'page' using tag_chunks_with_page.
     """
     chunks = []
     n = len(text)
@@ -24,14 +25,18 @@ def sliding_window_chunk(text, window_size=2000, step_size=1000):
         chunk_text = text[start:start+window_size]
         if chunk_text.strip():
             chunks.append({
+                "chunk_id": f"chunk-{chunk_num}",
                 "section": f"Window {chunk_num}",
                 "text": chunk_text.strip(),
-                "page": 1  # or use actual page if you have it
+                "start": start  # global offset in chart text
+                # 'page' will be assigned below
             })
         if start + window_size >= n:
             break
         start += step_size
         chunk_num += 1
+    # Assign correct page numbers to each chunk
+    chunks = tag_chunks_with_page(chunks, text)
     return chunks
 
 def get_retrieval_queries(client, deploy_chat, user_question):
@@ -210,32 +215,22 @@ def hybrid_search(client, deploy_embed, query, chunks, vectors, inverted_index, 
     return results
 
 def ask_gpt(client, deploy_chat, top_chunks, query=None, qa_history=None):
-    # Build conversation context
+    # Build conversation context with explicit page for each chunk
     history_str = ""
     if qa_history:
         for i, qa in enumerate(qa_history):
             history_str += f"Previous Q{i+1}: {qa['question']}\nA{i+1}: {qa['answer']}\n"
     context = "\n\n".join([
-        f"### Source: {c.get('section','Unknown')} (Page {c.get('page','?')})"
-        + (f", Entities: {', '.join(c['entities'])}" if 'entities' in c else "")
-        + (f", Date: {c['date']}" if 'date' in c else "")
-        + (f", Time: {c['time']}" if 'time' in c else "")
-        + f"\n{c['text']}"
+        f"### Source: (Page {c.get('page','?')})\n{c['text']}"
         for c in top_chunks
     ])
+    citation_instruction = (
+        "\n\nIMPORTANT: For every fact or statement, include a parenthetical citation in the format (Page N) using the provided context. Never cite 'Window N' or offsets. Example: The patient's creatinine was 1.32 (Page 17). If you cannot find a citation, use (Unknown Page).\n"
+    )
     if query:
-        prompt = f"""You are a clinical assistant. Given the medical record segments below, answer the following question. Use the previous questions and answers for context if relevant.
-
-Question: "{query}"
-{history_str}
-{context}
-"""
+        prompt = f"""You are a clinical assistant. Given the medical record segments below, answer the following question. Use the previous questions and answers for context if relevant.{citation_instruction}\nQuestion: \"{query}\"\n{history_str}{context}\n"""
     else:
-        prompt = f"""You are a clinical assistant. Given the medical record segments below, write a concise narrative summary of the patient's active medical problems, treatments, and complications. Use the previous questions and answers for context if relevant.
-
-{history_str}
-{context}
-"""
+        prompt = f"""You are a clinical assistant. Given the medical record segments below, write a concise narrative summary of the patient's active medical problems, treatments, and complications. Use the previous questions and answers for context if relevant.{citation_instruction}\n{history_str}{context}\n"""
 
     print("\n==== PROMPT SENT TO OPENAI ====\n")
     print(prompt)
@@ -250,27 +245,68 @@ Question: "{query}"
             ],
             temperature=0.2
         )
-        return response.choices[0].message.content
+        answer = response.choices[0].message.content
+        # --- Post-process: replace any Window N, offsets, or ambiguous citations with (Page N) ---
+        answer = postprocess_citations_page_only(answer, top_chunks)
+        return answer
     except Exception as e:
         print(f"[ERROR] GPT call failed: {e}")
         return None
 
+def postprocess_citations_page_only(answer, chunks):
+    """
+    Replace any (Window N), (Page N, ...), or ambiguous citations with (Page N) using chunk metadata.
+    """
+    # Build a mapping from chunk section to page
+    section_map = {c['section']: c.get('page','?') for c in chunks}
+    def repl(match):
+        text = match.group(1)
+        # Match Window N
+        m = re.match(r"Window (\d+)", text)
+        if m:
+            section = f"Window {m.group(1)}"
+            page = section_map.get(section, '?')
+            return f"(Page {page})"
+        # Match Page N (with or without offset)
+        m2 = re.match(r"[Pp]age (\d+)(?:,\s*Offset \d+)?", text)
+        if m2:
+            page = m2.group(1)
+            return f"(Page {page})"
+        # Already in correct format
+        m3 = re.match(r"[Pp]age (\d+)", text)
+        if m3:
+            return f"(Page {m3.group(1)})"
+        return f"({text})"  # fallback
+    # Replace all parenthetical citations
+    return re.sub(r"\(([^)]+)\)", repl, answer)
+
 def tag_chunks_with_page(chunks, text):
     """
-    Assigns the correct PDF page number to each chunk based on 'Page X of Y' markers in the text.
+    Assigns the correct page number to each chunk based on various page marker formats.
+    Supports: 'Page X of Y', '## Page X', 'Page X', '- Page X -', and form feed '\f'.
     """
-    # Find all page markers and their positions
-    page_markers = [(m.start(), int(m.group(1))) for m in re.finditer(r'Page\s+(\d+)\s+of\s+\d+', text)]
-    page_markers.append((len(text), None))  # Sentinel for end
+    page_regex = re.compile(
+        r'(?:Page\s+(\d+)\s+of\s+\d+|##\s*Page\s+(\d+)|Page\s+(\d+)|-+\s*Page\s+(\d+)\s*-+|\f)',
+        re.IGNORECASE
+    )
+    page_markers = []
+    for m in page_regex.finditer(text):
+        # Find the first non-None group (the page number)
+        page_num = next((int(g) for g in m.groups() if g and g.isdigit()), None)
+        page_markers.append((m.start(), page_num))
+    page_markers.append((len(text), None))  # Sentinel
 
     for chunk in chunks:
-        # Find the page marker that comes before the chunk
-        chunk_start = text.find(chunk["text"])
+        chunk_start = chunk["start"]
         for i, (pos, page_num) in enumerate(page_markers[:-1]):
             next_pos = page_markers[i+1][0]
             if pos <= chunk_start < next_pos:
-                chunk["page"] = page_num
+                chunk["page"] = page_num if page_num is not None else 1
+                chunk["page_offset"] = chunk_start - pos
                 break
+        else:
+            chunk["page"] = 1
+            chunk["page_offset"] = chunk_start
     return chunks
 
 def tag_chunk_with_datetime(chunk):
