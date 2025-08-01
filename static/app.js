@@ -3,6 +3,47 @@ let chatHistory = [];
 let isRecordingActive = false;
 let lastServerTranscript = "";
 let audioContext, analyser, microphone, animationId;
+// --- Wake Lock ---
+// --- Wake Lock ---
+// The Wake Lock API allows the web app to request that the device's screen stays on and prevents the system from sleeping.
+// This is important for uninterrupted audio recording, as sleep/screen-off can suspend the recording process.
+let wakeLock = null; // Holds the current Wake Lock object
+
+// Requests a screen wake lock when recording starts.
+// If successful, the device will not sleep or turn off the display while recording is active.
+async function requestWakeLock() {
+    try {
+        // Request a screen wake lock
+        wakeLock = await navigator.wakeLock.request('screen');
+        // Listen for the 'release' event, which fires if the wake lock is released by the system or browser
+        wakeLock.addEventListener('release', () => {
+            console.log('Wake Lock was released');
+        });
+        console.log('Wake Lock is active');
+    } catch (err) {
+        // If the API is not supported or another error occurs, log it
+        console.error(`${err.name}, ${err.message}`);
+    }
+}
+
+// Releases the wake lock when recording stops.
+// This allows the device to sleep or turn off the display again.
+async function releaseWakeLock() {
+    if (wakeLock) {
+        await wakeLock.release();
+        wakeLock = null;
+        console.log('Wake Lock released by app');
+    }
+}
+
+// If the page becomes visible again (e.g., after switching tabs or minimizing),
+// re-acquire the wake lock if recording is still active. This is necessary because
+// some browsers automatically release wake locks when the page is hidden.
+document.addEventListener('visibilitychange', async () => {
+    if (document.visibilityState === 'visible' && isRecordingActive) {
+        await requestWakeLock();
+    }
+});
 
 // --- Spinner for thinking/loading state ---
 function showThinkingSpinner(text = "Thinking...") {
@@ -110,8 +151,12 @@ async function setRecordBtnState(isRecording) {
 
     if (isRecording) {
         startMicFeedback(); // Start glow effect
+        isRecordingActive = true;
+        requestWakeLock();
     } else {
         stopMicFeedback(); // Stop glow effect
+        isRecordingActive = false;
+        releaseWakeLock();
     }
 }
 

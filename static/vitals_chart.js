@@ -106,6 +106,8 @@ window.renderVitalsChart = function(domId, patientRecord, options = {}) {
         }
     });
     const vitalsData = Object.values(timeMap).sort((a, b) => new Date(a.time) - new Date(b.time));
+    // Sort vitalsData so most recent is first
+    vitalsData.sort((a, b) => new Date(b.time) - new Date(a.time));
     // Build vitalTypes from all numeric types, then add BP if any BP Systolic or Diastolic present in vitalsData
     let vitalTypes = Array.from(new Set(
         vitals.flatMap(obs => {
@@ -154,7 +156,7 @@ window.renderVitalsChart = function(domId, patientRecord, options = {}) {
             filtered = filtered
                 .map(row => ({...row, dateObj: new Date(row.time)}))
                 .filter(row => !isNaN(row.dateObj))
-                .sort((a, b) => a.dateObj - b.dateObj)
+                .sort((a, b) => b.dateObj - a.dateObj)
                 .map(row => ({ time: row.dateObj.toISOString(), systolic: row.systolic, diastolic: row.diastolic }));
 
             // Debug: log the sorted times
@@ -188,17 +190,15 @@ window.renderVitalsChart = function(domId, patientRecord, options = {}) {
             tooltip: {
                     trigger: 'item',
                     position: 'top',
-                formatter: function(params) {
+                    formatter: function(params) {
                         // params is an object for trigger: 'item'
                         // Find all vitals at this time
                         const point = params.data;
                         const time = point[0];
                         const dateStr = new Date(time).toLocaleString();
-                        // Find the row in vitalsData with this time
-                        const row = vitalsData.find(r => {
-                            // Allow for ISO string or Date object
-                            return (r.time === time) || (new Date(r.time).toISOString() === time);
-                        });
+                        // Find the most recent row in vitalsData with this time
+                        const matchingRows = vitalsData.filter(r => (r.time === time) || (new Date(r.time).toISOString() === time));
+                        const row = matchingRows.length ? matchingRows[0] : null;
                         if (!row) return dateStr;
                         let html = `<b>${dateStr}</b><br/>`;
                         if (row['BP Systolic'] !== undefined || row['BP Diastolic'] !== undefined) {
@@ -316,6 +316,7 @@ window.renderVitalsChart = function(domId, patientRecord, options = {}) {
     }
 
     // Initial render (always use first available type)
+    // Default to the most recent vital type if available
     render(vitalTypeSelect.value || vitalTypes[0]);
     vitalTypeSelect.onchange = function() {
         render(this.value);
@@ -335,40 +336,24 @@ window.renderVitalsChart = function(domId, patientRecord, options = {}) {
     ];
     // Find the most recent value for each vital type
     function findMostRecentVital(vitalKey) {
-        let best = null;
-        for (let i = vitals.length - 1; i >= 0; i--) {
-            let obs = vitals[i];
-            let name = obs.code && obs.code.text ? obs.code.text : (obs.code && obs.code.coding && obs.code.coding[0] && obs.code.coding[0].display) || 'Unknown';
-            name = normalizeVitalName(name);
-            let value = obs.valueQuantity && obs.valueQuantity.value;
-            let units = obs.valueQuantity && obs.valueQuantity.unit;
-            let time = parseTimeToISO(obs.effectiveDateTime || obs.issued || obs.issuedDateTime || '');
-            if (vitalKey === 'BP' && name === 'BP') {
-                // BP as string or components
-                if (Array.isArray(obs.component)) {
-                    let sys = obs.component.find(c => (c.code.text || (c.code.coding && c.code.coding[0] && c.code.coding[0].display)).toUpperCase().includes('SYSTOLIC'));
-                    let dia = obs.component.find(c => (c.code.text || (c.code.coding && c.code.coding[0] && c.code.coding[0].display)).toUpperCase().includes('DIASTOLIC'));
-                    if (sys && dia) {
-                        value = `${sys.valueQuantity.value}/${dia.valueQuantity.value}`;
-                        units = 'mmHg';
-                    }
-                } else if (typeof value === 'string' && /\d{2,3}\/\d{2,3}/.test(value)) {
-                    units = 'mmHg';
+        // Use vitalsData, which is already sorted descending by time
+        for (let i = 0; i < vitalsData.length; i++) {
+            const row = vitalsData[i];
+            if (vitalKey === 'BP' && (row['BP Systolic'] !== undefined || row['BP Diastolic'] !== undefined)) {
+                let value = '';
+                if (row['BP Systolic'] !== undefined && row['BP Diastolic'] !== undefined) {
+                    value = `${row['BP Systolic']}/${row['BP Diastolic']}`;
+                } else if (row['BP Systolic'] !== undefined) {
+                    value = `${row['BP Systolic']}`;
+                } else if (row['BP Diastolic'] !== undefined) {
+                    value = `${row['BP Diastolic']}`;
                 }
-            } else if (name === vitalKey && value !== undefined && value !== null) {
-                // Use the value as is
-            } else if (vitalKey === 'Pain' && name === 'Pain') {
-                // Pain is usually a number, no units
-                units = '';
-            } else {
-                continue;
-            }
-            if (value !== undefined && value !== null) {
-                best = { value, units, time };
-                break;
+                return { value, units: 'mmHg', time: row.time };
+            } else if (row[vitalKey] !== undefined && row[vitalKey] !== null) {
+                return { value: row[vitalKey], units: '', time: row.time };
             }
         }
-        return best;
+        return null;
     }
     // Create a container for the summary bar if not present
     let summaryBar = document.getElementById('vitalsSummaryBar');

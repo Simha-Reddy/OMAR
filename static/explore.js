@@ -1252,3 +1252,98 @@ window.selectPatientDFN = async function(dfn, name) {
     document.getElementById("patientLookupResults").textContent = `Selected: ${name} (DFN: ${dfn})`;
     if (typeof updatePatientNameDisplay === "function") updatePatientNameDisplay();
 };
+
+// --- Blood Pressure and Medication Timeline Chart ---
+function renderBpTimelineChart() {
+    const container = document.getElementById('bpTimelineContainer');
+    if (!container) {
+        console.error('bpTimelineContainer not found');
+        return;
+    }
+    if (!window.echarts) {
+        container.innerHTML = '<div style="color:red">ECharts library not loaded.</div>';
+        console.error('ECharts library not loaded');
+        return;
+    }
+    // Ensure container has size
+    if (container.offsetWidth < 10 || container.offsetHeight < 10) {
+        container.style.minHeight = '340px';
+        container.style.minWidth = '320px';
+        container.style.background = '#f9f9f9';
+        container.style.border = '1px solid #ccc';
+    }
+    console.log('Rendering BP timeline chart...');
+    try {
+        const chart = echarts.init(container);
+        // Mock data for demonstration
+        const bpData = [
+            { date: '2025-07-01', systolic: 132, diastolic: 82 },
+            { date: '2025-07-10', systolic: 128, diastolic: 80 },
+            { date: '2025-07-15', systolic: 135, diastolic: 85 },
+            { date: '2025-07-20', systolic: 130, diastolic: 78 },
+            { date: '2025-07-25', systolic: 125, diastolic: 76 }
+        ];
+        const meds = [
+            { name: 'Lisinopril', start: '2025-07-01', end: '2025-07-20', color: '#8ecae6' },
+            { name: 'Metoprolol', start: '2025-07-10', end: '2025-07-25', color: '#ffb703' }
+        ];
+        const dates = bpData.map(d => d.date);
+        const option = {
+            title: { text: 'Blood Pressure & Medications Timeline', left: 'center' },
+            tooltip: { trigger: 'axis' },
+            legend: { data: ['Systolic', 'Diastolic'], top: 30 },
+            grid: { left: 60, right: 40, top: 70, height: 180 },
+            xAxis: { type: 'category', data: dates, boundaryGap: false },
+            yAxis: [
+                { type: 'value', name: 'BP (mmHg)', min: 60, max: 160, position: 'left' },
+                { type: 'value', name: 'Medications', min: 0, max: 1, show: false }
+            ],
+            series: [
+                {
+                    name: 'Systolic',
+                    type: 'line',
+                    data: bpData.map(d => d.systolic),
+                    smooth: true,
+                    lineStyle: { color: '#e63946', width: 3 },
+                    symbol: 'circle',
+                    symbolSize: 10
+                },
+                {
+                    name: 'Diastolic',
+                    type: 'line',
+                    data: bpData.map(d => d.diastolic),
+                    smooth: true,
+                    lineStyle: { color: '#457b9d', width: 3 },
+                    symbol: 'circle',
+                    symbolSize: 10
+                },
+                // Medication bars as custom series
+                ...meds.map((med, idx) => ({
+                    name: med.name,
+                    type: 'bar',
+                    yAxisIndex: 1,
+                    barWidth: 18,
+                    stack: 'meds',
+                    itemStyle: { color: med.color, opacity: 0.7 },
+                    data: dates.map(date => (date >= med.start && date <= med.end ? 1 : 0)),
+                    emphasis: { focus: 'series' },
+                    label: {
+                        show: true,
+                        position: 'top',
+                        formatter: params => params.value ? med.name : ''
+                    },
+                    z: 2 - idx // stack order
+                }))
+            ]
+        };
+        chart.setOption(option);
+        window.addEventListener('resize', () => chart.resize());
+    } catch (err) {
+        container.innerHTML = '<div style="color:red">Chart error: ' + err.message + '</div>';
+        console.error('Chart render error:', err);
+    }
+}
+// Call after DOM and patientRecordModules are loaded
+window.addEventListener('DOMContentLoaded', () => {
+    setTimeout(renderBpTimelineChart, 800); // Delay to ensure placement after modules
+});
