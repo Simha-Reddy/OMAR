@@ -1,0 +1,1806 @@
+/* === GLOBAL STYLES === */
+:root {
+  --brand-blue: #3498db;       /* Global top bar + tables header */
+  --brand-blue-dark: #2e81b7;  /* Slightly darker for borders/shadows */
+}
+
+body {
+    font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+    background-color: #e5ecf3;
+    margin: 0;
+    padding: 20px;
+    color: #333;
+    padding-top: 60px; /* Space for fixed top bar */
+}
+
+/* Add top padding to .container if .global-top-bar is present */
+body .container {
+    padding-top: 60px;
+}
+
+.container {
+    max-width: 950px;
+    margin: auto;
+    background: #ffffffee;
+    border-radius: 14px;
+    box-shadow: 0 8px 20px rgba(0, 0, 0, 0.08);
+    padding: 25px 35px;
+}
+
+/* Wider container for Explore page */
+.container.container-wide {
+    max-width: 1600px;
+    width: min(96vw, 1600px);
+    margin: 0 auto;
+    padding-left: 14px;
+    padding-right: 14px;
+}
+
+/* Prevent middle container from overflowing in 3-col layout */
+.explore-grid .container.container-wide { width: 100% !important; max-width: 100% !important; }
+
+.header-bar, .top-bar {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+}
+
+.header-title,
+.global-top-bar .header-title {
+    color: #fff !important;
+    font-size: 2.2em;
+    font-style: italic;
+    font-weight: 600;
+    text-decoration: none;
+    line-height: 1;
+    display: flex;
+    align-items: center;
+    height: 100%;
+    margin-right: 0;
+    padding-left: 0;
+}
+
+/* OMAR logo: heavier, no italics, subtle shadow */
+.global-top-bar .header-title {
+    font-style: normal !important;
+    font-weight: 800 !important;
+    text-shadow: 0 2px 3px rgba(0,0,0,0.221), 0 6px 16px rgba(0,0,0,0.123);
+    letter-spacing: 0.3px;
+}
+
+.left-controls, .right-controls {
+    display: flex;
+    align-items: center;
+    gap: 16px;
+    flex-shrink: 0;
+}
+
+.global-top-bar {
+    position: fixed;
+    top: 0;
+    left: 0;
+    width: 100%;
+    background: var(--brand-blue);
+    color: white;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 8px 32px;
+    z-index: 1000;
+    box-shadow: 0 2px 8px rgba(0,0,0,0.049);
+    box-sizing: border-box;
+}
+
+/* Centered patient area in the global top bar */
+.global-center {
+  position: absolute; /* center independent of left/right widths */
+  left: 50%;
+  transform: translateX(-50%);
+  text-align: center;
+  color: #fff;
+  max-width: 44vw;
+  min-width: 220px;
+  line-height: 1.15;
+  cursor: pointer;
+  user-select: none;
+}
+.global-center:focus { outline: 2px solid #aeeaff; border-radius: 6px; }
+#patientTopName { font-weight: 700; font-size: 1.05em; letter-spacing: 0.2px; }
+#patientTopDetails { font-size: 0.92em; opacity: 0.95; }
+/* Keep search input a reasonable size on the right */
+.right-controls #patientSearchInput { width: 320px; max-width: 38vw; }
+
+.global-nav,
+.global-top-bar .global-nav {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    margin-left: 0;
+}
+
+.global-top-bar .global-nav a {
+    color: #fff;
+    font-size: 2em;
+    text-decoration: none;
+    border-bottom: 3px solid transparent;
+    padding-bottom: 2px;
+    transition: border-color 0.2s;
+}
+
+.global-top-bar .global-nav a:hover {
+    border-bottom: 3px solid #aeeaff;
+}
+
+.start-button,
+.global-top-bar .start-button,
+.global-top-bar .stop-button {
+    font-size: 1.1em;
+    padding: 12px 24px;
+    border-radius: 8px;
+    font-weight: 600;
+    align-self: center;
+    height: 40px;
+    box-sizing: border-box;
+    white-space: nowrap;
+    margin: 0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    transition: background-color 0.2s, color 0.2s;
+}
+
+.global-top-bar .start-button {
+    margin-left: 16px;
+}
+
+.danger-button,
+.global-top-bar .danger-button {
+    font-size: 1em;
+    padding: 12px 24px;
+    border-radius: 8px;
+    font-weight: 600;
+    align-self: center;
+    height: 40px;
+    box-sizing: border-box;
+    white-space: nowrap;
+    margin: 0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    border: 2px solid #e74c3c;
+    background-color: white;
+    color: #e74c3c;
+    transition: background-color 0.2s, color 0.2s, border-color 0.2s;
+}
+
+.danger-button:hover,
+.global-top-bar .danger-button:hover,
+.global-top-bar .danger-button:focus {
+    background-color: #e74c3c;
+    color: white;
+    border-color: #e74c3c;
+}
+
+.danger-button:active,
+.global-top-bar .danger-button:active {
+    background-color: #c0392b;
+    border-color: #c0392b;
+}
+
+.start-button {
+    border: 2px solid #2ecc71;
+    background-color: #2ecc71;
+    color: white;
+    margin-right: 12px;
+}
+
+.start-button:hover {
+    background-color: #27ae60;
+}
+
+.stop-button {
+    border: 2px solid #e74c3c;
+    background-color: #e74c3c;
+    color: white;
+    margin-right: 12px;
+}
+
+.stop-button:hover {
+    background-color: #c0392b;
+}
+
+textarea, input[type="text"] {
+    font-family: 'Courier New', monospace;
+    font-size: 1em;
+    padding: 14px;
+    border-radius: 10px;
+    border: 1px solid #bbb;
+    background-color: #fefefe;
+    box-sizing: border-box;
+    resize: vertical;
+}
+
+select {
+    font-size: 1em;
+    padding: 12px;
+    margin-bottom: 20px;
+    border-radius: 8px;
+    width: 100%;
+    border: 1px solid #bbb;
+    background-color: #fbfbfb;
+    box-sizing: border-box;
+}
+
+h2 {
+    border-bottom: 1px solid #ddd;
+    padding-bottom: 6px;
+    margin-top: 20px;
+    color: #3498db;
+}
+
+/* Two panels side-by-side on desktop, stacked on mobile */
+.side-by-side {
+    display: grid;
+    grid-template-columns: 1fr;
+    gap: 16px;
+}
+@media (min-width: 900px) {
+    .side-by-side { grid-template-columns: 1fr 1fr; }
+}
+
+.side-by-side > .panel {
+    flex: 1 1 0;
+    min-width: 320px; /* Prevents panels from getting too small */
+    max-width: 48%;   /* Ensures two per row */
+    margin-bottom: 24px;
+    box-sizing: border-box;
+}
+
+.panel h2 {
+    margin-top: 0;
+}
+
+.panel {
+    border: 1px solid #ccc;
+    border-radius: 6px;
+    padding: 12px 18px;
+    background: #fff;
+    box-sizing: border-box;
+    max-width: 100%;
+}
+
+.button-row {
+    display: flex;
+    gap: 12px;
+    margin-top: 10px;
+    margin-bottom: 20px;
+}
+
+/* === EXPLORE-SPECIFIC STYLES === */
+.chunk-entry {
+    margin-top: 30px;
+}
+
+#chunkText, #chunkLabel {
+    width: 100%;
+}
+
+#chunkText {
+    min-height: 200px; /* Increased from 140px */
+    margin-bottom: 8px;
+    resize: vertical;
+}
+
+.output-block {
+    margin-top: 30px;
+}
+
+.output-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+}
+
+.markdown-box {
+    background: #fefefe;
+    border: 0px solid #ccc;
+    border-radius: 10px;
+    padding: 15px;
+    min-height: 80px;
+    max-height: 250px;
+    overflow-y: auto;
+    margin-top: 10px;
+    margin: 10px 0;
+    padding: 10px;
+    border: 1px solid #ddd;
+    border-radius: 4px;
+    background: #f8f9fa;
+}
+
+.markdown-body {
+    font-family: Georgia, serif;
+    line-height: 1.6;
+    white-space: pre-wrap;
+}
+
+.markdown-body h3 {
+    color: #2c3e50;
+}
+
+.markdown-body ul {
+    padding-left: 20px;
+}
+
+.selected-patient {
+    background: #e0f3ff;
+    font-weight: bold;
+}
+
+.citation-link {
+  color: #1976d2;
+  text-decoration: underline;
+  cursor: pointer;
+  font-size: inherit;   /* match surrounding text */
+  vertical-align: baseline;
+  padding: 0 2px;
+}
+.citation-link:hover {
+  background: #ffe066;
+  color: #333;
+}
+
+/* New: consistent style for excerpt citations used in notes QA */
+.excerpt-citation {
+  color: #1976d2;
+  text-decoration: underline;
+  cursor: pointer;
+  font-size: inherit;   /* override global a { font-size: 2em } */
+  vertical-align: baseline;
+  padding: 0 2px;
+}
+.excerpt-citation:hover { background: #ffe066; color: #333; }
+
+/* Override oversized anchors within content boxes */
+.markdown-box a,
+#notesAnswerBox a,
+#notesSearchResults a,
+#chartDisplay a,
+#chartModalContent a {
+  font-size: inherit; /* keep normal size inside prose */
+}
+
+#chartDisplay {
+  font-family: "Segoe UI", Arial, sans-serif;
+  line-height: 1.5;
+  background: #fafbfc;
+  font-size: 1.08em;
+  padding: 14px;
+  border-radius: 6px;
+  word-break: break-word;
+}
+#chartDisplay h1, #chartDisplay h2, #chartDisplay h3 {
+  margin-top: 1em;
+  margin-bottom: 0.5em;
+}
+#chartDisplay ul, #chartDisplay ol {
+  margin-left: 1.5em;
+}
+#chartDisplay mark.chart-match {
+  background: #ffe066;
+  padding: 0 2px;
+  border-radius: 2px;
+}
+
+/* New: document viewer keyword highlight */
+.doc-keyword-highlight {
+  background: #ffe066;
+  padding: 0 2px;
+  border-radius: 2px;
+}
+
+/* --- Modal-specific overrides --- */
+#chartModal {
+  display: none;
+  position: fixed;
+  top: 0; left: 0;
+  width: 100vw;
+  height: 100vh;
+  background: rgba(30,30,30,0.85);
+  z-index: 1000;
+  align-items: center;
+  justify-content: center;
+}
+#chartModalInner {
+  background: #fff;
+  width: 50vw;           /* 50% of viewport width */
+  min-width: 320px;      /* Optional: minimum width for usability */
+  max-width: 700px;      /* Optional: cap max width */
+  height: 95vh;          /* Nearly full viewport height */
+  max-height: 99vh;
+  display: flex;
+  flex-direction: column;
+  border-radius: 10px;
+  box-shadow: 0 0 24px #2228;
+  padding: 0;            /* Remove extra padding for edge-to-edge look */
+  overflow: hidden;
+  margin: 0 auto;        /* Center horizontally if needed */
+}
+
+#chartModalContent {
+  font-size: 1.08em;
+  line-height: 1.7;
+  color: #222;
+  background: #fafbfc;
+  padding: 32px 36px;
+  overflow-y: auto;
+}
+
+#chartModalContent h1, #chartModalContent h2, #chartModalContent h3 {
+  color: #333;
+  font-weight: 600;
+  margin-top: 1.5em;
+  margin-bottom: 0.5em;
+  line-height: 1.3;
+}
+
+#chartModalContent p {
+  margin: 0.7em 0;
+}
+
+#chartModalContent hr {
+  border: none;
+  border-top: 1.5px solid #e0e0e0;
+  margin: 2em 0;
+}
+
+#chartModalContent ul, #chartModalContent ol {
+  margin-left: 2em;
+}
+
+#chartModalContent strong, #chartModalContent b {
+  color: #222;
+}
+
+/* Modal header/footer controls (optional, for navigation/search) */
+#chartModalInner > .modal-controls,
+#chartModalInner > .modal-header,
+#chartModalInner > .modal-footer {
+  padding: 18px 36px 0 36px;
+  background: #fff;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  border: none;
+}
+
+/* New styles for chart modal pagination */
+#chartModalPageScroller {
+  display: flex;
+  overflow-x: auto;
+  padding: 8px 16px;
+  background: #f3f3f3;
+  border-top: 1px solid #eee;
+  border-bottom: 1px solid #eee;
+  gap: 6px;
+}
+
+.page-scroll-btn {
+  min-width: 32px;
+  padding: 4px 10px;
+  border: 1px solid #bbb;
+  background: #fff;
+  border-radius: 4px;
+  cursor: pointer;
+  font-weight: bold;
+  transition: background 0.2s, border 0.2s;
+}
+.page-scroll-btn.active, .page-scroll-btn:hover {
+  background: #ffe066;
+  border: 1.5px solid #e0b800;
+}
+
+#chartModalFooter {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 14px 24px 18px 24px;
+  background: #fff;
+  border-top: 1px solid #eee;
+}
+#modalKeywordInput {
+  flex: 1 1 auto;
+  padding: 6px 10px;
+  font-size: 1em;
+  border-radius: 4px;
+  border: 1px solid #bbb;
+}
+#modalMatchLabel {
+  min-width: 120px;
+  text-align: center;
+  font-size: 0.98em;
+  color: #444;
+}
+
+/* Archive Page Styles */
+.archive-container {
+    background: #fff;
+    border-radius: 12px;
+    box-shadow: 0 2px 12px rgba(0,0,0,0.07);
+    padding: 2rem 2.5rem;
+    margin: 2rem auto;
+    max-width: 600px;
+}
+
+.archive-controls {
+    display: flex;
+    align-items: center;
+    gap: 1.5rem;
+    margin-bottom: 1.5rem;
+}
+
+#archive-list {
+    margin-top: 1rem;
+}
+
+.transcript-block {
+    display: flex;
+    align-items: center;
+    gap: 1rem;
+    padding: 0.75rem 0;
+    border-bottom: 1px solid #eee;
+}
+
+.transcript-block:last-child {
+    border-bottom: none;
+}
+
+.restore-btn {
+    background: #1976d2;
+    color: #fff;
+    border: none;
+    border-radius: 4px;
+    padding: 0.4em 1em;
+    cursor: pointer;
+    margin-right: 0.5em;
+    transition: background 0.2s;
+}
+.restore-btn:hover {
+    background: #125ea2;
+}
+
+.archive-filename {
+    font-weight: 500;
+    font-size: 1.08em;
+    margin-left: 0.5em;
+}
+
+.global-center > button {
+    margin-right: 16px;
+}
+
+.global-center > button:last-child {
+    margin-right: 0;
+    margin-left: 8px; /* Optional: a little space on the left of End Session */
+}
+
+a {
+    text-decoration: none;
+    color: #3498db;
+    font-size: 2em;
+}
+
+a:hover {
+    text-decoration: underline;
+}
+
+button {
+    padding: 12px 24px;
+    font-size: 1em;
+    border: 2px solid #2ecc71;
+    border-radius: 8px;
+    cursor: pointer;
+    margin-top: 0px;
+    background-color: white;
+    color: #2ecc71;
+    font-weight: 600;
+    transition: background-color 0.2s, color 0.2s;
+}
+
+button:hover {
+    background-color: #2ecc71;
+    color: white;
+}
+
+button:active {
+    background-color: #27ae60;
+    border-color: #27ae60;
+}
+
+button:disabled {
+    opacity: 0.7;
+    cursor: not-allowed;
+}
+
+button.loading {
+    position: relative;
+    padding-right: 35px;
+}
+
+button.loading::after {
+    content: "";
+    position: absolute;
+    right: 10px;
+    top: 50%;
+    width: 12px;
+    height: 12px;
+    border: 2px solid #2ecc71;
+    border-top-color: transparent;
+    border-radius: 50%;
+    animation: spin 1s linear infinite;
+    transform: translateY(-50%);
+}
+
+.danger-button,
+.global-top-bar .danger-button {
+    border: 2px solid #e74c3c;
+    color: #e74c3c;
+}
+
+.danger-button:hover,
+.global-top-bar .danger-button:hover,
+.global-top-bar .danger-button:focus {
+    background-color: #e74c3c;
+    color: white;
+}
+
+.danger-button:active,
+.global-top-bar .danger-button:active {
+    background-color: #c0392b;
+    border-color: #c0392b;
+}
+
+.start-button {
+    border: 2px solid #2ecc71;
+    background-color: #2ecc71;
+    color: white;
+    margin-right: 12px;
+}
+
+.start-button:hover {
+    background-color: #27ae60;
+}
+
+.stop-button {
+    border: 2px solid #e74c3c;
+    background-color: #e74c3c;
+    color: white;
+    margin-right: 12px;
+}
+
+.stop-button:hover {
+    background-color: #c0392b;
+}
+
+.top-bar {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin: 30px 0 0;
+}
+
+/* === Run button styles for explore page === */
+.run-panel-btn {
+  font-size: 0.65em;
+  padding: 2px 8px;
+  margin-left: 8px;
+  border: 2px solid #2ecc71;
+  border-radius: 4px;
+  background: #f3f3f3;
+  color: #2ecc71;
+  cursor: pointer;
+  transition: background 0.2s, border 0.2s;
+}
+
+.run-panel-btn:hover {
+  background: #2ecc71;
+  border-color: #27ae60;
+  color: white;
+}
+
+#runAllPanelsBtn {
+    font-size: 1em;
+    padding: 2px 8px;
+}
+
+/* Loading states */
+.loading-spinner {
+    text-align: center;
+    padding: 20px;
+    color: #666;
+}
+
+.spinner {
+    width: 24px;
+    height: 24px;
+    border: 3px solid #f3f3f3;
+    border-top: 3px solid #3498db;
+    border-radius: 50%;
+    margin: 0 auto 10px;
+    animation: spin 1s linear infinite;
+}
+
+@keyframes spin {
+    0% { transform: rotate(0deg); }
+    100% { transform: rotate(360deg); }
+}
+
+.error-message {
+    color: #e74c3c;
+    padding: 10px;
+    border: 1px solid #e74c3c;
+    border-radius: 4px;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+}
+
+.left-controls {
+    display: flex;
+    align-items: center;
+    gap: 16px;
+    margin-right: auto; /* Pushes everything else to the right */
+}
+
+.right-controls {
+    display: flex;
+    align-items: center;
+    gap: 12px; /* Reduced from 18px to prevent overflow */
+}
+
+.global-top-bar .header-title {
+    color: white !important;
+    font-size: 2.2em;
+    font-style: italic;
+    font-weight: 600;
+    text-decoration: none;
+}
+
+.global-top-bar a {
+    color: white;
+    text-decoration: none;
+    font-size: 1.8em;
+}
+
+.global-top-bar a:hover {
+    text-decoration: none;
+    opacity: 0.9;
+}
+
+/* Add or update these styles */
+#patientInstructionsBox {
+    min-height: 180px;
+    width: 100%;
+    margin-bottom: 10px;
+    resize: vertical;
+}
+
+#patientInstructionsPreview {
+    display: none; /* Hide by default */
+    margin-top: 0;
+    margin-bottom: 10px;
+}
+
+/* Add or update these styles */
+.button-group {
+    display: flex;
+    gap: 8px;
+}
+
+#chunkStatus {
+    margin: 10px 0;
+    font-style: italic;
+    color: gray;
+}
+
+#exploreSearchBox {
+    width: 100%;
+    padding: 8px;
+    border: 1px solid #ccc;
+    border-radius: 4px;
+    margin-bottom: 16px;
+}
+
+#exploreSearchBox:focus {
+    outline: none;
+    border-color: #3498db;
+    box-shadow: 0 0 0 2px rgba(52,152,219,0.2);
+}
+
+#exploreGptAnswer {
+    margin-top: 16px;
+    min-height: 120px;
+}
+
+.drop-zone {
+    position: relative;
+    width: 100%;
+}
+
+.drop-zone textarea {
+    width: 100%;
+    min-height: 200px;
+    margin-bottom: 8px;
+    resize: vertical;
+}
+
+.drop-overlay {
+    display: none;
+    position: absolute;
+    top: 0;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    background: rgba(52, 152, 219, 0.9);
+    border: 3px dashed white;
+    border-radius: 4px;
+    justify-content: center;
+    align-items: center;
+    color: white;
+    font-size: 1.5em;
+    font-weight: bold;
+}
+
+.drop-zone.dragging .drop-overlay {
+    display: flex;
+}
+
+/* Documents panel: three responsive compartments */
+.documents-grid {
+    display: grid;
+    grid-template-columns: 1fr; /* single column so the table uses full middle container width */
+    grid-template-areas:
+        "list"; /* only one area in use */
+    gap: 12px;
+}
+#docsListCompartment { grid-area: list; }
+#docsResultsCompartment { grid-area: left; }
+#docViewerCompartment { grid-area: right; }
+/* Keep single-column layout on wider screens too so table spans the middle container */
+@media (min-width: 900px) {
+    .documents-grid { grid-template-columns: 1fr !important; grid-template-areas: "list"; }
+}
+
+/* Ensure the documents table truly fills its compartment */
+#documentsTableWrap, .doc-table-wrap, #documentsTable { width: 100% !important; }
+
+/* Controls vs Answers side-by-side under the table/viewer */
+.docs-results-grid {
+    display: grid;
+    grid-template-columns: 1fr;
+    gap: 12px;
+    align-items: start;
+}
+@media (min-width: 900px) {
+    .docs-results-grid { grid-template-columns: 1fr 1fr; }
+}
+.docs-controls {
+    display: flex;
+    gap: 8px;
+    align-items: center;
+    flex-wrap: wrap;
+    grid-column: 1 / -1; /* Make the Ask controls row span full width */
+}
+.docs-answers { min-width: 0; }
+.docs-answers #notesAnswerBox,
+.docs-answers #notesSearchResults {
+    max-height: clamp(180px, 38vh, 480px);
+    overflow: auto;
+}
+
+/* Notes Ask inline controls and answer styling */
+.notes-ask-inline {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: nowrap;
+}
+.notes-ask-inline input#notesAskInput {
+  flex: 1 1 520px;
+  min-width: 260px;
+}
+.notes-ask-inline .btn-mic {
+  padding: 8px 10px;
+  border-radius: 6px;
+  border: 1px solid var(--paper-border);
+  background: #fff;
+}
+#notesAskVoiceStatus { color: #555; font-style: italic; }
+
+/* Notes QA answer box: tan background, wider, sans-serif */
+#notesAnswerBox {
+  background: var(--paper-panel-opaque) !important; /* match container tan */
+  border: 1px solid var(--paper-border) !important;
+  border-radius: 8px;
+  padding: 12px 14px;
+  font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+  line-height: 1.5;
+  color: var(--paper-contrast);
+  width: 100%;
+  max-width: none;
+}
+
+/* Notes list table */
+.doc-table {
+    /* Give Tabulator a CSS height; JS will read computed height */
+    height: 100%;
+    border: none; /* removed to let .tabulator show its own border */
+    border-radius: 8px;
+    background: transparent; /* removed background to match new theme */
+    overflow: hidden;
+}
+
+/* === Universal Tabulator Table Theme (applies site-wide) === */
+/* Base container */
+.tabulator {
+  border: 1px solid #cfe3ff;
+  border-radius: 8px;
+  font-size: 13px;
+  background: transparent; /* let parent/panel control background */
+}
+/* Header bar and cells */
+.tabulator .tabulator-header {
+  background: var(--brand-blue) !important;
+  border-bottom: 1px solid var(--brand-blue-dark);
+}
+.tabulator .tabulator-header,
+.tabulator .tabulator-header .tabulator-headers,
+.tabulator .tabulator-header .tabulator-col,
+.tabulator .tabulator-header .tabulator-col-group,
+.tabulator .tabulator-header .tabulator-col .tabulator-col-content,
+.tabulator .tabulator-header .tabulator-col-row {
+  background: var(--brand-blue) !important;
+  background-image: none !important; /* override Tabulator gradient */
+}
+.tabulator .tabulator-col,
+.tabulator .tabulator-col .tabulator-col-title {
+  color: #fff;
+  font-weight: 600;
+}
+/* Sorter arrows visible on blue */
+.tabulator .tabulator-col .tabulator-col-sorter {
+  filter: invert(1) brightness(1.4);
+}
+/* Header filter inputs */
+.tabulator .tabulator-col .tabulator-header-filter input,
+.tabulator .tabulator-col .tabulator-header-filter select {
+  background: var(--paper-panel-opaque);
+  color: var(--paper-contrast);
+  border: 1px solid var(--paper-border);
+}
+.tabulator .tabulator-col .tabulator-header-filter input::placeholder { color: #6b5d54; }
+
+/* Body/tableholder */
+.tabulator .tabulator-tableholder { background: #fbfdff; }
+
+/* Rows */
+.tabulator .tabulator-row { border-bottom: 1px solid #eef5ff; }
+.tabulator .tabulator-row:nth-child(even) {
+  /* Fallback */
+  background: rgba(52, 152, 219, 0.15);
+  /* If supported, derive from brand blue */
+  background: color-mix(in srgb, var(--brand-blue) 15%, white);
+}
+.tabulator .tabulator-row:hover { background: #e9f3ff; }
+.tabulator .tabulator-row.tabulator-selected { background: #d6e9ff !important; }
+/* Slightly tighter cells */
+.tabulator .tabulator-row .tabulator-cell { padding: 6px 8px; }
+/* Remove special highlight on Title field across all tables */
+.tabulator .tabulator-cell[tabulator-field="title"] { background: transparent !important; }
+.tabulator .tabulator-row:hover .tabulator-cell[tabulator-field="title"],
+.tabulator .tabulator-row.tabulator-selected .tabulator-cell[tabulator-field="title"] {
+  background: inherit !important;
+}
+/* Tidy header cell borders */
+.tabulator .tabulator-header .tabulator-col,
+.tabulator .tabulator-header .tabulator-col-group {
+  border-right: 1px solid var(--brand-blue-dark) !important;
+  box-shadow: none !important;
+}
+
+/* === Sepia / Paper Theme: Global Tabulator Overrides === */
+/* Apply paper backgrounds to all Tabulator tables (panels still control container bg) */
+.tabulator .tabulator-tableholder { background: var(--paper-panel) !important; }
+.tabulator .tabulator-row { background: var(--paper-panel) !important; }
+/* Keep alternating rows light blue universally (override warm zebra) */
+.tabulator .tabulator-row:nth-child(even) {
+  background: rgba(52, 152, 219, 0.15) !important;
+  background: color-mix(in srgb, var(--brand-blue) 15%, white) !important;
+}
+/* Paper-toned header filter inputs globally */
+.tabulator .tabulator-col .tabulator-header-filter input,
+.tabulator .tabulator-col .tabulator-header-filter select {
+  background: var(--paper-panel-opaque) !important;
+  color: var(--paper-contrast) !important;
+  border: 1px solid var(--paper-border) !important;
+}
+.tabulator .tabulator-col .tabulator-header-filter input::placeholder { color: #6b5d54 !important; }
+
+/* === End Universal Tabulator Table Theme === */
+
+/* === Universal Standard HTML Table Theme (non-Tabulator tables) === */
+/* Base table container */
+.table,
+.module-table,
+table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 13px;
+  border: 1px solid #cfe3ff;
+  border-radius: 8px;
+  overflow: hidden; /* clip rounded corners */
+  background: transparent;
+}
+/* Header */
+.table thead th,
+.module-table thead th,
+table thead th {
+  background: var(--brand-blue);
+  color: #fff;
+  font-weight: 600;
+  padding: 8px;
+  border-right: 1px solid var(--brand-blue-dark);
+  text-align: left;
+}
+.table thead th:last-child,
+.module-table thead th:last-child,
+table thead th:last-child { border-right: none; }
+/* Body cells */
+.table tbody td,
+.module-table tbody td,
+table tbody td {
+  padding: 6px 8px;
+  border-bottom: 1px solid #eef5ff;
+}
+/* Zebra and hover */
+.table tbody tr:nth-child(even),
+.module-table tbody tr:nth-child(even),
+table tbody tr:nth-child(even) {
+  /* Fallback */
+  background: rgba(52, 152, 219, 0.15);
+  /* If supported */
+  background: color-mix(in srgb, var(--brand-blue) 15%, white);
+}
+.table tbody tr:hover,
+.module-table tbody tr:hover,
+table tbody tr:hover { background: #e9f3ff; }
+
+/* Sepia / Paper overrides for plain tables */
+.table tbody tr,
+.module-table tbody tr,
+table tbody tr { background: var(--paper-panel) !important; }
+.table tbody tr:nth-child(even),
+.module-table tbody tr:nth-child(even),
+table tbody tr:nth-child(even) {
+  background: rgba(52, 152, 219, 0.15) !important;
+  background: color-mix(in srgb, var(--brand-blue) 15%, white) !important;
+}
+
+/* === End Universal Standard HTML Table Theme === */
+
+/* Document viewer */
+.doc-viewer-wrap { position: relative; flex: 1 1 auto; min-height: 0; }
+.doc-viewer {
+    margin: 0;
+    padding: 10px;
+    border: 1px solid #e6e6e6;
+    border-radius: 8px;
+    background: #fbfbfb;
+    white-space: pre-wrap;
+    word-wrap: break-word;
+    /* Fill remaining height under tabs */
+    height: 100%;
+    max-height: none;
+    min-height: 0;
+    overflow: auto;
+    /* Seamless join with tabs */
+    margin-top: 0;
+    border-top: none;
+    border-top-left-radius: 0;
+    border-top-right-radius: 0;
+}
+.doc-viewer-copy {
+    position: absolute;
+    right: 8px;
+    bottom: 8px;
+    padding: 6px 10px;
+    font-size: 0.9em;
+    border-radius: 6px;
+    border: 1px solid var(--paper-border);
+    background: #fff;
+    color: #2ecc71;
+}
+.doc-viewer-copy:hover { background: #f2fff5; }
+
+/* Documents table wrapper positions the overlayed viewer */
+.doc-table-wrap {
+  position: relative;
+  overflow: hidden; /* Prevent outer scrollbars; Tabulator provides its own internal scroll */
+}
+/* Make the documents area resizable and synced */
+#documentsTableWrap {
+  height: clamp(300px, 40vh, 70vh);
+  resize: vertical;
+  overflow: hidden;
+}
+/* Overlayed note viewer sits under the table header and over rows */
+.doc-viewer-overlay {
+  position: absolute;
+  left: 0; right: 0;
+  top: 0; /* will be updated in JS to header height */
+  bottom: 0; /* fill to bottom of wrapper */
+  z-index: 5;
+  background: #fff;
+  /* No extra border on overlay; the tabs/viewer carry borders */
+  box-shadow: 0 2px 10px rgba(0,0,0,0.06);
+  display: flex;
+  flex-direction: column;
+}
+/* Tabs connect to the viewer (folder-tab look) */
+.doc-tabs { margin-bottom: 0; display:flex; align-items:stretch; gap:0; border-bottom: none; }
+.doc-tabs .doc-tab.current {
+  border-bottom: none;
+  border-bottom-left-radius: 0;
+  border-bottom-right-radius: 0;
+  position: relative;
+  z-index: 2;
+}
+/* De-emphasize prev/next labels */
+#docTabPrev .tab-label, #docTabNext .tab-label {
+  color: rgba(59,47,42,0.7);
+  font-style: italic;
+  font-weight: 500;
+}
+
+/* === Note Viewer Tabs === */
+.doc-tabs {
+  display: flex;
+  align-items: stretch;
+  gap: 6px;
+  padding: 4px 6px;
+  background: var(--paper-panel);
+  border: 1px solid var(--paper-border);
+  border-bottom: none; /* remove bottom border to connect with viewer */
+  border-radius: 8px 8px 0 0; /* top rounded only */
+  margin-bottom: 0;
+}
+.doc-tabs .doc-tab {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0; /* allow ellipsis */
+  flex: 1 1 0;
+  background: var(--paper-panel);
+  border: 1px solid var(--paper-border);
+  border-bottom: none; /* connect with viewer */
+  border-radius: 8px 8px 0 0; /* top rounded only */
+  padding: 2px 6px;
+}
+.doc-tabs .doc-tab.current {
+  border-color: var(--brand-blue-dark);
+  box-shadow: inset 0 0 0 1px var(--brand-blue-dark), 0 1px 2px rgba(0,0,0,0.06);
+  border-bottom: none;
+  border-bottom-left-radius: 0;
+  border-bottom-right-radius: 0;
+  position: relative;
+  z-index: 2;
+}
+.doc-tabs .tab-chev {
+  border: 1px solid var(--paper-border);
+  background: #fff;
+  color: #333;
+  border-radius: 999px;
+  padding: 2px 6px;
+  line-height: 1;
+  cursor: pointer;
+  font-size: 12px;
+}
+.doc-tabs .tab-chev:hover { background: #f2f6ff; border-color: #cfe3ff; }
+.doc-tabs .tab-chev:disabled { opacity: 0.5; cursor: not-allowed; }
+.doc-tabs .tab-label {
+  border: none;
+  background: transparent;
+  color: var(--paper-contrast);
+  font-weight: 600;
+  min-width: 0;
+  flex: 1 1 auto;
+  text-align: left;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  padding: 2px 4px;
+  cursor: pointer;
+}
+.doc-tabs .doc-tab[data-state="disabled"] .tab-label { opacity: 0.7; cursor: default; }
+.doc-tabs .doc-tab[data-state="disabled"] .tab-chev { opacity: 0.3; cursor: not-allowed; }
+.doc-tabs .doc-tab-close {
+  margin-left: auto;
+  border: 1px solid var(--paper-border);
+  background: #fff;
+  color: #333;
+  border-radius: 6px;
+  padding: 2px 8px;
+  cursor: pointer;
+}
+.doc-tabs .doc-tab-close:hover { background: #ffe6e6; border-color: #e8b3b3; }
+/* De-emphasize prev/next labels */
+#docTabPrev .tab-label, #docTabNext .tab-label {
+  color: rgba(59,47,42,0.7);
+  font-style: italic;
+  font-weight: 500;
+}
+/* === End Note Viewer Tabs === */
+
+/* --- Light blue (table row) background utility --- */
+.bg-row-blue {
+  /* Fallback */
+  background: rgba(52, 152, 219, 0.15) !important;
+  /* Preferred (derived from brand blue) */
+  background: color-mix(in srgb, var(--brand-blue) 15%, white) !important;
+}
+
+/* Apply light blue to note viewer and its tabbed headers */
+.doc-viewer,
+.doc-viewer-overlay,
+.doc-tabs,
+.doc-tabs .doc-tab {
+  /* Fallback */
+  background: rgba(52, 152, 219, 0.04) !important;
+  /* Preferred */
+  background: color-mix(in srgb, var(--brand-blue) 4%, white) !important;
+}
+
+/* Search inputs: docs keyword, notes search/ask, explore search, patient search, modal keyword */
+#docsKeywordInput,
+#notesSearchInput,
+#notesAskInput,
+#exploreSearchBox,
+#patientSearchInput,
+#modalKeywordInput {
+  /* Fallback */
+  background-color: rgba(52, 152, 219, 0.04) !important;
+  /* Preferred */
+  background-color: color-mix(in srgb, var(--brand-blue) 4%, white) !important;
+  border-color: #cfe3ff !important;
+  color: #222;
+}
+#docsKeywordInput::placeholder,
+#notesSearchInput::placeholder,
+#notesAskInput::placeholder,
+#exploreSearchBox::placeholder,
+#patientSearchInput::placeholder,
+#modalKeywordInput::placeholder { color: #3b4a5a; }
+
+/* Result boxes (notes answer/search) and keep visibility by overriding inline styles */
+#notesAnswerBox,
+#notesSearchResults {
+  /* Fallback */
+  background: rgba(52, 152, 219, 0.04) !important;
+  /* Preferred */
+  background: color-mix(in srgb, var(--brand-blue) 4%, white) !important;
+  border-color: #cfe3ff !important;
+}
+
+/* === Sepia / Paper Theme Overrides === */
+:root {
+  /* Warm paper palette */
+  --paper-bg: #f3ead7;            /* page background */
+  --paper-panel: #fbf4e4;         /* cards/panels */
+  --paper-panel-opaque: #fbf4e4ee;/* translucent card */
+  --paper-contrast: #3b2f2a;      /* text color */
+  --paper-border: #d8c7a8;        /* warm border */
+  --paper-modal: #f7efe0;         /* modal content */
+}
+
+/* Page background and base text */
+body {
+  background-color: var(--paper-bg) !important;
+  color: var(--paper-contrast);
+}
+
+/* Main containers/cards */
+.container {
+  background: var(--paper-panel-opaque) !important;
+  border: 1px solid var(--paper-border);
+  box-shadow: 0 8px 20px rgba(94, 73, 55, 0.12);
+}
+
+.panel,
+.archive-container,
+.markdown-box,
+.doc-viewer,
+#chartDisplay,
+#chartModalContent,
+#chartModalInner,
+.mobile-menu,
+.doc-table .tabulator-tableholder {
+  background: var(--paper-panel) !important;
+  color: var(--paper-contrast);
+}
+
+/* Modal sections (header/footer) */
+#chartModalInner > .modal-controls,
+#chartModalInner > .modal-header,
+#chartModalInner > .modal-footer {
+  background: var(--paper-panel) !important;
+}
+
+/* Borders for paper components */
+.panel,
+.archive-container,
+.markdown-box,
+.doc-viewer {
+  border-color: var(--paper-border) !important;
+}
+
+/* Inputs/selects match paper tone */
+textarea,
+input[type="text"],
+select {
+  background-color: var(--paper-panel) !important;
+  border-color: var(--paper-border) !important;
+  color: var(--paper-contrast);
+}
+
+/* Modal content a touch lighter */
+#chartModalContent { background: var(--paper-modal) !important; }
+
+/* Keep highlight and brand accents unchanged; blue top bar and table header remain as-is */
+
+/* === Sepia tweaks for Documents Table === */
+:root {
+  --paper-alt-row: #efe5cf;     /* slightly darker paper for zebra rows */
+  --paper-hover: #efe2c7;       /* hover tone */
+  --paper-selected: #e7d8b7;    /* selected tone */
+}
+
+/* Base table body background to paper */
+.doc-table .tabulator-tableholder { background: var(--paper-panel) !important; }
+.doc-table .tabulator-row { background: var(--paper-panel) !important; }
+
+/* Zebra, hover, and selection with warm tones */
+.doc-table .tabulator-row:nth-child(even) { background: var(--paper-alt-row) !important; }
+.doc-table .tabulator-row:hover { background: var(--paper-hover) !important; }
+.doc-table .tabulator-row.tabulator-selected { background: var(--paper-selected) !important; }
+
+/* === Requested adjustments: blue zebra rows, paper filter inputs, paper-border scrollbar === */
+/* Keep alternating rows light blue as prior */
+.doc-table .tabulator-row:nth-child(even) {
+  /* Fallback */
+  background: rgba(52, 152, 219, 0.15) !important;
+  /* If supported, derive from brand blue */
+  background: color-mix(in srgb, var(--brand-blue) 15%, white) !important;
+}
+
+/* Paper-toned header filter inputs/selects (search bars) */
+.doc-table .tabulator-col .tabulator-header-filter input,
+.doc-table .tabulator-col .tabulator-header-filter select {
+  background: var(--paper-panel-opaque) !important;
+  color: var(--paper-contrast) !important;
+  border: 1px solid var(--paper-border) !important;
+}
+.doc-table .tabulator-col .tabulator-header-filter input::placeholder {
+  color: #6b5d54;
+}
+
+/* Paper-border scrollbar across the app */
+/* Firefox */
+* { scrollbar-color: var(--paper-panel) var(--paper-border); scrollbar-width: thin; }
+/* WebKit */
+*::-webkit-scrollbar { width: 12px; height: 12px; }
+*::-webkit-scrollbar-track { background: var(--paper-border); }
+*::-webkit-scrollbar-thumb {
+  background-color: var(--paper-panel);
+  border-radius: 8px;
+  border: 2px solid var(--paper-border);
+}
+/* === End adjustments === */
+
+/* === End Sepia / Paper Theme Overrides === */
+
+/* --- Final overrides: 4% brand tint + connected tabs/viewer --- */
+/* Keep the note viewer area lightly tinted at 4% regardless of sepia overrides */
+.documents-grid .doc-tabs,
+.documents-grid .doc-tabs .doc-tab,
+.documents-grid .doc-viewer,
+.documents-grid .doc-viewer-overlay {
+  /* Fallback */
+  background: rgba(52, 152, 219, 0.04) !important;
+  /* Preferred */
+  background: color-mix(in srgb, var(--brand-blue) 4%, white) !important;
+}
+/* Remove any seam between the tab strip and the note body */
+.documents-grid .doc-tabs { border-bottom: none !important; margin-bottom: 0 !important; }
+.documents-grid .doc-viewer { border-top: none !important; border-top-left-radius: 0 !important; border-top-right-radius: 0 !important; }
+
+/* --- Note viewer tabs: show line under prev/next, none under current --- */
+/* Ensure non-current tabs have a bottom border (line) */
+.documents-grid .doc-tabs .doc-tab { border-bottom: 1px solid var(--paper-border); }
+/* Keep the current (middle) tab connected to the viewer with no bottom border */
+.documents-grid .doc-tabs .doc-tab.current { border-bottom: none; }
+
+/* Mobile tweaks for headers inside compartments */
+@media (max-width: 480px) {
+    .compartment-header { font-size: 0.95em; }
+}
+
+/* Hide hamburger and mobile menu by default */
+.hamburger-btn, .mobile-menu {
+    display: none;
+}
+
+/* Ensure mobile menu can open on all screen sizes */
+.mobile-menu {
+  display: none;
+  position: fixed;
+  top: 56px;
+  right: 0;
+  width: 320px;
+  max-width: 320px;
+  background: #fff;
+  box-shadow: -2px 0 12px rgba(0,0,0,0.15);
+  z-index: 2000;
+  flex-direction: column;
+  padding: 1.5em 1em;
+  gap: 1em;
+  border-radius: 0 0 0 12px;
+}
+.mobile-menu.open { display: flex; }
+
+/* Responsive styles for small screens. BUT TEMPORARILY INCREASING TO FULL SCREEN TO LOOK AT DESIGN*/
+@media (max-width: 900px) {
+    .global-top-bar {
+        padding: 8px 8px;
+    }
+    .right-controls {
+        gap: 0;
+    }
+    .header-title {
+        display: none !important;
+    }
+    .start-button, .danger-button, .right-controls a {
+        display: none !important;
+    }
+    .hamburger-btn {
+        display: block !important;
+        background: none;
+        border: none;
+        font-size: 2em;
+        color: #fff;
+        margin-left: auto;
+        cursor: pointer;
+    }
+    /* Compact record button */
+    #recordBtn {
+        display: inline-flex !important;
+        font-size: 1em;
+        padding: 8px 18px;
+        border-radius: 8px;
+        min-width: 80px;
+        min-height: 36px;
+        justify-content: center;
+        align-items: center;
+        white-space: nowrap;
+    }
+    /* Show mobile menu when active */
+    .mobile-menu {
+        display: none;
+        position: fixed;
+        top: 56px;
+        right: 0;
+        width: 70vw;
+        max-width: 260px;
+        background: #fff;
+        box-shadow: -2px 0 12px rgba(0,0,0,0.15);
+        z-index: 2000;
+        flex-direction: column;
+        padding: 1.5em 1em;
+        gap: 1em;
+        border-radius: 0 0 0 12px;
+    }
+    .mobile-menu.open {
+        display: flex;
+    }
+    .mobile-menu a, .mobile-menu button {
+        display: block;
+        width: 100%;
+        margin: 0.5em 0;
+        text-align: left;
+        font-size: 1.1em;
+    }
+    .mobile-menu-separator {
+        border: none;
+        border-top: 1px solid #e0e0e0;
+        margin: 0.5em 0 0.5em 0;
+    }
+    .end-session-link {
+        color: #1976d2;
+        font-weight: normal;
+        font-size: 1em;
+        margin: 0.5em 0;
+        display: block;
+        text-align: left;
+        background: none;
+        border: none;
+        text-decoration: none;
+        cursor: pointer;
+    }
+    .end-session-link:hover {
+        color:#e74c3c;
+        background: none;
+        text-decoration: underline;
+    }
+}
+
+@media (max-width: 800px) {
+
+    .side-by-side {
+        flex-direction: column;
+    }
+    .side-by-side > .panel {
+        max-width: 100%;
+        min-width: 0;
+    }
+    #chartModalInner {
+        width: 95vw;
+        max-width: 99vw;
+        min-width: unset;
+    }
+}
+
+/* New: Keep docsKeyword input + buttons together */
+.docs-inline-group {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  white-space: nowrap;
+  flex-wrap: nowrap;
+}
+
+/* --- Explore: three-column grid with left and right sidebars --- */
+.explore-grid { display: grid; grid-template-columns: 300px 1fr 300px; gap: 18px; align-items: start; }
+.left-sidebar { padding: 6px 8px 6px 6px; background: transparent; }
+.main-content { min-width: 0; }
+@media (max-width: 1000px){ .explore-grid { grid-template-columns: 1fr; } }
+
+/* --- Vitals Sidebar (no box; sits on background) --- */
+.vitals-sidebar { background: transparent; border: none; padding: 6px 4px; }
+.vitals-sidebar .vital-item { cursor: pointer; user-select: none; margin: 8px 0 2px 0; }
+.vitals-sidebar .vital-item:focus { outline: 2px solid #cfe3ff; border-radius: 4px; }
+.vitals-sidebar .vital-line { color: #3498db; font-weight: 700; font-size: 1.6em; letter-spacing: 0.3px; }
+.vitals-sidebar .vital-details { margin: 2px 0 10px 4px; padding-left: 6px; border-left: 3px solid #cfe3ff; }
+.vitals-sidebar .vital-reads { list-style: none; margin: 6px 0 0 0; padding: 0; }
+.vitals-sidebar .vital-reads li { font-size: 0.96em; color: #3b2f2a; margin: 2px 0; }
+
+/* --- Right sidebar meds status styling --- */
+.vitals-sidebar .vital-reads li.med-active { color: var(--brand-blue); }
+.vitals-sidebar .vital-reads li.med-expired { color: #777; font-style: italic; }
+.vitals-sidebar .vital-reads li.med-discontinued { color: #777; font-style: italic; text-decoration: line-through; }
+
+.vital-loading, .vital-error, .vital-empty { color: #555; font-style: italic; }
+
+/* --- Standalone Vitals Sidebar (on background) --- */
+.vitals-standalone { margin: 8px 14px; }
+.vitals-standalone .vitals-sidebar { background: transparent; border: none; padding: 6px 4px; }
+
+/* Layout: 2-column grid for first two rows, third row also two cells */
+.vitals-grid { display: grid; grid-template-columns: auto auto; gap: 8px 8px; align-items: end; }
+.vital-cell { display: flex; align-items: flex-end; gap: 2px; }
+
+/* Thin / tall numeric style (keep brand blue color) */
+.vital-big { color: var(--brand-blue); font-weight: 300; line-height: 1.05; font-variant-numeric: tabular-nums; }
+.vital-big .unit-small { color: #000; font-size: 0.55em; font-weight: 500; margin-left: 4px; }
+
+/* Heart Rate block: big blue value, small black bpm */
+.hr-readout { display: inline-flex; align-items: baseline; gap: 6px; }
+.hr-value { color: var(--brand-blue); font-weight: 300; font-size: 40px; line-height: 1; }
+.hr-bpm { color: #000; font-size: 0.7em; font-weight: 600; letter-spacing: 0.3px; }
+
+/* Blood Pressure special layout with diagonal */
+.bp-readout { position: relative; display: inline-block; padding-right: 48px; }
+.bp-sys { font-size: 36px; }
+/* Bring slash and diastolic closer to systolic to fit column better */
+.bp-dia { position: absolute; left: calc(65% + 2px); top: 20px; font-size: 36px; }
+.bp-slash { position: absolute; left: calc(60% + 2px); top: -2px; width: 2px; height: 56px; background: var(--brand-blue); transform: rotate(30deg); opacity: 0.9; }
+
+/* Smaller, black labels for RR and SpO2 */
+.small-black { color: #000; font-size: 0.92em; font-weight: 600; letter-spacing: 0.2px; }
+
+/* Temperature and Weight with small unit suffixes */
+.vital-value { color: var(--brand-blue); font-weight: 300; font-size: 28px; line-height: 1; }
+.unit-small { color: #000; font-size: 0.7em; font-weight: 600; margin-left: 4px; }
+
+/* Units in brand blue (e.g., SpO2 percent) */
+.unit-blue { color: var(--brand-blue); font-size: 0.7em; font-weight: 600; margin-left: 2px; }
+
+/* RR / SpO2: labels small black, values big blue like HR */
+.vital-label { color: #000; font-size: 0.7em; font-weight: 600; letter-spacing: 0.3px; }
+.vital-large { color: var(--brand-blue); font-weight: 300; font-size: 40px; line-height: 1; }
+
+/* Delta triangles: on the left, very close */
+.delta-wrap { display: inline-flex; flex-direction: column; gap: 0; margin-left: 0; margin-right: 1px; align-self: center; }
+.delta-tri { color: #DAA520; font-size: 12px; line-height: 1; display: block; }
+/* Collapse any remaining space between stacked arrows */
+.delta-wrap .delta-tri + .delta-tri { margin-top: -2px; }
+
+/* Popover for last 3 values */
+.vital-popover { position: absolute; z-index: 2000; background: #fff; border: 1px solid #ddd; border-radius: 6px; box-shadow: 0 6px 18px rgba(0,0,0,0.15); padding: 8px 10px; color: var(--brand-blue); font-size: 12px; line-height: 1.3; }
+.vital-popover h4 { margin: 0 0 4px 0; font-size: 12px; color: #333; font-weight: 600; }
+.vital-popover .row { white-space: nowrap; }
+.vital-popover .row.abnormal { color: #ef5350; }
+.vital-popover .row.critical { color: #b71c1c; }
+
+@media (max-width: 900px){
+  .bp-sys { font-size: 40px; }
+  .bp-readout { padding-right: 48px; }
+  .bp-dia { font-size: 36px; top: 20px; left: calc(65% + 2px); }
+  .bp-slash { height: 56px; left: calc(60% + 2px); top: -2px; }
+  .vital-large { font-size: 32px; }
+}
+
+@media (max-width: 900px){
+  .vitals-standalone { margin: 6px 8px; }
+  .bp-sys { font-size: 40px; }
+  .bp-dia { font-size: 36px; top: 20px; left: calc(65% + 2px); }
+  .bp-slash { height: 56px; left: calc(60% + 2px); top: -2px; }
+  .hr-value { font-size: 32px; }
+  .vital-value { font-size: 24px; }
+}
+
+/* --- Labs fishbone under vitals --- */
+.vitals-separator {
+  height: 1px;
+  background: var(--brand-blue);
+  opacity: 0.8;
+  margin: 40px 0 40px 0;
+  border-radius: 1px;
+}
+.labs-fishbone { margin: 6px 2px 2px 2px; }
+.labs-fishbone svg { display: block; max-width: 100%; height: auto; }
+.labs-fishbone .lab-value { font-size: 28px; font-weight: 400; }
+
+/* --- Labs fishbone extras (key labs list + overrides) --- */
+.labs-fishbone a.labs-recent-link { font-size: 0.95em !important; }
+.labs-list { margin: 6px 2px 8px 2px; display: grid; gap: 4px; }
+.labs-item { display: flex; align-items: baseline; gap: 6px; }
+.labs-label { color: #000; font-weight: 600; }
+.labs-value { color: var(--brand-blue); font-weight: 300; }
+.labs-value.abnormal { color: #ef5350 !important; }
+.labs-value.critical { color: #b71c1c !important; }
+.labs-date { color: #555; font-size: 0.85em; }
+
+/* --- Labs key list unit handling and lighter abnormal color --- */
+.labs-item { cursor: pointer; }
+.labs-value.abnormal { color: #ef5350; }
+.labs-value-wrap { display: inline-flex; align-items: baseline; gap: 4px; white-space: nowrap; }
+.labs-unit { color: #000; font-size: 0.7em; font-weight: 300; margin-left: 2px; }
+
+/* Hide mobile menu by default; keep hamburger visible on all sizes */
+.mobile-menu { display: none; }
+/* Hide right-side icon links on all screen sizes (use hamburger instead) */
+.right-controls a { display: none !important; }
+/* Ensure hamburger is visible and styled */
+.hamburger-btn { display: block !important; background: none; border: none; font-size: 2em; color: #fff; margin-left: 0; cursor: pointer; }
+
+/* === Voice Ask glow pulse === */
+@keyframes askGlowPulse {
+  0% { box-shadow: 0 0 0px rgba(52,152,219,0.0); }
+  50% { box-shadow: 0 0 14px rgba(52,152,219,0.45); }
+  100% { box-shadow: 0 0 0px rgba(52,152,219,0.0); }
+}
+.glow-pulse {
+  animation: askGlowPulse 1.4s ease-in-out infinite;
+  border-color: #3498db !important;
+}
+
+/* Small mic button next to Ask */
+.btn-mic {
+  border-color: #3498db;
+  color: #3498db;
+  padding: 8px 10px;
+}
+.btn-mic:hover { background: #e8f4ff; }
+
+/* Voice Ask UI */
+.btn-mic {
+  margin-left: 6px;
+  padding: 4px 8px;
+  border: 1px solid #d0d7de;
+  border-radius: 6px;
+  background: #f6f8fa;
+  cursor: pointer;
+}
+.btn-mic:hover { background: #eef2f6; }
+.voice-status { margin-left: 6px; font-size: 0.9em; color: #2563eb; }
+
+/* Pulsating blue glow on the Ask input while listening */
+.glow-pulse {
+  outline: none !important;
+  box-shadow: 0 0 0 3px rgba(37, 99, 235, 0.25), 0 0 0 6px rgba(37, 99, 235, 0.12);
+  animation: pulseGlow 1.4s ease-in-out infinite;
+}
+@keyframes pulseGlow {
+  0% { box-shadow: 0 0 0 2px rgba(37,99,235,0.18), 0 0 0 4px rgba(37,99,235,0.10); }
+  50%{ box-shadow: 0 0 0 4px rgba(37,99,235,0.30), 0 0 0 8px rgba(37,99,235,0.18); }
+  100%{ box-shadow: 0 0 0 2px rgba(37,99,235,0.18), 0 0 0 4px rgba(37,99,235,0.10); }
+}
+
+/* --- Tabulator stability + overflow controls --- */
+/* Allow horizontal scroll if sum of column mins exceeds container */
+.tabulator .tabulator-tableholder { overflow-x: auto; }
+/* Prevent long cell content from forcing column growth */
+.tabulator .tabulator-row .tabulator-cell,
+.tabulator .tabulator-header .tabulator-col .tabulator-col-title {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  min-width: 40px;
+}
+/* Keep links inside cells from inheriting oversized global <a> font */
+.tabulator .tabulator-cell a { font-size: inherit; }
+/* Ensure the Tabulator root never exceeds its parent width */
+.tabulator { max-width: 100%; box-sizing: border-box; }
+
+/* Grid children must be allowed to shrink below content width to avoid lateral growth */
+.explore-grid > *,
+.documents-grid > *,
+#docsListCompartment,
+#docsResultsCompartment,
+#docViewerCompartment {
+  min-width: 0;
+}
+
+/* Final override: enforce tan style for notes answer box */
+.docs-controls #notesAnswerBox,
+.docs-answers #notesAnswerBox {
+  background: var(--paper-panel-opaque) !important;
+  border: 1px solid var(--paper-border) !important;
+  font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif !important;
+}
+
+/* --- Right Sidebar: small blue circle bullets for each entry --- */
+#patientRightSidebar .vital-reads { list-style: none; padding: 0; margin: 0; }
+#patientRightSidebar .vital-reads li { position: relative; padding-left: 14px; margin: 4px 0; }
+#patientRightSidebar .vital-reads li::before {
+  content: '';
+  position: absolute;
+  left: 0;
+  top: 0.9em;
+  width: 6px;
+  height: 6px;
+  background: var(--brand-blue);
+  border-radius: 50%;
+  transform: translateY(-50%);
+}
+
+/* Hover preview for citations: non-blocking, sized, clamped */
+.qa-cite-popover {
+  pointer-events: none !important;          /* do not block clicks on links underneath */
+  max-width: 460px !important;
+  max-height: 12em !important;              /* ~8 lines at 1.5 line-height */
+  overflow: hidden !important;
+  white-space: normal !important;           /* allow wrapping so clamp works */
+  display: -webkit-box !important;
+  line-clamp: 8;                     /* standard property for compatibility */
+  -webkit-line-clamp: 8;                    /* clamp to N lines */
+  -webkit-box-orient: vertical;
+  mask-image: linear-gradient(180deg, #000 80%, rgba(0,0,0,0)); /* subtle fade-out */
+}
+
+/* Optional: small fade-in to reduce abruptness */
+.qa-cite-popover {
+  opacity: 0; transform: translateY(2px);
+  transition: opacity 120ms ease, transform 120ms ease;
+}
+.qa-cite-popover.qa-cite-popover--show {
+  opacity: 1; transform: translateY(0);
+}

@@ -1,0 +1,27 @@
+# Python cache and virtualenv
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+venv/
+.venv/
+
+# Flask session files
+.flask_session/
+
+# Local environment variables
+.env
+*.env
+cipher.txt
+
+# Do not ignore .env.example
+!.env.example
+
+# Transcripts and runtime data
+transcripts/
+live_transcript.txt
+chunks/
+temp_pdf/Clinical
+
+# IDE/Editor workspace files
+v_3_0_SimpleScribe.code-workspace

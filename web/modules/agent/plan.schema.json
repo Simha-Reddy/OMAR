@@ -1,0 +1,92 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://simplescribe.local/schemas/agent/plan.schema.json",
+  "title": "Agent Plan",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "purpose",
+    "budget",
+    "data_requests",
+    "render_spec",
+    "acceptance_criteria"
+  ],
+  "properties": {
+    "schema_version": {
+      "type": "string",
+      "const": "1.0.0"
+    },
+    "purpose": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 800
+    },
+    "budget": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["rows", "bytes", "timeout_ms"],
+      "properties": {
+        "rows": { "type": "integer", "minimum": 1, "maximum": 5000 },
+        "bytes": { "type": "integer", "minimum": 1024, "maximum": 5000000 },
+        "timeout_ms": { "type": "integer", "minimum": 100, "maximum": 30000 }
+      }
+    },
+    "data_requests": {
+      "type": "array",
+      "minItems": 0,
+      "maxItems": 10,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["tool", "params"],
+        "properties": {
+          "tool": {
+            "type": "string",
+            "enum": [
+              "get_labs",
+              "get_vitals",
+              "get_meds",
+              "get_problems",
+              "get_notes",
+              "get_notes_search_results"
+            ]
+          },
+          "params": {
+            "type": "object",
+            "description": "Typed params for the selected tool",
+            "properties": {
+              "patient_id": { "type": "string", "minLength": 1 },
+              "date_range": {
+                "type": "object",
+                "additionalProperties": false,
+                "properties": {
+                  "start": { "type": "string", "format": "date-time" },
+                  "end": { "type": "string", "format": "date-time" }
+                }
+              },
+              "codes": { "type": "array", "items": { "type": "string" }, "maxItems": 50 },
+              "limit": { "type": "integer", "minimum": 1, "maximum": 1000 },
+              "query": { "type": "string", "minLength": 1 },
+              "top_k": { "type": "integer", "minimum": 1, "maximum": 20 },
+              "doc_ids": { "type": "array", "items": { "type": "string" }, "maxItems": 200 }
+            },
+            "additionalProperties": true
+          }
+        }
+      }
+    },
+    "render_spec": {
+      "type": "object",
+      "description": "Intended visualizations and tables. No code.",
+      "additionalProperties": true
+    },
+    "acceptance_criteria": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 10,
+      "items": { "type": "string", "minLength": 1, "maxLength": 300 }
+    },
+    "notes": { "type": "string", "maxLength": 1000 }
+  }
+}

@@ -1,0 +1,336 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>Explore Chart Data</title>
+    <link rel="icon" type="image/x-icon" href="/static/icon.ico">
+    <link rel="stylesheet" href="/static/style.css">
+    <!-- Tabulator CSS -->
+    <link href="https://unpkg.com/tabulator-tables@6.3.0/dist/css/tabulator.min.css" rel="stylesheet">
+</head>
+<body data-safe-modules-enabled="{{ 'true' if safe_modules_enabled else 'false' }}">
+    <div class="global-top-bar">
+        <div class="left-controls">
+            <a href="/" class="header-title">OMAR</a>
+            <button id="recordBtn" class="start-button">Start Recording</button>
+            <!-- left area intentionally minimal -->
+        </div>        <!-- middle area: centered patient display -->
+        <div class="global-center">
+            <span id="patientLookupResults" style="font-weight:bold; cursor:pointer;" title="Click to view demographics" role="button" tabindex="0"></span>
+        </div>
+        <div class="right-controls">
+            <label style="display:inline-flex; align-items:center; gap:4px; margin-right:8px; font-size:0.9em;">
+                <input type="checkbox" id="demoToggle">
+                <span>Demo</span>
+            </label>
+            <a href="/scribe" title="Scribe">📝</a>
+            <a href="/explore" title="Explore Chart Data">🔍</a>
+            <a href="/archive" title="Transcripts">📁</a>
+            <a href="/settings" title="Settings">⚙️</a>
+            <input type="text" id="patientSearchInput" placeholder="Patient Search (Name or Initial+Last4)" autocomplete="off" style="width:320px; margin-left:8px;">
+            <button id="hamburgerBtn" class="hamburger-btn" aria-label="Menu">&#9776;</button>
+        </div>
+    </div>
+    <div id="mobileMenu" class="mobile-menu">
+        <a href="/scribe">📝 Scribe</a>
+        <a href="/explore">🔍 Explore</a>
+        <a href="/archive">📁 Archive</a>
+        <a href="/settings">⚙️ Settings</a>
+        <a id="writeNotesLink" href="/scribe?autowrite=1" title="Generate patient education and clinic note">✍️ Write Notes</a>
+        <!-- New: Exit app (clears unsaved data, closes connections, returns to landing) -->
+        <hr class="mobile-menu-separator">
+        <a href="#" class="end-session-link" onclick="exitApp();return false;" title="Exit">🚪 Exit</a>
+    </div>
+
+    <!-- Explore layout grid: left vitals on background, right main container -->
+    <div class="explore-grid">
+        <aside id="leftSidebar" class="left-sidebar vitals-standalone">
+            <!-- New: Notes during visit (mirrors Scribe's visitNotes) -->
+            <div id="visitNotesBox" style="margin:8px 0 12px 0;">
+                <label for="visitNotes" style="display:block; font-weight:600; margin-bottom:4px;">Notes during visit</label>
+                <textarea id="visitNotes" placeholder="Quick notes..."
+                          style="width:100%; min-height:60px; resize:vertical; padding:6px; border:1px solid #ddd; border-radius:6px;"></textarea>
+            </div>
+            <div id="vitalsSidebar" class="vitals-sidebar" aria-live="polite"><!-- Populated by JS --></div>
+        </aside>
+
+        <div class="container container-wide">
+            <h2>Explore Chart Data</h2>
+                <!-- Controls + Queries -->
+                <div class="compartment" id="docsResultsCompartment">
+                    <div class="compartment-body">
+                        <div class="docs-results-grid">
+                            <div class="docs-controls">
+                                <!-- Ask control for notes RAG on one line -->
+                                <span class="notes-ask-inline">
+                                    <input id="notesAskInput" type="text" placeholder="Say 'Hey, Omar'" style="min-width:300px;">
+                                    <button id="notesAskMicBtn" class="btn-mic" title="Voice capture next sentence into Ask">🎤</button>
+                                    <span id="notesAskVoiceStatus" class="voice-status" aria-live="polite"></span>
+                                    <button id="notesAskBtn">Ask</button>
+                                    <button id="notesSummaryBtn" title="Generate a one-line clinical summary">Summary</button>
+                                </span>
+                                <!-- Answer lives below controls -->
+                                <div id="notesAnswerBox" style="display:none; margin-top:8px;"></div>
+                            </div>
+                            <div class="docs-answers">
+                            <!-- Answers & Results  -->
+                            <!-- Removed old placement of notesAnswerBox; keep search results if needed -->
+                            <div id="notesSearchResults" class="markdown-box" style="display:none; margin-top:8px; padding:10px; background:#fff; border:1px solid #e0e0e0; border-radius:6px;"></div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+            <!-- Main content only -->
+            <div id="mainContent" class="main-content">
+
+                <!-- Documents / Notes Table Panel -->
+                <div class="panel" id="documentsPanel" style="margin-top:32px; border:none;">
+                    <h3>Documents</h3>
+                    <!-- Auto-index toggle on its own line -->
+                    <div class="docs-controls-row" style="margin-bottom:6px;">
+                        <label style="display:inline-flex; align-items:center; gap:6px; margin-left:8px;">
+                            <input type="checkbox" id="autoIndexToggle">
+                            <span>Continue Auto-Indexing All Notes</span>
+                        </label>
+                    </div>
+                    <span id="docsStatus" style="margin-left:auto; font-size:0.9em; color:#555;"></span>
+                    <span id="docsSizeEstimate" style="font-size:0.9em; color:#555;"></span>
+                    <!-- New responsive compartments for the Documents panel -->
+                    <div class="documents-grid">
+                        <div class="compartment" id="docsListCompartment">
+                            <div class="compartment-body">
+                                <div id="documentsTableWrap" class="doc-table-wrap">
+                                    <div id="documentsTable" class="doc-table"></div>
+                                    <!-- Overlayed Note Viewer directly under table header -->
+                                    <div id="docViewerOverlay" class="doc-viewer-overlay" style="display:none;">
+                                        <div id="docTabs" class="doc-tabs" aria-label="Note navigation">
+                                            <div class="doc-nav">
+                                                <button class="tab-chev left" id="docTabsNavLeft" title="Previous note" aria-label="Previous note">◀</button>
+                                                <button class="tab-chev right" id="docTabsNavRight" title="Next note" aria-label="Next note">▶</button>
+                                            </div>
+                                            <div class="doc-tab" id="docTabPrev" data-state="disabled">
+                                                <button class="tab-label" id="docTabPrevLabel" title="Open previous note" aria-label="Open previous note"></button>
+                                            </div>
+                                            <div class="doc-tab current" id="docTabCurr">
+                                                <button class="tab-label" id="docTabCurrLabel" title="Current note" aria-current="page"></button>
+                                            </div>
+                                            <div class="doc-tab" id="docTabNext" data-state="disabled">
+                                                <button class="tab-label" id="docTabNextLabel" title="Open next note" aria-label="Open next note"></button>
+                                            </div>
+                                            <button id="docTabClose" class="doc-tab-close" title="Close viewer" aria-label="Close viewer">×</button>
+                                        </div>
+                                        <div class="doc-viewer-wrap">
+                                          <pre id="docViewText" class="doc-viewer"></pre>
+                                          <button id="copyDocTextBtn" class="doc-viewer-copy" title="Copy note text">Copy</button>
+                                        </div>
+                                        <div id="docViewStatus" style="font-size:0.85em; color:#555; padding:4px 6px 6px 6px;"></div>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Chart Data Input and OpenAI Query moved here -->
+                <div class="side-by-side">
+                    <!-- LEFT: Chart Data Input/Search/Display -->
+                    <div class="panel" style="border:none;">
+                        <h3>Chart Data</h3>
+                        <div id="dropZone" class="drop-zone">
+                            <textarea id="chunkText" placeholder="Paste or drop PDF of outside record text here..."></textarea>
+                            <div class="drop-overlay">
+                                <span>Drop PDF here</span>
+                            </div>
+                        </div>
+                        <div class="button-group">
+                            <button id="exploreChartBtn" onclick="submitChartChunk()">Prepare Data</button>
+                            <button id="openKeywordModalBtn">Keyword Search</button>
+                        </div>
+                        <div id="chunkStatus"></div>
+                    </div>
+                    <!-- RIGHT: OpenAI Query/Answer -->
+                    <div class="panel" style="border:none;">
+                        <h3>Query Outside Records</h3>
+                        <input type="text" 
+                               id="exploreSearchBox" 
+                               placeholder="Ask a question and press Enter..." 
+                               onkeyup="if(event.key === 'Enter') runExploreSearch()">
+                        <div id="exploreGptAnswer" class="markdown-box"></div>
+                    </div>
+                </div>
+
+                <!-- Agent (Safe Modules) Panel -->
+                <div class="panel" id="agentPanel" style="display:none; margin-top:16px;">
+                    <h3>Agent (Safe Modules)</h3>
+                    <div style="display:flex; gap:12px; align-items:flex-start; flex-wrap:wrap;">
+                        <textarea id="agentQuery" placeholder="e.g., Summarize diabetes control" style="min-width:320px; min-height:80px; flex:1 1 360px;"></textarea>
+                        <div style="display:flex; flex-direction:column; gap:8px; min-width:180px;">
+                            <button id="agentGeneratePlanBtn" disabled>Generate Plan</button>
+                            <button id="agentApproveRunBtn" disabled title="Approve generated plan and execute server-side">Approve & Run</button>
+                            <button id="agentRenderBtn" disabled title="Request render code (not executed)">Render</button>
+                            <button id="agentTestSandboxBtn" title="Run minimal test render in sandbox (debug only)">Test Sandbox</button>
+                            <button id="agentSaveModuleBtn" disabled title="Save the current plan + render as reusable module">Save Module</button>
+                            <div id="agentStatus" style="font-size:0.9em; color:#555;"></div>
+                        </div>
+                    </div>
+                    <div style="margin-top:10px;">
+                        <pre id="agentPlanOutput" style="white-space:pre-wrap; word-break:break-word; background:#fafafa; border:1px solid #ddd; border-radius:6px; padding:8px; min-height:120px;"></pre>
+                    </div>
+                    <div style="margin-top:10px;">
+                        <label style="font-weight:bold; display:block; margin-bottom:4px;">Execution summary</label>
+                        <pre id="agentDatasetsOutput" style="white-space:pre-wrap; word-break:break-word; background:#fafafa; border:1px solid #ddd; border-radius:6px; padding:8px; min-height:60px;"></pre>
+                    </div>
+                    <div style="margin-top:10px;">
+                        <label style="font-weight:bold; display:block; margin-bottom:4px;">Render output (code + notes)</label>
+                        <div id="agentRenderInfo" style="font-size:0.9em; color:#444; margin-bottom:6px;"></div>
+                        <!-- Editable code box -->
+                        <textarea id="agentRenderCodeInput" placeholder="function render({datasets, container, Tabulator, Formatter}){\n  // Write your renderer here...\n}" style="white-space:pre; word-break:normal; background:#fffdf7; border:1px solid #f0e6cc; border-radius:6px; padding:8px; min-height:120px; width:100%; font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 12px;"></textarea>
+                        <!-- Actions for edited code -->
+                        <div style="margin-top:6px; display:flex; gap:8px;">
+                          <button id="agentRunCustomCodeBtn" title="Run the edited code against the current datasets">Run Edited Code</button>
+                        </div>
+                    </div>
+                    <!-- Sandboxed render mount -->
+                    <div style="margin-top:10px;">
+                        <label style="font-weight:bold; display:block; margin-bottom:4px;">Rendered output (sandbox)</label>
+                        <div id="agentRenderMount" style="min-height:120px; border:1px dashed #ccc; border-radius:6px; padding:8px; background:#fafafa; resize: vertical; overflow: auto;"></div>
+                    </div>
+                    <!-- Saved Modules list -->
+                    <div style="margin-top:14px;">
+                        <div style="display:flex; align-items:center; justify-content:space-between;">
+                            <label style="font-weight:bold;">Saved modules</label>
+                            <div>
+                                <button id="agentSavedModulesRefreshBtn" title="Refresh list">Refresh</button>
+                            </div>
+                        </div>
+                        <div id="agentSavedModulesList" style="margin-top:6px; background:#f7f9ff; border:1px solid #dfe7ff; border-radius:6px; padding:8px; max-height:180px; overflow:auto;"></div>
+                    </div>
+                </div>
+
+
+                <!-- New: Laboratory Results Panel (Lab Data Viewer) -->
+                <div class="panel" id="labsPanel" style="margin-top:32px;">
+                    <h3>Laboratory Results</h3>
+                    <div id="labsTable" style="height:400px;"></div>
+                    <div id="labDetail" style="display:none;margin-top:12px;white-space:pre-wrap;border:1px solid #ccc;padding:8px;background:#fafafa;"></div>
+                </div>
+
+                <!-- Medications Panel -->
+                <div class="panel" id="medicationsPanel" style="margin-top:32px;">
+                    <h3>Medications</h3>
+                    <div id="medicationsTable" style="height:400px;"></div>
+                </div>
+
+                <!-- Labs and Vitals modules -->
+                <div style="margin-top:32px;">
+                    <!-- Vitals Module Only -->
+                    <div class="panel" id="vitalsModule">
+                        <h3>Vitals</h3>
+                        <div id="vitalsChartContainer" style="width:100%;height:340px;min-width:320px;min-height:240px;">Loading vitals chart...</div>
+                        <div style="margin-top:10px;">
+                            <label for="vitalTypeSelect">Show vital sign:</label>
+                            <select id="vitalTypeSelect"></select>
+                        </div>
+                    </div>
+                </div>
+
+                <div id="dynamicModules" style="margin-top:32px;"></div>
+              </div> <!-- /#mainContent -->
+        </div>
+
+        <!-- Right Sidebar: Allergies, Meds (90d), Problem List -->
+        <aside id="rightSidebar" class="left-sidebar vitals-standalone">
+            <div id="patientRightSidebar" class="vitals-sidebar" aria-live="polite"><!-- Populated by JS --></div>
+        </aside>
+    </div> <!-- /.explore-grid -->
+
+    <div id="exploreSearchResults" style="margin-top:18px;"></div>
+
+    <!-- Modal for paginated chart viewing -->
+    <div id="chartModal">
+      <div id="chartModalInner">
+        <button id="closeChartModalBtn">&times;</button>
+
+        <!-- Modal header (keep your close button and page label here) -->
+        <div style="display:flex;justify-content:space-between;align-items:center;padding:18px 32px 0 32px;">
+          <button id="modalPrevBtn">&lt; Prev</button>
+          <span id="chartModalPageLabel"></span>
+          <button id="modalNextBtn">Next &gt;</button>
+        </div>
+
+        <!-- Horizontal page scroller -->
+        <div id="chartModalPageScroller"></div>
+
+        <!-- Main content -->
+        <div id="chartModalContent"></div>
+
+        <!-- Modal footer: keyword search and match navigation -->
+        <div id="chartModalFooter" class="modal-footer">
+          <input id="modalKeywordInput" type="text" placeholder="Keyword search..." />
+          <span id="modalMatchLabel"></span>
+          <button id="prevModalMatchBtn">&lt;</button>
+          <button id="nextModalMatchBtn">&gt;</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- Modal for Note Viewer (opens on citation click) -->
+    <div id="noteModal" style="display:none; position:fixed; inset:0; background:rgba(0,0,0,0.45); z-index:1000; align-items:center; justify-content:center;">
+      <div style="background:#fff; width:min(1000px, 92vw); max-height:90vh; border-radius:8px; box-shadow:0 8px 30px rgba(0,0,0,0.35); display:flex; flex-direction:column;">
+        <div style="display:flex; align-items:center; justify-content:space-between; padding:10px 14px; border-bottom:1px solid #eee;">
+          <div style="display:flex; align-items:center; gap:8px; min-width:0;">
+            <div id="noteModalTitle" style="font-weight:bold; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;"></div>
+            <div id="noteModalStatus" style="font-size:0.85em; color:#555;"></div>
+          </div>
+          <button id="noteModalCloseBtn" title="Close" style="font-size:18px; line-height:1; padding:4px 8px;">×</button>
+        </div>
+        <pre id="noteModalText" style="margin:0; padding:12px; overflow:auto; white-space:pre-wrap; word-break:break-word; min-height:200px; max-height:calc(90vh - 64px);"></pre>
+      </div>
+    </div>
+
+    <!-- New: Patient Demographics Modal -->
+    <div id="patientDemoModal" style="display:none; position:fixed; inset:0; background:rgba(0,0,0,0.45); z-index:1000; align-items:center; justify-content:center;">
+      <div style="background:#fff; width:min(720px, 92vw); max-height:90vh; border-radius:8px; box-shadow:0 8px 30px rgba(0,0,0,0.35); display:flex; flex-direction:column;">
+        <div style="display:flex; align-items:center; justify-content:space-between; padding:10px 14px; border-bottom:1px solid #eee;">
+          <div style="display:flex; align-items:center; gap:8px; min-width:0;">
+            <div id="patientDemoTitle" style="font-weight:bold; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;">Patient Demographics</div>
+          </div>
+          <button id="patientDemoCloseBtn" title="Close" style="font-size:18px; line-height:1; padding:4px 8px;">×</button>
+        </div>
+        <div id="patientDemoContent" style="margin:0; padding:12px; overflow:auto; white-space:normal; word-break:break-word; min-height:120px; max-height:calc(90vh - 64px);"></div>
+      </div>
+    </div>
+
+    <!-- Patient Record Modules: Active Problems, Medications, Labs -->
+    <div id="patientRecordModules" style="margin-top: 24px;"></div>
+    <!-- Blood Pressure and Medication Timeline Chart -->
+    <div id="bpTimelineContainer" style="margin: 32px 0; min-height: 340px;"></div>
+
+    <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
+    <!-- ECharts loader and vitals chart integration -->
+    <script src="https://cdn.jsdelivr.net/npm/echarts@5.5.0/dist/echarts.min.js"></script>
+    <!-- Tabulator JS -->
+    <script src="https://unpkg.com/tabulator-tables@6.3.0/dist/js/tabulator.min.js"></script>
+    <!-- Read SAFE_MODULES flag from body data attribute to avoid template braces in JS -->
+    <script>(function(){
+      var v = (document.body && document.body.dataset ? document.body.dataset.safeModulesEnabled : 'false');
+      window.SAFE_MODULES_ENABLED = (v === 'true' || v === true);
+    })();</script>
+    <!-- Enable sandbox debug mode to ease diagnostics -->
+    <script>window.SANDBOX_DEBUG = true;</script>
+    <script src="/static/vitals_chart.js"></script>
+    <script src="/static/SessionManager.js"></script>
+    <script src="/static/agent/StaticChecks.js?v=1"></script>
+    <script src="/static/agent/SandboxRunner.js?v=3"></script>
+    <!-- Add vitals sidebar (includes Labs fishbone) -->
+    <script src="/static/explore/vitals_sidebar.js"></script>
+    <!-- Add patient right sidebar renderer -->
+    <script src="/static/explore/right_sidebar.js"></script>
+    <script src="/static/explore/agent.js"></script>
+    <script src="/static/explore.js"></script>
+    <script src="/static/app.js"></script>
+    <script src="/static/patient.js"></script>
+    <script src="/static/selectpatient.js"></script>
+  </body>
+</html>
