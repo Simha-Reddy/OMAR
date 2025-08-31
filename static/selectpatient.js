@@ -18,16 +18,49 @@ async function preSwitchSaveAndClear() {
         if (window.SessionManager && SessionManager.saveToSession) {
             await SessionManager.saveToSession();
         }
-        // Flush current archive file one last time before switching
+        // Flush current archive file one last time before switching (only if scribe had content)
         try {
             const prev = localStorage.getItem('ssva:currentArchiveName');
-            if (prev && window.SessionManager && SessionManager.saveFullSession) {
+            const hadScribeContent = (() => {
+                try {
+                    const t = document.getElementById('rawTranscript')?.value || '';
+                    const n = document.getElementById('visitNotes')?.value || '';
+                    return (t.trim().length + n.trim().length) > 0;
+                } catch(_e){ return false; }
+            })();
+            if (prev && hadScribeContent && window.SessionManager && SessionManager.saveFullSession) {
                 await SessionManager.saveFullSession(prev);
             }
         } catch(_e){}
+
+        // Immediately clear UI fields so old notes don't carry into the new patient
+        try {
+            const vn = document.getElementById('visitNotes');
+            if (vn) { vn.value = ''; vn.dispatchEvent(new Event('input', { bubbles: true })); }
+            const ct = document.getElementById('chunkText');
+            if (ct) { ct.value = ''; ct.dispatchEvent(new Event('input', { bubbles: true })); }
+            const ans = document.getElementById('exploreGptAnswer');
+            if (ans) ans.innerHTML = '';
+            // Clear any module outputs
+            document.querySelectorAll('.panel .module-output').forEach(el => el.innerHTML = '');
+            // Clear scribe transcript textbox if present
+            const rt = document.getElementById('rawTranscript');
+            if (rt) rt.value = '';
+            // Reset in-memory Explore QA history
+            try { window.exploreQAHistory = []; if (typeof window.updateExploreQAHistory === 'function') window.updateExploreQAHistory(); } catch(_){}
+        } catch(_e){}
+
+        // Clear live transcript file on the server too
+        try { await fetch('/scribe/clear_live_transcript', { method: 'POST' }); } catch(_e){}
+
         // Unbind the archive name to prevent autosave from writing to old file
         try { localStorage.removeItem('ssva:currentArchiveName'); } catch(_e){}
+
+        // Clear server-side session state
         await fetch('/clear_session', { method: 'POST' });
+
+        // Small delay to ensure clears settle before proceeding
+        try { await new Promise(r => setTimeout(r, 75)); } catch(_e){}
     } catch (e) {
         console.warn('Pre-switch save/clear warning', e);
     }
@@ -39,22 +72,21 @@ async function setNewArchiveForPatient(patientName) {
         localStorage.setItem('ssva:currentArchiveName', base);
 
         // Defer initial write; avoid creating an empty archive snapshot
-        const hasContent = () => {
+        const hasScribeContent = () => {
             try {
                 const t = document.getElementById('rawTranscript')?.value || '';
                 const n = document.getElementById('visitNotes')?.value || '';
-                const x = document.getElementById('exploreChunkText')?.value || document.getElementById('chunkText')?.value || '';
-                return (t.trim().length + n.trim().length + x.trim().length) > 0;
+                return (t.trim().length + n.trim().length) > 0;
             } catch(_e){ return false; }
         };
 
         // Start auto-archive loop if available
         if (window.startAutoArchiveForCurrentPatient) await window.startAutoArchiveForCurrentPatient();
 
-        // Schedule an initial save only if there’s content
+        // Schedule an initial save only if scribe content exists
         setTimeout(async () => {
             try {
-                if (hasContent() && window.SessionManager && SessionManager.saveFullSession) {
+                if (hasScribeContent() && window.SessionManager && SessionManager.saveFullSession) {
                     await SessionManager.saveFullSession(base);
                 }
             } catch(_e){}

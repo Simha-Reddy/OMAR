@@ -8,15 +8,17 @@
     <!-- Tabulator CSS -->
     <link href="https://unpkg.com/tabulator-tables@6.3.0/dist/css/tabulator.min.css" rel="stylesheet">
 </head>
-<body data-safe-modules-enabled="{{ 'true' if safe_modules_enabled else 'false' }}">
+<body class="page-explore" data-safe-modules-enabled="{{ 'true' if safe_modules_enabled else 'false' }}">
     <div class="global-top-bar">
         <div class="left-controls">
             <a href="/" class="header-title">OMAR</a>
             <button id="recordBtn" class="start-button">Start Recording</button>
             <!-- left area intentionally minimal -->
-        </div>        <!-- middle area: centered patient display -->
+        </div>        <!-- middle area: centered patient display + mobile search -->
         <div class="global-center">
             <span id="patientLookupResults" style="font-weight:bold; cursor:pointer;" title="Click to view demographics" role="button" tabindex="0"></span>
+            <!-- Mobile in-place search input (hidden by default) -->
+            <input type="text" id="mobilePatientSearchInput" placeholder="Search patient..." autocomplete="off" style="display:none; width:min(70vw, 420px); max-width:70vw; margin:0 auto;">
         </div>
         <div class="right-controls">
             <label style="display:inline-flex; align-items:center; gap:4px; margin-right:8px; font-size:0.9em;">
@@ -28,6 +30,8 @@
             <a href="/archive" title="Transcripts">📁</a>
             <a href="/settings" title="Settings">⚙️</a>
             <input type="text" id="patientSearchInput" placeholder="Patient Search (Name or Initial+Last4)" autocomplete="off" style="width:320px; margin-left:8px;">
+            <!-- Mobile: magnifying glass toggle button -->
+            <button id="mobileSearchToggleBtn" class="mobile-search-btn" aria-label="Search" title="Search" style="display:none;">🔎</button>
             <button id="hamburgerBtn" class="hamburger-btn" aria-label="Menu">&#9776;</button>
         </div>
     </div>
@@ -63,7 +67,7 @@
                             <div class="docs-controls">
                                 <!-- Ask control for notes RAG on one line -->
                                 <span class="notes-ask-inline">
-                                    <input id="notesAskInput" type="text" placeholder="Say 'Hey, Omar'" style="min-width:300px;">
+                                    <input id="notesAskInput" type="text" placeholder="Press 'Hey, Omar' and speak" style="min-width:300px;">
                                     <button id="notesAskMicBtn" class="btn-mic" title="Hold to speak" aria-label="Hold to speak">
                                       <img src="/static/images/hey_OMAR_button.png" alt="Hey OMAR" class="hey-omar-img">
                                     </button>

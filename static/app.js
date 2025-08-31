@@ -312,9 +312,14 @@ async function autoSaveTick() {
         if (typeof SessionManager !== 'undefined' && SessionManager.saveToSession) {
             await SessionManager.saveToSession();
         }
-        // If continuing an existing archive restore, also update that file on disk
+        // Only persist to archive if scribe has meaningful content
+        const transcriptEl = document.getElementById('rawTranscript');
+        const visitNotesEl = document.getElementById('visitNotes');
+        const hasTranscript = !!(transcriptEl && transcriptEl.value && transcriptEl.value.trim().length);
+        const hasVisitNotes = !!(visitNotesEl && visitNotesEl.value && visitNotesEl.value.trim().length);
+
         const archiveName = localStorage.getItem('ssva:currentArchiveName');
-        if (archiveName && typeof SessionManager !== 'undefined' && SessionManager.saveFullSession) {
+        if (archiveName && (hasTranscript || hasVisitNotes) && typeof SessionManager !== 'undefined' && SessionManager.saveFullSession) {
             await SessionManager.saveFullSession(archiveName);
         }
     } catch (e) {

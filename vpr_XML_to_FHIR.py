@@ -56,7 +56,7 @@ def get_problems_as_conditions(vpr_text):
                         note_text = f"{note_text} ({'; '.join(meta)})"
                     notes.append({"text": note_text})
         # Debug: print extracted values
-        print(f"Extracted: icd={icd}, icdd={icdd}, name={name}, status={status}, provider={provider}, facility={facility}, notes_count={len(notes)}")
+        # print(f"Extracted: icd={icd}, icdd={icdd}, name={name}, status={status}, provider={provider}, facility={facility}, notes_count={len(notes)}")
         # Map to FHIR Condition resource
         condition = {
             "resourceType": "Condition",
@@ -493,7 +493,7 @@ def get_consults_as_fhir(vpr_text):
         provDx = root.find('provDx').attrib.get('name') if root.find('provDx') is not None else ''
         provDx_code = root.find('provDx').attrib.get('code') if root.find('provDx') is not None else ''
         # Debug print
-        print(f"Extracted CONSULT: id={consult_id}, name={name}, order_id={order_id}, procedure={procedure}, status={status}, urgency={urgency}, requested={requested}, service={service}, reason={reason}, facility={facility}, provider={provider}, provDx={provDx}, provDx_code={provDx_code}")
+        # print(f"Extracted CONSULT: id={consult_id}, name={name}, order_id={order_id}, procedure={procedure}, status={status}, urgency={urgency}, requested={requested}, service={service}, reason={reason}, facility={facility}, provider={provider}, provDx={provDx}, provDx_code={provDx_code}")
         # Build FHIR ServiceRequest resource
         sr = {
             "resourceType": "ServiceRequest",
@@ -574,7 +574,7 @@ def get_meds_as_fhir(vpr_text):
                 route = first_dose.attrib.get('route', '')
                 schedule = first_dose.attrib.get('schedule', '')
         # Debug print
-        print(f"Extracted MED: id={med_id}, name={name}, product_name={product_name}, product_code={product_code}, product_class={product_class}, status={status}, va_status={va_status}, va_type={va_type}, start={start}, stop={stop}, ordered={ordered}, quantity={quantity}, days_supply={days_supply}, form={form}, route={route}, dose={dose}, dose_units={dose_units}, schedule={schedule}, sig={sig}, pt_instructions={pt_instructions}, facility={facility}, provider={provider}")
+        # print(f"Extracted MED: id={med_id}, name={name}, product_name={product_name}, product_code={product_code}, product_class={product_class}, status={status}, va_status={va_status}, va_type={va_type}, start={start}, stop={stop}, ordered={ordered}, quantity={quantity}, days_supply={days_supply}, form={form}, route={route}, dose={dose}, dose_units={dose_units}, schedule={schedule}, sig={sig}, pt_instructions={pt_instructions}, facility={facility}, provider={provider}")
         # Build FHIR MedicationRequest resource
         med_req = {
             "resourceType": "MedicationRequest",
