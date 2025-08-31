@@ -6,7 +6,7 @@ OMAR is a clinical documentation assistant designed for healthcare providers. It
 ---
 
 ## Caveats
-This test program has numerous bugs and the code is filled with detritus from numerous dead ends.
+This test program has numerous bugs and the code is filled with detritus from many dead ends.
 
 ## Features
 
@@ -62,11 +62,11 @@ This test program has numerous bugs and the code is filled with detritus from nu
 
 ## Getting Started
 
-### 1. Clone the Repository
+### 1. Clone the Repository (or download from GitHub website)
 
 ```sh
-git clone https://github.com/Simha-Reddy/SimpleScribe_with_Azure.git
-cd SimpleScribe_with_Azure
+git clone https://github.com/Simha-Reddy/OMAR.git
+cd OMAR
 ```
 
 ### 2. Install Dependencies
@@ -80,13 +80,13 @@ pip install -r requirements.txt
 ### 3. Configure Environment Variables (.env)
 
 - Copy `.env.example` to `.env` and fill in values.
+- Add a cipher.txt to main directory. Cipher needed for VistA. 
 - Do not commit `.env` or any secret files. They are ignored by `.gitignore`.
 
 Azure/OpenAI (required for AI features):
 
 ```env
 AZURE_OPENAI_API_KEY=...
-# Either AZURE_OPENAI_ENDPOINT or AZURE_ENDPOINT is supported
 AZURE_OPENAI_ENDPOINT=https://<your-endpoint>
 AZURE_API_VERSION=2024-02-15-preview
 AZURE_DEPLOYMENT_NAME=gpt-4
@@ -100,23 +100,19 @@ VistA socket client (only if using VistA features):
 VISTA_HOST=<host>
 VISTA_PORT=<port>
 VISTA_RPC_CONTEXT=OR CPRS GUI CHART
-# Optional at server start (the app can also prompt/login later depending on your flow)
 VISTA_ACCESS_CODE=...
 VISTA_VERIFY_CODE=...
 
 # Cipher: prefer file-based config to avoid multiline .env issues
 VISTARPC_CIPHER_FILE=path\to\cipher.txt
-# Alternatively, set VISTARPC_CIPHER as a JSON array or newline-separated rows (use only one)
-# VISTARPC_CIPHER=["row1","row2", ...]
 ```
 
-Recommended: store `cipher.txt` outside the repo and point `VISTARPC_CIPHER_FILE` to that absolute path in production.
 
 ### 4. Run the Application
 
 Run `Setup.bat` to install python dependencies
 
-Run `Start_OMAR.bat` to start run_local_server and open the program in your browser at http://127.0.0.1:5000.
+Run `Start_OMAR.bat` which will start run_local_server and open the program in your browser at http://127.0.0.1:5000.
 
 Log in with CPRS ACCESS/VERIFY codes.
 
@@ -154,9 +150,8 @@ The VistA socket client dynamically loads the cipher from `VISTARPC_CIPHER_FILE`
 3. Push to your fork and submit a pull request
 
 ## License
-
-This project is for internal VA use and research.
-
+MIT license 
+(This project is intended for internal VA use and research.)
 ## Contact
 
 simha.reddy@va.gov
