@@ -64,7 +64,9 @@
                                 <!-- Ask control for notes RAG on one line -->
                                 <span class="notes-ask-inline">
                                     <input id="notesAskInput" type="text" placeholder="Say 'Hey, Omar'" style="min-width:300px;">
-                                    <button id="notesAskMicBtn" class="btn-mic" title="Voice capture next sentence into Ask">🎤</button>
+                                    <button id="notesAskMicBtn" class="btn-mic" title="Hold to speak" aria-label="Hold to speak">
+                                      <img src="/static/images/hey_OMAR_button.png" alt="Hey OMAR" class="hey-omar-img">
+                                    </button>
                                     <span id="notesAskVoiceStatus" class="voice-status" aria-live="polite"></span>
                                     <button id="notesAskBtn">Ask</button>
                                     <button id="notesSummaryBtn" title="Generate a one-line clinical summary">Summary</button>

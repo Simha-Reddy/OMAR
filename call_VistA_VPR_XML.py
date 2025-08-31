@@ -63,8 +63,8 @@ def choose_veteran(client):
             print(f'[DEBUG] USING ORWPT LIST ALL WITH: {search_mod}')
         print(f'SEARCHING FOR VETERANS MATCHING: {search_str} ...')
         result = client.invokeRPC(rpc_name, rpc_params)
-        print('[DEBUG] RAW RPC RESULT:')
-        print((result or '').upper())
+        # print('[DEBUG] RAW RPC RESULT:')
+        # print((result or '').upper())
         lines = [line for line in (result or '').strip().split('\n') if line.strip()]
         vet_list = []
         for line in lines:

@@ -431,10 +431,10 @@
       line(svg, 50, 80, 230, 10);
   
       const spots = {
-        wbc: {x: 90, y: 45, anchor:'end'},     // upper-left
-        hgb: {x: 140, y: 12, anchor:'middle'}, // top center
-        hct: {x: 150, y: 74, anchor:'end'},     // lower-left
-        plt: {x: 195, y: 45, anchor:'start'}   // lower-right
+        wbc: {x: 90, y: 45, anchor:'end'},     // left
+        hgb: {x: 140, y: 11, anchor:'middle'}, // top
+        hct: {x: 150, y: 74, anchor:'end'},    // bottom
+        plt: {x: 195, y: 45, anchor:'start'}   // right
       };
   
       Object.entries(spots).forEach(([key, pos]) => {

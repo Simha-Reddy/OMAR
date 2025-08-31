@@ -833,7 +833,9 @@ import { on, openDocument, EVENTS } from './state.js';
     // Make sure we have some Ready notes; if none, trigger prefetch and wait for auto-refresh
     const readyIds = [];
     for(const r of allRows){
-      const id = r.doc_id; if(id && loadState.get(id) === 'Ready') readyIds.push(id);
+      const id = r.doc_id; if(!id) continue;
+      const st = loadState.get(id) || '';
+      if(st === 'Ready') readyIds.push(id);
     }
     if(!readyIds.length){
       if(status) status.textContent = 'Loading notes for keyword filter...';
@@ -1413,6 +1415,8 @@ import { on, openDocument, EVENTS } from './state.js';
       window._notesAskBusy = false;
     }
   }
+  // Expose globally so voice-ask can call directly
+  try { window.runNotesAsk = runNotesAsk; } catch(_e){}
 
   function init(){
     const container = document.getElementById('documentsTable');
@@ -2336,40 +2340,57 @@ import { on, openDocument, EVENTS } from './state.js';
 })();
 
 (function(){
-  // === Voice Ask (wake phrase + mic button) ===
+  // === Voice Ask (wake phrase + press-to-hold mic button) ===
   const VOICE_ASK = {
     timer: null,
     active: false,
     mode: null,               // 'wake' | 'manual'
     baselineLen: 0,
+    baselineText: '',
     lastWakePos: -1,
-    wakeConsumedUpTo: 0,      // NEW: do not re-arm on the same earlier wake phrase
+    wakeConsumedUpTo: 0,      // do not re-arm on the same earlier wake phrase
     startedRecording: false,
     armedAt: 0,
     cancelAfterMs: 15000,
     intervalIdle: 4000,       // when idle and not active
     intervalArmed: 600,       // when waiting for next sentence
-    intervalRecording: 2500   // when recording but not armed
+    intervalRecording: 2500,  // when recording but not armed
+    cancelTimer: null,
+    pointerActive: false
   };
-  const WAKE_REGEX = /(hey|hi|hello|ok|okay)\s*,?\s*omar\b/i;
+  const WAKE_REGEX = /(hey|hi|hello|ok|okay)\s*,?\s*omar\b\s*,?/i;
+  const ENABLE_WAKE_FOR_ASK = false; // Only capture while button is pressed
+  const CAPTURE_MAX_WAIT_MS = 6000;   // was 2000; allow more time for backend to flush
+  const CAPTURE_POLL_MS = 200;        // poll cadence while waiting to settle
+  const GRACE_AFTER_STOP_MS = 500;    // new: small delay after stop to let final chunk land
+  const ISOLATE_ASK_FROM_TRANSCRIPT = true; // if we started recording for this mic, trim the live transcript back after capture
 
   async function fetchScribeStatus(){
     try{
       const r = await fetch('/scribe/status', {cache:'no-store'});
-      if(!r.ok) return { is_recording:false, transcript:'' };
+      if(!r.ok) return { is_recording:false, transcript:'', pending_chunks: 0 };
       const j = await r.json();
-      return { is_recording: !!j.is_recording, transcript: String(j.transcript||'') };
-    }catch(_e){ return { is_recording:false, transcript:'' }; }
+      return { is_recording: !!j.is_recording, transcript: String(j.transcript||''), pending_chunks: Number(j.pending_chunks||0) };
+    }catch(_e){ return { is_recording:false, transcript:'', pending_chunks: 0 }; }
   }
   async function setRecording(on){ try{ await fetch(on? '/scribe/start_recording':'/scribe/stop_recording', { method:'POST' }); }catch(_e){} }
   function startAskGlow(){ try{ const el = document.getElementById('notesAskInput'); if(el) el.classList.add('glow-pulse'); }catch(_e){} }
   function stopAskGlow(){ try{ const el = document.getElementById('notesAskInput'); if(el) el.classList.remove('glow-pulse'); }catch(_e){} }
   function setVoiceStatus(msg){ try{ const s = document.getElementById('notesAskVoiceStatus'); if(s) s.textContent = msg || ''; }catch(_e){} }
+  function setHoldVisual(on){
+    try{
+      const mic = document.getElementById('notesAskMicBtn');
+      const container = mic ? mic.closest('.notes-ask-inline') : null;
+      if(container){ container.classList.toggle('hold-active', !!on); }
+    }catch(_e){}
+  }
 
   function submitAskText(text){
     const askEl = document.getElementById('notesAskInput');
     if(!askEl) return;
     askEl.value = String(text||'').trim();
+    // Clear any transient voice status (e.g., "Transcribing…") once the query appears
+    try{ const s = document.getElementById('notesAskVoiceStatus'); if(s) s.textContent = ''; }catch(_e){}
     if(typeof window.runNotesAsk === 'function') { try{ window.runNotesAsk(); return; }catch(_e){} }
     try{ const b=document.getElementById('notesAskBtn'); if(b){ b.click(); return; } }catch(__){}
   }
@@ -2378,15 +2399,35 @@ import { on, openDocument, EVENTS } from './state.js';
     const t = String(fromText||'');
     const s = Math.max(0, Number(startIdx||0));
     if(s >= t.length) return '';
-    const tail = t.slice(s);
-    const m = tail.match(/[^\n\.\?!]+(?:[\.\?!]|$)|[^\n]+\n/);
+    const CLEAN_PREFIX_RE = /^[\s,;:\-–—"'“”‘’\u200B\u200E\u200F\uFEFF]+/;
+    let tail = t.slice(s).replace(CLEAN_PREFIX_RE, '');
+    const m = tail.match(/[^\n\.?\!]+(?:[\.?\!]|$)|[^\n]+\n/);
     if(m && m.index != null){
       const seg = tail.slice(0, m.index + m[0].length);
-      return seg.replace(/\s+/g,' ').trim();
+      return seg.replace(CLEAN_PREFIX_RE, '').replace(/\s+/g,' ').trim();
     }
     const words = tail.trim().split(/\s+/);
     if(words.length >= 8) return words.slice(0, Math.min(words.length, 24)).join(' ');
     return '';
+  }
+
+  async function waitForFinalDelta(baseLen){
+    const t0 = Date.now();
+    let lastLen = -1;
+    let lastDelta = '';
+    while(Date.now() - t0 < CAPTURE_MAX_WAIT_MS){
+      const { transcript, pending_chunks } = await fetchScribeStatus();
+      const delta = String(transcript||'').slice(Math.max(0, baseLen)).trim();
+      const len = delta.length;
+      // If transcript stopped changing and there are no pending chunks, treat as final
+      if(len > 0 && len === lastLen && pending_chunks === 0){
+        return delta;
+      }
+      lastLen = len;
+      lastDelta = delta;
+      await new Promise(r=>setTimeout(r, CAPTURE_POLL_MS));
+    }
+    return lastDelta; // best effort
   }
 
   async function loop(){
@@ -2394,8 +2435,8 @@ import { on, openDocument, EVENTS } from './state.js';
     try{
       const { is_recording, transcript } = await fetchScribeStatus();
       if(is_recording) nextDelay = VOICE_ASK.intervalRecording;
-      // Only look for a new wake phrase after the last consumed position
-      if(is_recording && !VOICE_ASK.active){
+      // Look for wake phrase only when not manually active
+      if(ENABLE_WAKE_FOR_ASK && is_recording && !VOICE_ASK.active){
         const scanFrom = Math.max(0, VOICE_ASK.wakeConsumedUpTo || 0);
         const slice = transcript.slice(scanFrom);
         const relIdx = slice.search(WAKE_REGEX);
@@ -2403,44 +2444,41 @@ import { on, openDocument, EVENTS } from './state.js';
           const m = slice.match(WAKE_REGEX);
           const absIdx = scanFrom + relIdx;
           const endIdx = absIdx + (m && m[0] ? m[0].length : 0);
-          // Consume this wake phrase so we don't re-arm on it again
           VOICE_ASK.wakeConsumedUpTo = Math.max(VOICE_ASK.wakeConsumedUpTo || 0, endIdx);
-          // Arm for next sentence
           VOICE_ASK.active = true; VOICE_ASK.mode = 'wake';
           VOICE_ASK.lastWakePos = endIdx;
           VOICE_ASK.baselineLen = Math.max(endIdx, transcript.length);
           VOICE_ASK.armedAt = Date.now();
-          startAskGlow();
-          setVoiceStatus('Listening…');
-          // Immediate capture attempt to reduce lag
+          startAskGlow(); setHoldVisual(true); setVoiceStatus('Listening…');
           try{
             const immediate = extractNextSentence(transcript, endIdx);
             if(immediate && immediate.length >= 3){
               submitAskText(immediate);
-              stopAskGlow();
-              // Disarm immediately; wait for a brand new wake phrase next
+              stopAskGlow(); setHoldVisual(false);
               VOICE_ASK.active = false; VOICE_ASK.mode = null; VOICE_ASK.startedRecording = false; VOICE_ASK.lastWakePos = -1; VOICE_ASK.baselineLen = transcript.length; VOICE_ASK.armedAt = 0;
               setVoiceStatus('Sent');
             }
           }catch(_e){}
         }
       }
-      // If armed, poll faster and try to capture
       if(VOICE_ASK.active){
-        nextDelay = VOICE_ASK.intervalArmed;
-        const startAt = Math.max(VOICE_ASK.baselineLen, VOICE_ASK.lastWakePos>=0? VOICE_ASK.lastWakePos : 0);
-        const next = extractNextSentence(transcript, startAt);
-        if(next && next.length >= 3){
-          submitAskText(next);
-          stopAskGlow();
-          if(VOICE_ASK.mode === 'manual' && VOICE_ASK.startedRecording){ try{ await setRecording(false); }catch(_e){} }
-          // Disarm until a NEW wake phrase appears (wakeConsumedUpTo already advanced)
-          VOICE_ASK.active = false; VOICE_ASK.mode = null; VOICE_ASK.startedRecording = false; VOICE_ASK.lastWakePos = -1; VOICE_ASK.baselineLen = transcript.length; VOICE_ASK.armedAt = 0;
-          setVoiceStatus('Sent');
-        } else if(VOICE_ASK.armedAt && Date.now() - VOICE_ASK.armedAt > VOICE_ASK.cancelAfterMs){
-          // Timeout, disarm but keep wakeConsumedUpTo so we wait for a new wake
-          VOICE_ASK.active = false; VOICE_ASK.mode = null; VOICE_ASK.startedRecording = false; VOICE_ASK.lastWakePos = -1; VOICE_ASK.armedAt = 0;
-          stopAskGlow(); setVoiceStatus('Timed out');
+        // In manual (press-and-hold) mode, do not submit inside the loop; wait for release
+        if(VOICE_ASK.mode === 'wake'){
+          nextDelay = VOICE_ASK.intervalArmed;
+          const startAt = Math.max(VOICE_ASK.baselineLen, VOICE_ASK.lastWakePos>=0? VOICE_ASK.lastWakePos : 0);
+          const next = extractNextSentence(transcript, startAt);
+          if(next && next.length >= 3){
+            submitAskText(next);
+            stopAskGlow(); setHoldVisual(false);
+            VOICE_ASK.active = false; VOICE_ASK.mode = null; VOICE_ASK.startedRecording = false; VOICE_ASK.lastWakePos = -1; VOICE_ASK.baselineLen = transcript.length; VOICE_ASK.armedAt = 0;
+            setVoiceStatus('Sent');
+          } else if(VOICE_ASK.armedAt && Date.now() - VOICE_ASK.armedAt > VOICE_ASK.cancelAfterMs){
+            VOICE_ASK.active = false; VOICE_ASK.mode = null; VOICE_ASK.startedRecording = false; VOICE_ASK.lastWakePos = -1; VOICE_ASK.armedAt = 0;
+            stopAskGlow(); setHoldVisual(false); setVoiceStatus('Timed out');
+          }
+        } else {
+          // manual hold: keep a gentle glow; poll faster but no auto-submit
+          nextDelay = VOICE_ASK.intervalArmed;
         }
       }
     } finally {
@@ -2448,29 +2486,100 @@ import { on, openDocument, EVENTS } from './state.js';
     }
   }
 
-  async function onAskMicClick(ev){
-    ev && ev.preventDefault && ev.preventDefault();
-    // Toggle: if currently listening (glow on), stop listening
-    if(VOICE_ASK.active){
-      VOICE_ASK.active = false; VOICE_ASK.mode = null; VOICE_ASK.armedAt = 0; VOICE_ASK.lastWakePos = -1;
-      stopAskGlow(); setVoiceStatus('Stopped');
-      if(VOICE_ASK.startedRecording){ try{ await setRecording(false); }catch(_e){} }
-      VOICE_ASK.startedRecording = false;
-      return;
-    }
-    // Otherwise, arm manual capture
+  async function onAskMicPressStart(ev){
+    if(ev){ ev.preventDefault && ev.preventDefault(); ev.stopPropagation && ev.stopPropagation(); }
+    if(VOICE_ASK.active) return; // already listening
     VOICE_ASK.active = true; VOICE_ASK.mode = 'manual'; VOICE_ASK.lastWakePos = -1; VOICE_ASK.armedAt = Date.now();
+    // Start auto-cancel in case pointerup is missed
+    try{ if(VOICE_ASK.cancelTimer) clearTimeout(VOICE_ASK.cancelTimer); }catch(_e){}
+    VOICE_ASK.cancelTimer = setTimeout(()=>{ try{ onAskMicPressEnd(); }catch(_e){} }, Math.max(3000, Number(VOICE_ASK.cancelAfterMs)||15000));
+
     const { is_recording, transcript } = await fetchScribeStatus();
-    VOICE_ASK.baselineLen = (transcript||'').length;
-    if(!is_recording){ try{ await setRecording(true); VOICE_ASK.startedRecording = true; }catch(_e){} }
-    startAskGlow(); setVoiceStatus('Listening…');
+    // Harden baseline: clamp to current transcript length (avoid out-of-range if server trimmed)
+    const curLen = String(transcript||'').length;
+    VOICE_ASK.baselineLen = curLen;
+    VOICE_ASK.baselineText = String(transcript||'');
+
+    if(!is_recording){ try{ await setRecording(true); VOICE_ASK.startedRecording = true; }catch(_e){ VOICE_ASK.startedRecording = false; } }
+    else { VOICE_ASK.startedRecording = false; }
+
+    startAskGlow(); setHoldVisual(true); setVoiceStatus('Listening…');
     if(!VOICE_ASK.timer){ loop(); }
   }
 
+  async function onAskMicPressEnd(ev){
+    if(ev){ ev.preventDefault && ev.preventDefault(); }
+    try{ if(VOICE_ASK.cancelTimer){ clearTimeout(VOICE_ASK.cancelTimer); VOICE_ASK.cancelTimer = null; } }catch(_e){}
+    if(!VOICE_ASK.active && !VOICE_ASK.startedRecording){ setHoldVisual(false); stopAskGlow(); setVoiceStatus(''); return; }
+
+    // UI feedback on release: keep visual off, but show that we're finalizing audio
+    stopAskGlow(); setHoldVisual(false); setVoiceStatus('Transcribing…');
+
+    // Stop recording only if we started it
+    if(VOICE_ASK.startedRecording){ try{ await setRecording(false); }catch(_e){} }
+
+    // Post-stop grace: let backend flush final chunk
+    try{ await new Promise(r=>setTimeout(r, GRACE_AFTER_STOP_MS)); }catch(_e){}
+
+    // Clamp baseline to current transcript length in case server trimmed text
+    try{ const st = await fetchScribeStatus(); VOICE_ASK.baselineLen = Math.min(Math.max(0, VOICE_ASK.baselineLen||0), String(st.transcript||'').length); }catch(_e){}
+
+    // Wait briefly for any trailing transcription to land, then capture
+    let captured = '';
+    try{
+      captured = await waitForFinalDelta(Math.max(0, VOICE_ASK.baselineLen||0));
+      if(captured){
+        // Prefer the first sentence; fallback to full captured
+        captured = extractNextSentence(captured, 0) || captured;
+      }
+    }catch(_e){}
+
+    // Optionally trim global transcript back to what it was before our press
+    try{
+      if(ISOLATE_ASK_FROM_TRANSCRIPT && VOICE_ASK.startedRecording && typeof VOICE_ASK.baselineText === 'string'){
+        await fetch('/scribe/set_live_transcript', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ text: VOICE_ASK.baselineText }) });
+      }
+    }catch(_e){}
+
+    // Reset flags
+    VOICE_ASK.active = false; VOICE_ASK.mode = null; VOICE_ASK.armedAt = 0; VOICE_ASK.lastWakePos = -1;
+    VOICE_ASK.startedRecording = false;
+
+    // Submit after stabilization
+    if(captured && captured.length >= 3){ submitAskText(captured); }
+  }
+
   function install(){
-    try{ const mic = document.getElementById('notesAskMicBtn'); if(mic && !mic._voiceAskBound){ mic.addEventListener('click', onAskMicClick); mic._voiceAskBound = true; } }catch(_e){}
+    try{
+      const mic = document.getElementById('notesAskMicBtn');
+      if(mic && !mic._voiceAskBound){
+        mic._voiceAskBound = true;
+        // Pointer-based binding (covers mouse, pen, touch)
+        mic.addEventListener('pointerdown', (e)=>{
+          try{ mic.setPointerCapture && mic.setPointerCapture(e.pointerId); }catch(_e){}
+          VOICE_ASK.pointerActive = true;
+          onAskMicPressStart(e);
+        });
+        const end = (e)=>{
+          if(!VOICE_ASK.pointerActive) return;
+          VOICE_ASK.pointerActive = false;
+          onAskMicPressEnd(e);
+        };
+        mic.addEventListener('pointerup', end);
+        mic.addEventListener('pointercancel', end);
+        mic.addEventListener('lostpointercapture', end);
+        // Keyboard fallback (Space/Enter)
+        mic.tabIndex = mic.tabIndex || 0;
+        mic.addEventListener('keydown', (e)=>{
+          if(e.code === 'Space' || e.code === 'Enter'){ e.preventDefault(); if(!VOICE_ASK.active){ onAskMicPressStart(e); } }
+        });
+        mic.addEventListener('keyup', (e)=>{
+          if(e.code === 'Space' || e.code === 'Enter'){ e.preventDefault(); if(VOICE_ASK.active){ onAskMicPressEnd(e); } }
+        });
+      }
+    }catch(_e){}
     if(!VOICE_ASK.timer){ loop(); }
-    try{ window.addEventListener('beforeunload', ()=>{ if(VOICE_ASK.timer) clearTimeout(VOICE_ASK.timer); VOICE_ASK.timer = null; }, {once:true}); }catch(_e){}
+    try{ window.addEventListener('beforeunload', ()=>{ try{ if(VOICE_ASK.cancelTimer) clearTimeout(VOICE_ASK.cancelTimer); }catch(_e){} }, {once:true}); }catch(_e){}
   }
 
   try{ if(document.readyState === 'loading'){ document.addEventListener('DOMContentLoaded', install, {once:true}); } else { install(); } }catch(_e){ install(); }

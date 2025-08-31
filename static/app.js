@@ -291,12 +291,12 @@ async function exitApp() {
             }
         } catch (e) { console.warn('IndexedDB clear warning:', e); }
 
-        // Navigate to home
-        window.location.replace('http://127.0.0.1:5000/');
+        // Navigate to Exit page
+        window.location.replace('/exit_page');
     } catch (err) {
         console.error('Exit error:', err);
-        // As a fallback, still try to navigate home
-        window.location.replace('http://127.0.0.1:5000/');
+        // Fallback: navigate to Exit page
+        window.location.replace('/exit_page');
     }
 }
 

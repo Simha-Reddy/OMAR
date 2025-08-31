@@ -44,7 +44,7 @@ def init_vista(app):
     logger = VistaRPCLogger()
     # Only attempt to connect if all required values are present
     if not (host and port and access and verify and context):
-        print('[INFO] VistA connection info not fully set in environment; login required on landing page.')
+        # print('[INFO] VistA connection info not fully set in environment; login required on landing page.')
         app.config['VISTA_CLIENT'] = None
         return
     try:

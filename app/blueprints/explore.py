@@ -395,9 +395,9 @@ def notes_qa():
         tl_l = tl.lower()
         if not tl_l:
             return None
-        # trigger if "show me" appears within first 20 chars
+        # trigger if "show me" appears within first 40 chars
         mstart = tl_l.find('show me')
-        if mstart < 0 or mstart > 20:
+        if mstart < 0 or mstart > 40:
             return None
 
         # --- common helpers ---

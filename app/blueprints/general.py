@@ -368,6 +368,11 @@ def dotphrase_commands():
     except Exception as e:
         return jsonify({'commands': [], 'error': str(e)}), 500
 
+@bp.route('/exit_page', methods=['GET'])
+def serve_exit_page():
+    # Lightweight route to render the exit page after client calls /exit
+    return render_template('exit.html')
+
 # --- New: Exit route to fully clear session/patient state and stop recording ---
 @bp.route('/exit', methods=['POST'])
 def exit_app():

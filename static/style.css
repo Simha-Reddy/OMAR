@@ -909,11 +909,12 @@ button.loading::after {
   min-width: 260px;
 }
 .notes-ask-inline .btn-mic {
-  padding: 8px 10px;
+  padding: 0;               /* tighter around the icon */
   border-radius: 6px;
-  border: 1px solid var(--paper-border);
-  background: #fff;
+  border: none;             /* remove border around Hey OMAR icon */
+  background: transparent;  /* no background */
 }
+.notes-ask-inline .btn-mic:hover { background: transparent; }
 #notesAskVoiceStatus { color: #555; font-style: italic; }
 
 /* Notes QA answer box: tan background, wider, sans-serif */
@@ -1204,7 +1205,7 @@ table tbody tr:nth-child(even) {
   cursor: pointer;
   font-size: 12px;
 }
-.doc-tabs .tab-chev:hover { background: #f2f6ff; border-color: #cfe3ff; }
+.doc-tabs .tab-chev:hover { background: #f2fff5; border-color: #cfe3ff; }
 .doc-tabs .tab-chev:disabled { opacity: 0.5; cursor: not-allowed; }
 .doc-tabs .tab-label {
   border: none;
@@ -1804,3 +1805,25 @@ select {
 .qa-cite-popover.qa-cite-popover--show {
   opacity: 1; transform: translateY(0);
 }
+
+/* Hey OMAR mic button styles */
+.btn-mic {
+  background: transparent !important;
+  border: none !important;  /* ensure no border from global button styles */
+  padding: 0;
+  margin-left: 6px;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+.btn-mic .hey-omar-img {
+  height: 40px; /* larger icon */
+  width: auto;
+  display: block;
+}
+.btn-mic:hover .hey-omar-img { filter: drop-shadow(0 1px 1.5px rgba(0,0,0,0.25)); }
+.btn-mic:active .hey-omar-img { transform: translateY(1px); filter: drop-shadow(0 0 0 rgba(0,0,0,0)) brightness(0.95); }
+
+/* While pressed, keep current gentle blue glow on the text input */
+.notes-ask-inline.hold-active #notesAskInput { box-shadow: 0 0 0 3px rgba(37,99,235,0.25), 0 0 0 6px rgba(37,99,235,0.12); }

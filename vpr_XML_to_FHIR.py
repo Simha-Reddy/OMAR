@@ -111,7 +111,7 @@ def get_labs_as_observations(vpr_text):
         high = get_value(root, 'high')
         low = get_value(root, 'low')
         # Debug: print extracted values
-        print(f"Extracted LAB: loinc={loinc}, result={result}, units={units}, test={test}, status={status}, provider={provider}, facility={facility}, specimen={specimen}, collected={collected}, resulted={resulted}, interpretation={interpretation}, high={high}, low={low}")
+        # print(f"Extracted LAB: loinc={loinc}, result={result}, units={units}, test={test}, status={status}, provider={provider}, facility={facility}, specimen={specimen}, collected={collected}, resulted={resulted}, interpretation={interpretation}, high={high}, low={low}")
         # Build FHIR Observation resource
         observation = {
             "resourceType": "Observation",
@@ -391,7 +391,7 @@ def get_documents_as_fhir(vpr_text):
                     author = cl.attrib.get('name')
                     break
         # Debug print
-        print(f"Extracted DOCUMENT: id={doc_id}, title={title}, author={author}, date={date}")
+        # print(f"Extracted DOCUMENT: id={doc_id}, title={title}, author={author}, date={date}")
         doc_ref = {
             "resourceType": "DocumentReference",
             "status": "current",
@@ -437,7 +437,7 @@ def get_radiology_procedures_as_fhir(vpr_text):
         imaging_type = root.find('imagingType').attrib.get('name') if root.find('imagingType') is not None else ''
         urgency = get_value(root, 'urgency')
         # Debug print
-        print(f"Extracted RADIOLOGY PROCEDURE: id={proc_id}, case={case}, dateTime={dateTime}, status={status}, name={name}, type_name={type_name}, type_code={type_code}, provider={provider}, facility={facility}, location={location}, imaging_type={imaging_type}, urgency={urgency}")
+        # print(f"Extracted RADIOLOGY PROCEDURE: id={proc_id}, case={case}, dateTime={dateTime}, status={status}, name={name}, type_name={type_name}, type_code={type_code}, provider={provider}, facility={facility}, location={location}, imaging_type={imaging_type}, urgency={urgency}")
         proc = {
             "resourceType": "Procedure",
             "status": status.lower() if status else "unknown",
@@ -756,7 +756,7 @@ def get_immunizations_as_fhir(vpr_text):
                     "language": sheet.attrib.get('language', '')
                 })
         # Debug print
-        print(f"Extracted IMMUNIZATION: vaccine_name={vaccine_name}, administered={administered}, lot={lot}, manufacturer={manufacturer}, dose={dose}, units={units}, expiration={expiration}, facility={facility}, provider={provider}, route={route}, body_site={body_site}, cpt={cpt}, cvx={cvx}, series={series}, vis_sheets={vis_sheets}")
+        # print(f"Extracted IMMUNIZATION: vaccine_name={vaccine_name}, administered={administered}, lot={lot}, manufacturer={manufacturer}, dose={dose}, units={units}, expiration={expiration}, facility={facility}, provider={provider}, route={route}, body_site={body_site}, cpt={cpt}, cvx={cvx}, series={series}, vis_sheets={vis_sheets}")
         imm = {
             "resourceType": "Immunization",
             "status": "completed",
@@ -854,7 +854,7 @@ def get_encounters_as_fhir(vpr_text):
             if cpt is not None:
                 service_type = cpt.attrib.get('name', '')
         # Debug print
-        print(f"Extracted VISIT: id={enc_id}, date={date}, type={type_name}, facility={facility}, location={location}, patient_class={patient_class}, service_category={service_category}, stop_code={stop_code}, credit_stop_code={credit_stop_code}, reason={reason}, participants={participants}, diagnosis={diagnosis}, service_type={service_type}")
+        # print(f"Extracted VISIT: id={enc_id}, date={date}, type={type_name}, facility={facility}, location={location}, patient_class={patient_class}, service_category={service_category}, stop_code={stop_code}, credit_stop_code={credit_stop_code}, reason={reason}, participants={participants}, diagnosis={diagnosis}, service_type={service_type}")
         enc = {
             "resourceType": "Encounter",
             "identifier": [{"value": enc_id}] if enc_id else None,
@@ -908,7 +908,7 @@ def get_surgeries_as_fhir(vpr_text):
         location = root.find('location').attrib.get('name') if root.find('location') is not None else ''
         urgency = get_value(root, 'urgency')
         # Debug print
-        print(f"Extracted SURGERY/PROCEDURE: id={proc_id}, dateTime={dateTime}, status={status}, name={name}, type_name={type_name}, type_code={type_code}, provider={provider}, facility={facility}, location={location}, urgency={urgency}")
+        # print(f"Extracted SURGERY/PROCEDURE: id={proc_id}, dateTime={dateTime}, status={status}, name={name}, type_name={type_name}, type_code={type_code}, provider={provider}, facility={facility}, location={location}, urgency={urgency}")
         proc = {
             "resourceType": "Procedure",
             "status": status.lower() if status else "unknown",
@@ -1025,7 +1025,7 @@ def get_primary_care_provider_and_team_as_fhir(vpr_text):
             address_attrs = dict(re.findall(r'(\w+)=[\'\"]([^\'\"]+)[\'\"]', address_match.group(1)))
             address = ', '.join([address_attrs.get('streetLine1', ''), address_attrs.get('city', ''), address_attrs.get('stateProvince', ''), address_attrs.get('postalCode', '')]).strip(', ')
         # Debug print
-        print(f"Extracted PCP: code={code}, name={name}, email={email}, phone={phone}, taxonomy={taxonomy}, provider_type={provider_type}, classification={classification}, service={service}, address={address}")
+        # print(f"Extracted PCP: code={code}, name={name}, email={email}, phone={phone}, taxonomy={taxonomy}, provider_type={provider_type}, classification={classification}, service={service}, address={address}")
         practitioner = {
             "resourceType": "Practitioner",
             "identifier": [{"value": code}] if code else None,
@@ -1048,7 +1048,7 @@ def get_primary_care_provider_and_team_as_fhir(vpr_text):
         team_id = team_attrs.get('code', '')
         team_name = team_attrs.get('name', '')
         # Debug print
-        print(f"Extracted PCTEAM: code={team_id}, name={team_name}")
+        # print(f"Extracted PCTEAM: code={team_id}, name={team_name}")
         careteam = {
             "resourceType": "CareTeam",
             "identifier": [{"value": team_id}] if team_id else None,
