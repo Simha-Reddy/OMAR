@@ -50,6 +50,10 @@ def _apply_demo_masking(text):
 def explore_home():
     return render_template('explore.html', safe_modules_enabled=current_app.config.get('SAFE_MODULES_ENABLED', False))
 
+@bp.route('/m')
+def explore_mobile():
+    return render_template('explore_mobile.html', safe_modules_enabled=current_app.config.get('SAFE_MODULES_ENABLED', False))
+
 @bp.route('/process_chart_chunk', methods=['POST'])
 def process_chart_chunk():
     data = request.get_json()

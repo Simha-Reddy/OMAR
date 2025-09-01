@@ -1461,25 +1461,26 @@ import { on, openDocument, EVENTS } from './state.js';
           rowClick: onRowClick,
           rowDblClick: onRowClick,
           index: 'doc_id', // ensure stable lookup by id for nav
-          // Added: persistence of columns/sort (disable filter persistence to avoid stale filters)
-          persistenceID: 'docsTable_v2_kw',
+          // Use a different persistence key on mobile so desktop layout does not override
+          persistenceID: (document.getElementById('mobileContent') ? 'docsTable_m_v1' : 'docsTable_v2_kw'),
           persistence: { columns: true, sort: true, filter: false },
           // Added: nicer UX defaults
           placeholder: 'No documents found.',
           tooltips: true,
           rowHeight: 34,
-          columns: [
-            { title: 'Indexed', field: 'indexed', width: 70, headerSort: false, hozAlign: 'center', formatter: function(cell){
-                const v = cell.getValue();
-                if(v === 'Indexed') return '<span class="idx-icon idx-ok" title="Indexed">✅</span>';
-                if(v === 'Indexing') return '<span class="idx-icon idx-progress" title="Indexing">⏳</span>';
-                if(v === 'Queued') return '<span class="idx-icon idx-queued" title="Queued">…</span>';
-                if(v === 'Error') return '<span class="idx-icon idx-err" title="Error">⚠️</span>';
-                return '';
-              }
-            },
-            // Restored Date column (second column)
-            {
+          // Columns are conditional: on mobile show only Keyword, Date, Title in that order
+          columns: (function(){
+            const isMobileExplore = !!document.getElementById('mobileContent');
+            // Reuse existing column definitions with minimal duplication
+            const colIndexed = { title: 'Indexed', field: 'indexed', width: 70, headerSort: false, hozAlign: 'center', formatter: function(cell){
+              const v = cell.getValue();
+              if(v === 'Indexed') return '<span class="idx-icon idx-ok" title="Indexed">✅</span>';
+              if(v === 'Indexing') return '<span class="idx-icon idx-progress" title="Indexing">⏳</span>';
+              if(v === 'Queued') return '<span class="idx-icon idx-queued" title="Queued">…</span>';
+              if(v === 'Error') return '<span class="idx-icon idx-err" title="Error">⚠️</span>';
+              return '';
+            }};
+            const colDate = {
               title: 'Date',
               field: 'date',
               sorter: (a,b,rowA,rowB)=>{
@@ -1556,11 +1557,12 @@ import { on, openDocument, EVENTS } from './state.js';
                 // Fallback substring on ISO
                 return String(v).toLowerCase().includes(q.toLowerCase());
               }
-            },
-            { title: 'Title', field: 'title', sorter: 'string', headerFilter: 'input' },
-            { title: 'Author', field: 'author', sorter: 'string', headerFilter: 'input', width: 180 },
-            { title: 'Encounter', field: 'encounter', sorter: 'string', headerFilter: 'input' },
-            { title:'Keywords', field:'kwHits', sorter:'number', width:110, hozAlign:'right',
+            };
+            const colTitle = { title: 'Title', field: 'title', sorter: 'string', headerFilter: 'input' };
+            const colAuthor = { title: 'Author', field: 'author', sorter: 'string', headerFilter: 'input', width: 180 };
+            const colEncounter = { title: 'Encounter', field: 'encounter', sorter: 'string', headerFilter: 'input' };
+            const colKw = {
+              title: isMobileExplore ? 'Keyword' : 'Keywords', field:'kwHits', sorter:'number', width:110, hozAlign:'right',
               formatter:(cell)=>{ const v=cell.getValue(); return (v==null||Number.isNaN(Number(v)))?'':String(Math.round(Number(v))); },
               headerFilter:'input', headerTooltip:'Type keywords: e.g., pneumonia "heart failure"',
               headerFilterLiveFilter: true,
@@ -1573,8 +1575,9 @@ import { on, openDocument, EVENTS } from './state.js';
                 if(Number.isNaN(n)) return true; // unknown
                 return n > 0;
               }
-            }
-          ],
+            };
+            return isMobileExplore ? [ colKw, colDate, colTitle ] : [ colIndexed, colDate, colTitle, colAuthor, colEncounter, colKw ];
+          })(),
           initialSort: [ {column: 'date', dir: 'desc'} ]
         });
         console.log('[Documents] Tabulator initialized');
@@ -2374,8 +2377,14 @@ import { on, openDocument, EVENTS } from './state.js';
     }catch(_e){ return { is_recording:false, transcript:'', pending_chunks: 0 }; }
   }
   async function setRecording(on){ try{ await fetch(on? '/scribe/start_recording':'/scribe/stop_recording', { method:'POST' }); }catch(_e){} }
-  function startAskGlow(){ try{ const el = document.getElementById('notesAskInput'); if(el) el.classList.add('glow-pulse'); }catch(_e){} }
-  function stopAskGlow(){ try{ const el = document.getElementById('notesAskInput'); if(el) el.classList.remove('glow-pulse'); }catch(_e){} }
+  function startAskGlow(){
+    try{ const el = document.getElementById('notesAskInput'); if(el) el.classList.add('glow-pulse'); }catch(_e){}
+    try{ const mic = document.getElementById('notesAskMicBtn'); if(mic){ mic.classList.add('mic-active'); mic.style.setProperty('--ask-glow','24px'); } }catch(_e){}
+  }
+  function stopAskGlow(){
+    try{ const el = document.getElementById('notesAskInput'); if(el) el.classList.remove('glow-pulse'); }catch(_e){}
+    try{ const mic = document.getElementById('notesAskMicBtn'); if(mic){ mic.classList.remove('mic-active'); mic.style.removeProperty('--ask-glow'); } }catch(_e){}
+  }
   function setVoiceStatus(msg){ try{ const s = document.getElementById('notesAskVoiceStatus'); if(s) s.textContent = msg || ''; }catch(_e){} }
   function setHoldVisual(on){
     try{

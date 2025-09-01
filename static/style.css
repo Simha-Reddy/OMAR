@@ -91,6 +91,28 @@ body .container {
     box-sizing: border-box;
 }
 
+/* Mobile top bar: search icon sizing */
+.global-top-bar .mobile-search-btn {
+  background: transparent !important;
+  border: none !important;
+  padding: 0 !important;
+  margin: 0 4px 0 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  height: 40px;  /* approximate bar control height */
+  width: 40px;
+  line-height: 1;
+}
+.global-top-bar .mobile-search-btn .search-icon {
+  display: block;
+  height: 100%;   /* fill the button height */
+  width: auto;    /* preserve aspect ratio */
+}
+@media (max-width: 900px) {
+  .global-top-bar .mobile-search-btn { height: 36px; width: 36px; }
+}
+
 /* Centered patient area in the global top bar */
 .global-center {
   position: absolute; /* center independent of left/right widths */
@@ -903,10 +925,12 @@ button.loading::after {
   align-items: center;
   gap: 8px;
   flex-wrap: nowrap;
+  max-width: 100%;
 }
 .notes-ask-inline input#notesAskInput {
   flex: 1 1 520px;
   min-width: 260px;
+  max-width: 100%;
 }
 .notes-ask-inline .btn-mic {
   padding: 0;               /* tighter around the icon */
@@ -916,6 +940,20 @@ button.loading::after {
 }
 .notes-ask-inline .btn-mic:hover { background: transparent; }
 #notesAskVoiceStatus { color: #555; font-style: italic; }
+
+/* Mobile: wrap controls and shrink sizes to avoid horizontal overflow */
+@media (max-width: 600px) {
+  .notes-ask-inline { flex-wrap: wrap; }
+  .notes-ask-inline input#notesAskInput { flex: 1 1 100%; min-width: 0; width: 100%; }
+  .notes-ask-inline .btn-mic .hey-omar-img { height: 32px; }
+  .docs-controls #notesAskBtn,
+  .docs-controls #notesSummaryBtn {
+    padding: 6px 10px;
+    font-size: 0.92em;
+  }
+  /* Ensure status wraps beneath when needed */
+  #notesAskVoiceStatus { flex: 1 1 100%; }
+}
 
 /* Notes QA answer box: tan background, wider, sans-serif */
 #notesAnswerBox {
@@ -1540,7 +1578,62 @@ select {
         background: none;
         text-decoration: underline;
     }
+    /* Mobile: make documents table + note viewer taller */
+    #documentsTableWrap { height: clamp(480px, 70vh, 88vh) !important; }
 }
+
+/* === Mobile Explore: two circular buttons under top bar === */
+.mobile-row-buttons {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 12px;
+  padding: 20px;
+  align-items: center;
+}
+.mobile-row-buttons .circle-btn {
+  background: transparent !important;
+  border: none !important;
+  padding: 0;
+  width: 100%;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  aspect-ratio: 1 / 1; /* equal square hit areas */
+}
+.mobile-row-buttons .circle-btn img {
+  display: block;
+  width: 90%;
+  height: 90%;
+  object-fit: contain;
+}
+/* Scale Hey OMAR artwork to 80% within its square */
+.mobile-row-buttons .btn-mic .hey-omar-img { width: 75% !important; height: 75% !important; }
+/* Ensure the record image button has no border/background and can receive glow */
+.image-record-btn { background: transparent !important; border: none !important; }
+.image-record-btn:focus-visible { outline: 2px solid #aeeaff; border-radius: 999px; }
+
+/* Overlay glow ABOVE the stop image when recording */
+.mobile-row-buttons .image-record-btn { position: relative; }
+.mobile-row-buttons .image-record-btn img { position: relative; z-index: 1; }
+.image-record-btn::after {
+  content: "";
+  position: absolute;
+  inset: 10%;                 /* roughly match the 90% img sizing */
+  border-radius: 50%;
+  pointer-events: none;
+  z-index: 2;                /* above the image */
+  opacity: 0;                /* enabled only while recording */
+  /* Use CSS variable from JS to control intensity */
+  box-shadow:
+    0 0 var(--record-glow, 0px) rgba(239, 68, 68, 0.85),
+    0 0 calc(var(--record-glow, 0px) * 2.4) rgba(239, 68, 68, 0.45),
+    inset 0 0 calc(var(--record-glow, 0px) * 0.6) rgba(239, 68, 68, 0.35);
+  transition: opacity 120ms ease;
+}
+.image-record-btn.recording::after { opacity: 1; }
+
+/* On very small screens, tighten gap */
+@media (max-width: 420px){ .mobile-row-buttons { gap: 8px; padding: 6px 8px; } }
 
 @media (max-width: 800px) {
 
@@ -1816,14 +1909,130 @@ select {
   display: inline-flex;
   align-items: center;
   justify-content: center;
+  position: relative; /* allow overlay */
 }
 .btn-mic .hey-omar-img {
   height: 40px; /* larger icon */
   width: auto;
   display: block;
+  position: relative;
+  z-index: 1; /* under overlay */
 }
 .btn-mic:hover .hey-omar-img { filter: drop-shadow(0 1px 1.5px rgba(0,0,0,0.25)); }
 .btn-mic:active .hey-omar-img { transform: translateY(1px); filter: drop-shadow(0 0 0 rgba(0,0,0,0)) brightness(0.95); }
 
+/* Pulsating blue glow overlay for Hey OMAR button (same inset and radius as record) */
+.btn-mic::after {
+  content: "";
+  position: absolute;
+  inset: 10%;                 /* match record overlay sizing */
+  border-radius: 50%;
+  pointer-events: none;
+  z-index: 2;                /* above the image */
+  opacity: 0;                /* show only when active */
+  box-shadow:
+    0 0 var(--ask-glow, 24px) rgba(37, 99, 235, 0.45),
+    0 0 calc(var(--ask-glow, 24px) * 1.6) rgba(37, 99, 235, 0.25),
+    inset 0 0 calc(var(--ask-glow, 24px) * 0.4) rgba(37, 99, 235, 0.18);
+  transition: opacity 120ms ease;
+}
+.btn-mic.mic-active::after {
+  opacity: 1;
+  animation: askMicGlow 1.6s ease-in-out infinite;
+}
+@keyframes askMicGlow {
+  0%, 100% {
+    box-shadow:
+      0 0 var(--ask-glow, 24px) rgba(37, 99, 235, 0.50),
+      0 0 calc(var(--ask-glow, 24px) * 1.6) rgba(37, 99, 235, 0.30),
+      inset 0 0 calc(var(--ask-glow, 24px) * 0.4) rgba(37, 99, 235, 0.22);
+  }
+  50% {
+    box-shadow:
+      0 0 calc(var(--ask-glow, 24px) * 1.3) rgba(37, 99, 235, 0.66),
+      0 0 calc(var(--ask-glow, 24px) * 2.0) rgba(37, 99, 235, 0.38),
+      inset 0 0 calc(var(--ask-glow, 24px) * 0.6) rgba(37, 99, 235, 0.26);
+  }
+}
+
 /* While pressed, keep current gentle blue glow on the text input */
 .notes-ask-inline.hold-active #notesAskInput { box-shadow: 0 0 0 3px rgba(37,99,235,0.25), 0 0 0 6px rgba(37,99,235,0.12); }
+
+/* === Hey OMAR mic active pulsating glow (match record inset/radius) === */
+#notesAskMicBtn { position: relative; }
+#notesAskMicBtn img { position: relative; z-index: 1; }
+#notesAskMicBtn::after {
+  content: "";
+  position: absolute;
+  inset: 10%;                /* same inset as record overlay */
+  border-radius: 50%;        /* circular glow like record */
+  pointer-events: none;
+  z-index: 2;                /* above image */
+  opacity: 0;                /* only visible when active */
+  box-shadow:
+    0 0 var(--ask-glow, 0px) rgba(52, 152, 219, 0.85),
+    0 0 calc(var(--ask-glow, 0px) * 2.4) rgba(52, 152, 219, 0.45),
+    inset 0 0 calc(var(--ask-glow, 0px) * 0.6) rgba(52, 152, 219, 0.35);
+  transition: opacity 120ms ease;
+}
+#notesAskMicBtn.mic-active::after {
+  opacity: 1;
+  animation: askMicPulse 1.6s ease-in-out infinite;
+}
+@keyframes askMicPulse {
+  0% {
+    box-shadow:
+      0 0 0px rgba(52, 152, 219, 0.0),
+      0 0 0px rgba(52, 152, 219, 0.0),
+      inset 0 0 0px rgba(52, 152, 219, 0.0);
+  }
+  50% {
+    box-shadow:
+      0 0 var(--ask-glow, 24px) rgba(52, 152, 219, 0.85),
+      0 0 calc(var(--ask-glow, 24px) * 2.4) rgba(52, 152, 219, 0.45),
+      inset 0 0 calc(var(--ask-glow, 24px) * 0.6) rgba(52, 152, 219, 0.35);
+  }
+  100% {
+    box-shadow:
+      0 0 0px rgba(52, 152, 219, 0.0),
+      0 0 0px rgba(52, 152, 219, 0.0),
+      inset 0 0 0px rgba(52, 152, 219, 0.0);
+  }
+}
+
+/* === Mobile segmented wheel picker + swipe views === */
+#mobilePicker { margin: 8px 10px 0 10px; }
+.segmented-scroll {
+  display: flex;
+  gap: 8px;
+  overflow-x: auto;
+  -webkit-overflow-scrolling: touch;
+  scrollbar-width: none; /* Firefox */
+  padding: 6px 2px 6px 2px;
+}
+.segmented-scroll::-webkit-scrollbar { display: none; } /* WebKit */
+.seg-btn {
+  flex: 0 0 auto;
+  padding: 8px 14px;
+  border-radius: 999px;
+  border: 1px solid var(--paper-border);
+  background: var(--paper-panel);
+  color: var(--paper-contrast);
+  font-weight: 600;
+  cursor: pointer;
+  box-shadow: 0 1px 2px rgba(0,0,0,0.06);
+}
+.seg-btn:hover { background: color-mix(in srgb, var(--brand-blue) 6%, var(--paper-panel)); }
+.seg-btn.active {
+  background: var(--brand-blue);
+  color: #fff;
+  border-color: var(--brand-blue-dark);
+}
+
+/* Views container */
+#mobileContent { margin: 6px 8px 10px 8px; }
+.mobile-views-wrap { position: relative; overflow: hidden; border: 1px solid var(--paper-border); border-radius: 10px; background: var(--paper-panel); }
+.mobile-views-track { display: flex; width: 100%; transform: translateX(0%); transition: transform 260ms ease; }
+.mobile-view { flex: 0 0 100%; width: 100%; padding: 14px 16px; min-height: 36vh; box-sizing: border-box; }
+.mobile-view-title { margin: 0 0 6px 0; font-size: 1.1em; color: var(--brand-blue); }
+.mobile-view-desc { margin: 0; color: var(--paper-contrast); opacity: 0.9; }

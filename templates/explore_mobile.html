@@ -1,0 +1,91 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Explore (Mobile)</title>
+  <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}" />
+  <!-- Tabulator CSS for documents table (match desktop) -->
+  <link href="https://unpkg.com/tabulator-tables@6.3.0/dist/css/tabulator.min.css" rel="stylesheet">
+</head>
+<body class="page-explore mobile" data-safe-modules-enabled="{{ 'true' if safe_modules_enabled else 'false' }}">
+  <div id="mobileShell" class="mobile-shell" data-patient-id="{{ patient_id or '' }}">
+    <header id="mobileTopBar"></header>
+    <section id="mobileRowButtons" class="mobile-row-buttons">
+      <button id="recordBtn"
+              class="circle-btn image-record-btn"
+              title="Record"
+              aria-label="Record"
+              data-visual="image"
+              data-start-src="/static/images/start_Recording_circle_button.png"
+              data-stop-src="/static/images/stop_Recording_circle_button.png">
+        <img id="recordBtnImg" src="/static/images/start_Recording_circle_button.png" alt="Start Recording" />
+      </button>
+      <button id="notesAskMicBtn" class="circle-btn btn-mic" title="Hold to speak" aria-label="Hold to speak">
+        <img src="/static/images/hey_OMAR_button.png" alt="Hey OMAR" class="hey-omar-img">
+      </button>
+    </section>
+    <span id="notesAskVoiceStatus" class="voice-status" aria-live="polite"></span>
+    <nav id="mobilePicker">
+      <div class="segmented-scroll" role="tablist" aria-label="Mobile sections">
+        <button class="seg-btn active" role="tab" aria-selected="true" title="Snapshot">Snapshot</button>
+        <button class="seg-btn" role="tab" aria-selected="false" title="Hey, Omar">Hey, Omar</button>
+        <button class="seg-btn" role="tab" aria-selected="false" title="Documents">Documents</button>
+        <button class="seg-btn" role="tab" aria-selected="false" title="Labs">Labs</button>
+        <button class="seg-btn" role="tab" aria-selected="false" title="Meds">Meds</button>
+      </div>
+    </nav>
+    <main id="mobileContent">
+      <div class="mobile-views-wrap">
+        <div class="mobile-views-track" style="transform: translateX(0%);">
+          <section class="mobile-view" data-key="snapshot">
+            <h2 class="mobile-view-title">Snapshot</h2>
+            <p class="mobile-view-desc">This is the Snapshot view.</p>
+          </section>
+          <section class="mobile-view" data-key="hey">
+            <h2 class="mobile-view-title">Hey, Omar</h2>
+            <p class="mobile-view-desc">This is the Hey, Omar view.</p>
+          </section>
+          <section class="mobile-view" data-key="documents">
+            <h2 class="mobile-view-title">Documents</h2>
+            <p class="mobile-view-desc">This is the Documents view.</p>
+          </section>
+          <section class="mobile-view" data-key="labs">
+            <h2 class="mobile-view-title">Labs</h2>
+            <p class="mobile-view-desc">This is the Labs view.</p>
+          </section>
+          <section class="mobile-view" data-key="meds">
+            <h2 class="mobile-view-title">Meds</h2>
+            <p class="mobile-view-desc">This is the Meds view.</p>
+          </section>
+        </div>
+      </div>
+    </main>
+  </div>
+
+  <!-- Patient Demographics Modal (reused style from desktop) -->
+  <div id="patientDemoModal" style="display:none; position:fixed; inset:0; background:rgba(0,0,0,0.45); z-index:1000; align-items:center; justify-content:center;">
+    <div style="background:#fff; width:min(720px, 92vw); max-height:90vh; border-radius:8px; box-shadow:0 8px 30px rgba(0,0,0,0.35); display:flex; flex-direction:column;">
+      <div style="display:flex; align-items:center; justify-content:space-between; padding:10px 14px; border-bottom:1px solid #eee;">
+        <div style="display:flex; align-items:center; gap:8px; min-width:0;">
+          <div id="patientDemoTitle" style="font-weight:bold; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;">Patient Demographics</div>
+        </div>
+        <button id="patientDemoCloseBtn" title="Close" style="font-size:18px; line-height:1; padding:4px 8px;">×</button>
+      </div>
+      <div id="patientDemoContent" style="margin:0; padding:12px; overflow:auto; white-space:normal; word-break:break-word; min-height:120px; max-height:calc(90vh - 64px);"></div>
+    </div>
+  </div>
+
+  <!-- Reuse desktop logic: hamburger toggle, patient helpers, and search handlers -->
+  <script src="{{ url_for('static', filename='SessionManager.js') }}"></script>
+  <script src="{{ url_for('static', filename='app.js') }}"></script>
+  <script src="{{ url_for('static', filename='patient.js') }}"></script>
+  <script src="{{ url_for('static', filename='selectpatient.js') }}"></script>
+  <!-- Load desktop sidebar renderers for reuse in mobile Snapshot -->
+  <script src="{{ url_for('static', filename='explore/vitals_sidebar.js') }}"></script>
+  <script src="{{ url_for('static', filename='explore/right_sidebar.js') }}"></script>
+  <!-- Tabulator JS for documents table (match desktop) -->
+  <script src="https://unpkg.com/tabulator-tables@6.3.0/dist/js/tabulator.min.js"></script>
+  <script type="module" src="{{ url_for('static', filename='explore/mobile.js') }}"></script>
+</body>
+</html>

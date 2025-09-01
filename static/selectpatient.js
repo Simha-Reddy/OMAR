@@ -94,10 +94,25 @@ async function setNewArchiveForPatient(patientName) {
     } catch (e) { console.warn('Set new archive warning', e); }
 }
 
+// Utility: close any open patient search UI (desktop/mobile)
+function closePatientSearchUI() {
+    try {
+        const panel = document.getElementById('mobileSearchPanel');
+        if (panel) panel.style.display = 'none';
+    } catch(_) {}
+    try {
+        const inp = document.getElementById('patientSearchInput');
+        if (inp) inp.blur();
+    } catch(_) {}
+}
+
 // Handles patient selection
 window.selectPatientDFN = async function(dfn, name) {
     // 1) Save & Clear current session
     await preSwitchSaveAndClear();
+
+    // Proactively close search UI once a patient is chosen
+    closePatientSearchUI();
 
     // 2) Load new patient
     const res = await fetch("/select_patient", {
@@ -153,6 +168,8 @@ window.addEventListener("DOMContentLoaded", () => {
             if (!patient_dfn) return;
             // 1) Save & Clear current session
             await preSwitchSaveAndClear();
+            // Proactively close search UI once a patient is chosen
+            closePatientSearchUI();
             // 2) Load new patient
             const res = await fetch("/select_patient", {
                 method: "POST",
@@ -316,6 +333,8 @@ document.addEventListener("DOMContentLoaded", () => {
         }
         searchInput.value = match.name;
         if (dropdown) dropdown.remove();
+        // Close search UI immediately after user chooses a patient
+        closePatientSearchUI();
         // Mask name in demo mode for the transient fetching message
         const displayName = (window.demoMasking && window.demoMasking.enabled && window.demoMasking.maskName)
             ? window.demoMasking.maskName(match.name)

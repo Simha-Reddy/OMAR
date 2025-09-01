@@ -63,7 +63,13 @@ function showThinkingSpinner(text = "Thinking...") {
 // --- Mic visualization ---
 function startMicFeedback() {
     const btn = document.getElementById("recordBtn");
-    if (!navigator.mediaDevices?.getUserMedia) return;
+    if (!btn || !navigator.mediaDevices?.getUserMedia) return;
+
+    // Ensure overlay is visible and give a baseline glow immediately
+    try {
+        btn.classList.add('recording');
+        btn.style.setProperty('--record-glow', '24px');
+    } catch(_e) {}
 
     navigator.mediaDevices.getUserMedia({ audio: true })
         .then(stream => {
@@ -77,8 +83,9 @@ function startMicFeedback() {
                 analyser.getByteTimeDomainData(dataArray);
                 const volume = Math.max(...dataArray) - 128;
                 const intensity = Math.min(Math.abs(volume) / 128, 1);
-                const glow = Math.floor(intensity * 50);
-                btn.style.boxShadow = `0 0 ${glow}px red`;
+                const glowPx = Math.floor(intensity * 80); // 0-80px range
+                // Drive CSS variable used by the overlay pseudo-element
+                try { btn.style.setProperty('--record-glow', glowPx + 'px'); } catch(_e) {}
                 animationId = requestAnimationFrame(animate);
             }
             animate();
@@ -89,7 +96,15 @@ function startMicFeedback() {
 function stopMicFeedback() {
     if (animationId) cancelAnimationFrame(animationId);
     if (audioContext) audioContext.close();
-    document.getElementById("recordBtn").style.boxShadow = "none";
+    const btn = document.getElementById("recordBtn");
+    if (btn) {
+        try {
+            btn.classList.remove('recording');
+            btn.style.removeProperty('--record-glow');
+        } catch(_e) {}
+        // Legacy cleanup (no longer used)
+        btn.style.boxShadow = "none";
+    }
 }
 
 // --- Utility ---
@@ -158,16 +173,40 @@ async function getRecordingStatus() {
 async function setRecordBtnState(isRecording) {
     const btn = document.getElementById('recordBtn');
     if (!btn) return;
-    btn.textContent = isRecording ? 'Stop Recording' : 'Start Recording';
-    btn.classList.toggle('stop-button', isRecording);
-    btn.classList.toggle('start-button', !isRecording);
+    const isImageMode = btn.dataset && btn.dataset.visual === 'image';
+    if (isImageMode) {
+        // Swap image source instead of text
+        const img = document.getElementById('recordBtnImg') || btn.querySelector('img');
+        const startSrc = btn.dataset.startSrc || '/static/images/start_Recording_circle_button.png';
+        const stopSrc = btn.dataset.stopSrc || '/static/images/stop_Recording_circle_button.png';
+        if (img) {
+            img.src = isRecording ? stopSrc : startSrc;
+            img.alt = isRecording ? 'Stop Recording' : 'Start Recording';
+        }
+        // Ensure no text classes are applied in image mode
+        btn.classList.remove('start-button', 'stop-button');
+    } else {
+        btn.textContent = isRecording ? 'Stop Recording' : 'Start Recording';
+        btn.classList.toggle('stop-button', isRecording);
+        btn.classList.toggle('start-button', !isRecording);
+    }
+
+    // Toggle overlay class and baseline glow so it's immediately visible
+    try {
+        btn.classList.toggle('recording', isRecording);
+        if (isRecording) {
+            btn.style.setProperty('--record-glow', '36px');
+        } else {
+            btn.style.removeProperty('--record-glow');
+        }
+    } catch(_e) {}
 
     if (isRecording) {
-        startMicFeedback(); // Start glow effect
+        startMicFeedback(); // Start dynamic glow
         isRecordingActive = true;
         requestWakeLock();
     } else {
-        stopMicFeedback(); // Stop glow effect
+        stopMicFeedback(); // Stop dynamic glow
         isRecordingActive = false;
         releaseWakeLock();
     }
