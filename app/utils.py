@@ -7,6 +7,19 @@ import csv
 from functools import lru_cache
 import threading
 
+# --- Markdown table helper ---
+def _md_table(headers: list[str], rows: list[list[str]]) -> str:
+    """Render a Markdown table from headers and rows. Escapes pipe characters."""
+    if not rows:
+        return ''
+    def _esc(x):
+        s = '' if x is None else str(x)
+        return s.replace('|', '\\|')
+    head = '| ' + ' | '.join(_esc(h) for h in headers) + ' |'
+    sep = '| ' + ' | '.join(['---'] * len(headers)) + ' |'
+    body = ['| ' + ' | '.join(_esc(c) for c in row) + ' |' for row in rows]
+    return '\n'.join([head, sep] + body)
+
 def get_resource_path(relative_path: str) -> str:
     if getattr(sys, 'frozen', False):
         base_path = sys._MEIPASS  # type: ignore
@@ -270,7 +283,7 @@ def _lab_record_matches(rec: dict, want_codes: set[str], want_names: set[str]) -
 def _list_meds(days: int | None, only_active: bool) -> str:
     meds = session.get('fhir_meds') or []
     cutoff = _days_ago_cutoff(days if days is not None else 90)
-    out = []
+    rows: list[list[str]] = []
     for m in meds:
         status = (m.get('status') or '').lower()
         if only_active and status != 'active':
@@ -279,24 +292,18 @@ def _list_meds(days: int | None, only_active: bool) -> str:
         dt = m.get('lastFilled') or m.get('startDate')
         if not _in_window(dt, cutoff):
             continue
-        parts = []
-        if m.get('name'): parts.append(m.get('name'))
-        if m.get('dose'): parts.append(m.get('dose'))
-        # Build simple descriptor
-        desc = ', '.join(parts)
-        extra = []
-        if m.get('route'): extra.append(m.get('route'))
-        if m.get('frequency'): extra.append(m.get('frequency'))
-        if status: extra.append(f"status: {status}")
-        when = _fmt_date_human(dt)
-        if when: extra.append(f"as of {when}")
-        if extra:
-            desc += f" ({'; '.join(extra)})"
-        if desc:
-            out.append(f"- {desc}")
-    if not out:
+        rows.append([
+            m.get('name') or '',
+            m.get('dose') or '',
+            m.get('route') or '',
+            m.get('frequency') or '',
+            status or '',
+            _fmt_date_human(dt)
+        ])
+    if not rows:
         return "no recent medications found."
-    return '\n'.join(out)
+    headers = ["Name", "Dose", "Route", "Frequency", "Status", "As of"]
+    return _md_table(headers, rows)
 
 def _list_problems(only_active: bool) -> str:
     probs = session.get('fhir_problems') or []
@@ -391,50 +398,81 @@ def _latest_vitals() -> str:
     temp = last_of('temperature')
     spo2 = last_of('oxygenSaturation')
     wt = last_of('weight')
-    out = []
+
+    rows: list[list[str]] = []
+    # Blood Pressure: show SYS/DIA as value and mmHg as unit by default
     if bp and (bp.get('systolic') is not None or bp.get('diastolic') is not None):
-        d = _fmt_date_human(bp.get('effectiveDateTime'))
-        out.append(f"- blood pressure {bp.get('systolic') or ''}/{bp.get('diastolic') or ''} {bp.get('unit') or 'mmHg'} ({d})")
+        bp_unit = bp.get('unit') or 'mmHg'
+        rows.append([
+            'Blood Pressure',
+            f"{bp.get('systolic') or ''}/{bp.get('diastolic') or ''}",
+            bp_unit,
+            _fmt_date_human(bp.get('effectiveDateTime'))
+        ])
     if hr:
-        out.append(f"- heart rate {hr.get('value')} {hr.get('unit') or 'bpm'} ({_fmt_date_human(hr.get('effectiveDateTime'))})")
+        rows.append([
+            'Heart Rate',
+            str(hr.get('value') if hr.get('value') is not None else ''),
+            hr.get('unit') or 'bpm',
+            _fmt_date_human(hr.get('effectiveDateTime'))
+        ])
     if rr:
-        out.append(f"- respiratory rate {rr.get('value')} {rr.get('unit') or 'breaths/min'} ({_fmt_date_human(rr.get('effectiveDateTime'))})")
+        rows.append([
+            'Respiratory Rate',
+            str(rr.get('value') if rr.get('value') is not None else ''),
+            rr.get('unit') or 'breaths/min',
+            _fmt_date_human(rr.get('effectiveDateTime'))
+        ])
     if temp:
-        out.append(f"- temperature {temp.get('value')} {temp.get('unit') or 'F'} ({_fmt_date_human(temp.get('effectiveDateTime'))})")
+        rows.append([
+            'Temperature',
+            str(temp.get('value') if temp.get('value') is not None else ''),
+            temp.get('unit') or 'F',
+            _fmt_date_human(temp.get('effectiveDateTime'))
+        ])
     if spo2:
-        out.append(f"- oxygen saturation {spo2.get('value')}% ({_fmt_date_human(spo2.get('effectiveDateTime'))})")
+        rows.append([
+            'Oxygen Saturation',
+            str(spo2.get('value') if spo2.get('value') is not None else ''),
+            spo2.get('unit') or '%',
+            _fmt_date_human(spo2.get('effectiveDateTime'))
+        ])
     if wt:
-        out.append(f"- weight {wt.get('value')} {wt.get('unit') or 'kg'} ({_fmt_date_human(wt.get('effectiveDateTime'))})")
-    if not out:
+        rows.append([
+            'Weight',
+            str(wt.get('value') if wt.get('value') is not None else ''),
+            wt.get('unit') or 'kg',
+            _fmt_date_human(wt.get('effectiveDateTime'))
+        ])
+
+    if not rows:
         return "no vitals available."
-    return '\n'.join(out)
+    headers = ["Type", "Value", "Unit", "Date"]
+    return _md_table(headers, rows)
 
 def _vitals_in_days(days: int) -> str:
     vitals = session.get('fhir_vitals') or {}
     if not vitals:
         return "no vitals available."
     cutoff = _days_ago_cutoff(days)
-    out = []
+    rows: list[list[str]] = []
     for key, arr in vitals.items():
         for rec in arr:
             if _in_window(rec.get('effectiveDateTime'), cutoff):
-                label = key.replace('oxygenSaturation', 'oxygen saturation').replace('bloodPressure','blood pressure')
-                val = ''
+                label = key.replace('oxygenSaturation', 'Oxygen Saturation').replace('bloodPressure','Blood Pressure').replace('heartRate','Heart Rate').replace('respiratoryRate','Respiratory Rate').replace('temperature','Temperature').replace('weight','Weight')
                 if key == 'bloodPressure':
-                    val = f"{rec.get('systolic')}/{rec.get('diastolic')} {rec.get('unit') or 'mmHg'}"
+                    unit = rec.get('unit') or 'mmHg'
+                    value = f"{rec.get('systolic') or ''}/{rec.get('diastolic') or ''}"
                 else:
-                    unit = rec.get('unit') or ''
+                    unit = rec.get('unit') or ('%' if key == 'oxygenSaturation' else ('bpm' if key == 'heartRate' else ('breaths/min' if key == 'respiratoryRate' else ('F' if key == 'temperature' else ('kg' if key == 'weight' else '')))))
                     v = rec.get('value')
-                    if v is not None:
-                        val = f"{v} {unit}".strip()
+                    value = str(v) if v is not None else ''
                 d = _fmt_date_human(rec.get('effectiveDateTime'))
-                out.append(f"- {label} {val} ({d})")
-    if not out:
+                rows.append([label, value, unit, d])
+    if not rows:
         return "no vitals in the selected window."
-    # sort by date descending within the text by extracting date again
-    def _key(line: str):
-        return 0
-    return '\n'.join(out)
+    headers = ["Type", "Value", "Unit", "Date"]
+    return _md_table(headers, rows)
 
 def _list_labs(days: int | None, filters: list[str] | None = None) -> str:
     labs = session.get('fhir_labs') or []
@@ -475,20 +513,21 @@ def _list_labs(days: int | None, filters: list[str] | None = None) -> str:
             return "no labs found."
         # Sort by most recent
         chosen = sorted(best.values(), key=lambda x: x.get('__dt'), reverse=True)
-        out = []
+        rows: list[list[str]] = []
         for r in chosen:
             test = r.get('test') or r.get('localName') or 'lab'
             val = r.get('result')
             unit = r.get('unit') or ''
-            abn = ' abnormal' if r.get('abnormal') else ''
+            abn = 'Yes' if r.get('abnormal') else ''
             when = _fmt_date_human((r.get('resulted') or r.get('collected')))
             val_s = str(val) if val is not None else ''
-            out.append(f"- {test}: {val_s} {unit} ({when}){abn}".strip())
-        return '\n'.join(out)
+            rows.append([test, val_s, unit, abn, when])
+        headers = ["Test", "Result", "Unit", "Abnormal?", "Date"]
+        return _md_table(headers, rows)
 
     # Otherwise, use time-window listing (default 14 days)
     cutoff = _days_ago_cutoff(days if days is not None else 14)
-    out = []
+    rows: list[list[str]] = []
     for r in labs:
         dt_iso = r.get('resulted') or r.get('collected')
         if not _in_window(dt_iso, cutoff):
@@ -498,17 +537,17 @@ def _list_labs(days: int | None, filters: list[str] | None = None) -> str:
         test = r.get('test') or r.get('localName') or 'lab'
         val = r.get('result')
         unit = r.get('unit') or ''
-        abn = ' abnormal' if r.get('abnormal') else ''
+        abn = 'Yes' if r.get('abnormal') else ''
         when = _fmt_date_human(dt_iso)
         if isinstance(val, (int,float)):
             val_s = str(val)
         else:
             val_s = str(val) if val is not None else ''
-        line = f"- {test}: {val_s} {unit} ({when}){abn}"
-        out.append(line.strip())
-    if not out:
+        rows.append([test, val_s, unit, abn, when])
+    if not rows:
         return "no labs in the selected window."
-    return '\n'.join(out)
+    headers = ["Test", "Result", "Unit", "Abnormal?", "Date"]
+    return _md_table(headers, rows)
 
 def _calc_age_years(dob_iso: str | None) -> str:
     """Return age in years from an ISO DOB like YYYY-MM-DD (empty string if unavailable)."""
@@ -596,7 +635,7 @@ def _list_labs_range(start_iso: str | None, end_iso: str | None, filters: list[s
     if not labs:
         return "no labs available."
     want_codes, want_names = _prepare_lab_filters(filters)
-    out = []
+    rows: list[list[str]] = []
     for r in labs:
         dt_iso = r.get('resulted') or r.get('collected')
         if not _within_range(dt_iso, start_iso, end_iso):
@@ -606,42 +645,43 @@ def _list_labs_range(start_iso: str | None, end_iso: str | None, filters: list[s
         test = r.get('test') or r.get('localName') or 'lab'
         val = r.get('result')
         unit = r.get('unit') or ''
-        abn = ' abnormal' if r.get('abnormal') else ''
+        abn = 'Yes' if r.get('abnormal') else ''
         when = _fmt_date_human(dt_iso)
         val_s = str(val) if val is not None else ''
-        out.append(f"- {test}: {val_s} {unit} ({when}){abn}".strip())
-    if not out:
+        rows.append([test, val_s, unit, abn, when])
+    if not rows:
         return "no labs in the selected window."
-    return '\n'.join(out)
+    headers = ["Test", "Result", "Unit", "Abnormal?", "Date"]
+    return _md_table(headers, rows)
 
 def _vitals_in_range(start_iso: str | None, end_iso: str | None) -> str:
     vitals = session.get('fhir_vitals') or {}
     if not vitals:
         return "no vitals available."
-    out = []
+    rows: list[list[str]] = []
     for key, arr in vitals.items():
         for rec in arr:
             if _within_range(rec.get('effectiveDateTime'), start_iso, end_iso):
-                label = key.replace('oxygenSaturation', 'oxygen saturation').replace('bloodPressure','blood pressure')
-                val = ''
+                label = key.replace('oxygenSaturation', 'Oxygen Saturation').replace('bloodPressure','Blood Pressure').replace('heartRate','Heart Rate').replace('respiratoryRate','Respiratory Rate').replace('temperature','Temperature').replace('weight','Weight')
                 if key == 'bloodPressure':
-                    val = f"{rec.get('systolic')}/{rec.get('diastolic')} {rec.get('unit') or 'mmHg'}"
+                    unit = rec.get('unit') or 'mmHg'
+                    value = f"{rec.get('systolic') or ''}/{rec.get('diastolic') or ''}"
                 else:
-                    unit = rec.get('unit') or ''
+                    unit = rec.get('unit') or ('%' if key == 'oxygenSaturation' else ('bpm' if key == 'heartRate' else ('breaths/min' if key == 'respiratoryRate' else ('F' if key == 'temperature' else ('kg' if key == 'weight' else '')))))
                     v = rec.get('value')
-                    if v is not None:
-                        val = f"{v} {unit}".strip()
+                    value = str(v) if v is not None else ''
                 d = _fmt_date_human(rec.get('effectiveDateTime'))
-                out.append(f"- {label} {val} ({d})")
-    if not out:
+                rows.append([label, value, unit, d])
+    if not rows:
         return "no vitals in the selected window."
-    return '\n'.join(out)
+    headers = ["Type", "Value", "Unit", "Date"]
+    return _md_table(headers, rows)
 
 def _list_meds_range(start_iso: str | None, end_iso: str | None, only_active: bool) -> str:
     meds = session.get('fhir_meds') or []
     if not meds:
         return "no medications available."
-    out = []
+    rows: list[list[str]] = []
     for m in meds:
         status = (m.get('status') or '').lower()
         if only_active and status != 'active':
@@ -649,23 +689,18 @@ def _list_meds_range(start_iso: str | None, end_iso: str | None, only_active: bo
         dt = m.get('lastFilled') or m.get('startDate')
         if not _within_range(dt, start_iso, end_iso):
             continue
-        parts = []
-        if m.get('name'): parts.append(m.get('name'))
-        if m.get('dose'): parts.append(m.get('dose'))
-        desc = ', '.join(parts)
-        extra = []
-        if m.get('route'): extra.append(m.get('route'))
-        if m.get('frequency'): extra.append(m.get('frequency'))
-        if status: extra.append(f"status: {status}")
-        when = _fmt_date_human(dt)
-        if when: extra.append(f"as of {when}")
-        if extra:
-            desc += f" ({'; '.join(extra)})"
-        if desc:
-            out.append(f"- {desc}")
-    if not out:
+        rows.append([
+            m.get('name') or '',
+            m.get('dose') or '',
+            m.get('route') or '',
+            m.get('frequency') or '',
+            status or '',
+            _fmt_date_human(dt)
+        ])
+    if not rows:
         return "no medications in the selected window."
-    return '\n'.join(out)
+    headers = ["Name", "Dose", "Route", "Frequency", "Status", "As of"]
+    return _md_table(headers, rows)
 
 # --- Orders (VistA RPC) support for dot-phrases ---
 

@@ -753,6 +753,28 @@ window.addEventListener("DOMContentLoaded", () => {
         document.addEventListener('keydown', (e)=>{
             if (e.key === 'Escape') hidePatientDemographicsModal();
         });
+        // NEW: Delegate clicks/keys for when mobile creates #patientLookupResults after DOMContentLoaded
+        if (!document._demoDelegationBound){
+            document._demoDelegationBound = true;
+            document.addEventListener('click', (e)=>{
+                try{
+                    const tgt = e.target && (e.target.id === 'patientLookupResults' ? e.target : (e.target.closest ? e.target.closest('#patientLookupResults') : null));
+                    if (tgt && tgt.textContent && tgt.textContent.trim()){
+                        e.preventDefault();
+                        showPatientDemographicsModal();
+                    }
+                }catch(_e){}
+            }, true);
+            document.addEventListener('keydown', (e)=>{
+                try{
+                    const active = document.activeElement;
+                    if ((e.key === 'Enter' || e.key === ' ') && active && active.id === 'patientLookupResults' && active.textContent && active.textContent.trim()){
+                        e.preventDefault();
+                        showPatientDemographicsModal();
+                    }
+                }catch(_e){}
+            }, true);
+        }
     })();
 
     // On DOMContentLoaded, fetch session and display info

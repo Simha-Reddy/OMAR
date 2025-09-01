@@ -153,16 +153,65 @@
   let activeIndex = Math.max(0, VIEWS.findIndex(v => v.key === 'snapshot'));
   let trackEl = null;
   let pickerEl = null;
+  let wrapEl = null;
+
+  // Helper: validate that picker and panes are in sync
+  function validateSync(){
+    try {
+      const btns = pickerEl ? pickerEl.querySelectorAll('.seg-btn') : [];
+      const panes = getPanes();
+      
+      // Ensure we have the same number of buttons and panes
+      if (btns.length !== panes.length || btns.length !== VIEWS.length) {
+        console.warn('Mobile view sync mismatch detected', {
+          buttons: btns.length,
+          panes: panes.length, 
+          views: VIEWS.length
+        });
+      }
+      
+      // Validate that the active button matches the active pane
+      let activeBtn = -1;
+      btns.forEach((btn, i) => {
+        if (btn.classList.contains('active')) activeBtn = i;
+      });
+      
+      if (activeBtn !== activeIndex) {
+        console.warn('Active button/pane mismatch', { button: activeBtn, pane: activeIndex });
+        // Force re-sync
+        setActive(activeIndex, { immediate: true });
+      }
+    } catch(_e) {}
+  }
+  // Helper: get pane elements in DOM order (safe against stray nodes)
+  function getPanes(){
+    try {
+      const panes = Array.from(trackEl ? trackEl.querySelectorAll(':scope > .mobile-view') : []);
+      // Debug: log pane structure
+      console.log('getPanes() found:', panes.length, 'panes');
+      panes.forEach((pane, i) => {
+        const key = pane.dataset ? pane.dataset.key : 'unknown';
+        console.log(`  Pane ${i}: key="${key}", offsetLeft=${pane.offsetLeft}`);
+      });
+      return panes;
+    } catch(_e) {
+      console.warn('getPanes() fallback used:', _e);
+      const panes = Array.from(trackEl ? trackEl.children : []);
+      panes.forEach((pane, i) => {
+        const key = pane.dataset ? pane.dataset.key : 'unknown';
+        console.log(`  Fallback Pane ${i}: key="${key}", offsetLeft=${pane.offsetLeft}`);
+      });
+      return panes;
+    }
+  }
 
   function centerActiveSegment(){
     try{
       if(!pickerEl) return;
       const activeBtn = pickerEl.querySelector('.seg-btn.active');
       if(!activeBtn) return;
-      const pr = pickerEl.getBoundingClientRect();
-      const br = activeBtn.getBoundingClientRect();
-      const current = pickerEl.scrollLeft;
-      const target = current + (br.left + br.width/2) - (pr.left + pr.width/2);
+      // Use offsetLeft-based centering to avoid rect/scrollLeft math drift
+      const target = Math.max(0, activeBtn.offsetLeft - (pickerEl.clientWidth - activeBtn.offsetWidth) / 2);
       pickerEl.scrollTo({ left: target, behavior: 'smooth' });
     }catch(_e){}
   }
@@ -177,28 +226,100 @@
     if (hasRight && window.RightSidebar && typeof window.RightSidebar.refresh === 'function'){
       try { window.RightSidebar.refresh(); } catch(_e) {}
     }
-  }
-
-  function setActive(index, opts){
+  }  function setActive(index, opts){
     const i = Math.max(0, Math.min(VIEWS.length-1, index|0));
+    console.log(`setActive(${index}) -> normalized to ${i}, activeKey will be: ${VIEWS[i] ? VIEWS[i].key : 'unknown'}`);
     activeIndex = i;
-    // Update picker
+    const activeKey = (VIEWS[i] && VIEWS[i].key) || '';
+    
+    // Update picker buttons - ensure sync with VIEWS array
     try{
       const btns = pickerEl ? pickerEl.querySelectorAll('.seg-btn') : [];
-      btns.forEach((b, idx)=>{
-        if(idx === i){ b.classList.add('active'); b.setAttribute('aria-selected','true'); }
-        else { b.classList.remove('active'); b.setAttribute('aria-selected','false'); }
+      console.log(`  Updating ${btns.length} picker buttons`);
+      btns.forEach((b, btnIndex)=>{
+        const on = btnIndex === i; // Use array index for reliable matching
+        console.log(`    Button ${btnIndex}: ${on ? 'ACTIVE' : 'inactive'} (data-key: ${b.dataset.key})`);
+        if(on){ 
+          b.classList.add('active'); 
+          b.setAttribute('aria-selected','true'); 
+        } else { 
+          b.classList.remove('active'); 
+          b.setAttribute('aria-selected','false'); 
+        }
       });
       centerActiveSegment();
-    }catch(_e){}
-    // Update track
-    if(trackEl){
-      const pct = -(i * 100);
-      trackEl.style.transform = `translateX(${pct}%)`;
+    }catch(_e){
+      console.error('setActive button update error:', _e);
     }
+    
+    // Update track position
+    applyTransformForIndex(i, opts);
+    
     // When switching to Snapshot, refresh its content
     if (VIEWS[i] && VIEWS[i].key === 'snapshot'){
       refreshSnapshotSidebars();
+    }
+  }
+  function setActiveByKey(key, opts){
+    try{
+      // First try to find by VIEWS array index (more reliable)
+      const viewIdx = VIEWS.findIndex(v => v.key === key);
+      if (viewIdx >= 0) {
+        setActive(viewIdx, opts);
+        return;
+      }
+      // Fallback to DOM-based lookup
+      const panes = getPanes();
+      const paneIdx = panes.findIndex(p => p && p.dataset && p.dataset.key === key);
+      setActive(paneIdx >= 0 ? paneIdx : 0, opts);
+    }catch(_e){ setActive(0, opts); }
+  }  // New: apply transform using child offsetLeft for exact snapping
+  function applyTransformForIndex(i, opts){
+    try{
+      if(!trackEl || !wrapEl) return;
+      const panes = getPanes();
+      if (!panes || panes.length === 0) return;
+      
+      // Ensure index is within bounds
+      const safeIndex = Math.max(0, Math.min(i, panes.length - 1));
+      
+      // Debug: log what we're trying to do
+      console.log(`applyTransformForIndex(${i}) -> safeIndex=${safeIndex}, activeIndex=${activeIndex}`);
+      console.log(`  Target view: ${VIEWS[i] ? VIEWS[i].key : 'unknown'}`);
+      console.log(`  Total panes: ${panes.length}, wrapEl.clientWidth: ${wrapEl.clientWidth}`);
+      
+      // Use offsetLeft for positioning, but add validation
+      let left = 0;
+      const targetPane = panes[safeIndex];
+      
+      if (targetPane && targetPane.offsetLeft !== undefined && targetPane.offsetLeft >= 0) {
+        left = targetPane.offsetLeft;
+        console.log(`  Using offsetLeft: ${left}`);
+        
+        // Validation: check if this makes sense
+        const expectedLeft = safeIndex * (wrapEl.clientWidth || 300);
+        const tolerance = 50; // Allow some variance
+        if (Math.abs(left - expectedLeft) > tolerance) {
+          console.warn(`  offsetLeft seems wrong! Expected ~${expectedLeft}, got ${left}`);
+          // Use calculated position as fallback
+          left = expectedLeft;
+          console.log(`  Using calculated fallback: ${left}`);
+        }
+      } else {
+        // Fallback: calculate based on index and container width
+        left = safeIndex * (wrapEl.clientWidth || 300);
+        console.log(`  Using calculated position: ${left}`);
+      }
+      
+      const offsetPx = -left;
+      console.log(`  Final transform: translate3d(${offsetPx}px, 0, 0)`);
+      
+      const wantsImmediate = !!(opts && opts.immediate);
+      if(wantsImmediate){ trackEl.style.transition = 'none'; }
+      trackEl.style.transform = `translate3d(${offsetPx}px, 0, 0)`;
+      if(wantsImmediate){ requestAnimationFrame(()=>{ try{ trackEl.style.transition = ''; }catch(_e){} }); }
+    }catch(_e){
+      console.error('applyTransformForIndex error:', _e);
     }
   }
 
@@ -216,10 +337,11 @@
         role: 'tab',
         'aria-selected': idx===activeIndex ? 'true' : 'false',
         'data-index': String(idx),
+        'data-key': v.key,
         title: v.label,
         text: v.label
       });
-      btn.addEventListener('click', ()=> setActive(idx));
+      btn.addEventListener('click', ()=> setActiveByKey(v.key));
       scroller.appendChild(btn);
     });
     navHost.appendChild(scroller);
@@ -228,7 +350,8 @@
     // Views (swipeable)
     contentHost.innerHTML = '';
     const wrap = el('div', { class: 'mobile-views-wrap' });
-    const track = el('div', { class: 'mobile-views-track' });
+    // Ensure the track is the offsetParent so pane.offsetLeft is relative to it
+    const track = el('div', { class: 'mobile-views-track', style: 'position:relative; will-change: transform;' });
     VIEWS.forEach(v => {
       const pane = el('section', { class: 'mobile-view', 'data-key': v.key });
       const h = el('h2', { class: 'mobile-view-title', text: v.label });
@@ -347,6 +470,7 @@
     wrap.appendChild(track);
     contentHost.appendChild(wrap);
     trackEl = track;
+    wrapEl = wrap;
 
     // Touch swipe handlers
     let startX = 0, startY = 0, dx = 0, dy = 0, dragging = false;
@@ -354,7 +478,9 @@
     function onStart(e){
       const t = e.touches ? e.touches[0] : e;
       startX = t.clientX; startY = t.clientY; dx = 0; dy = 0; dragging = true;
-      baseX = -activeIndex * wrap.clientWidth;
+      const panes = getPanes();
+      const paneLeft = panes[activeIndex] ? panes[activeIndex].offsetLeft : (activeIndex * wrap.clientWidth);
+      baseX = -paneLeft;
       track.style.transition = 'none';
     }
     function onMove(e){
@@ -364,35 +490,82 @@
       // Only act on mostly-horizontal moves
       if(Math.abs(dx) > Math.abs(dy) && Math.abs(dx) > 6){
         e.preventDefault();
-        const w = wrap.clientWidth || 1;
-        const pct = ((baseX + dx) / w) * 100;
-        track.style.transform = `translateX(${pct}%)`;
+        // Use pixel-based transform for consistent dragging
+        track.style.transform = `translate3d(${baseX + dx}px, 0, 0)`;
       }
     }
     function onEnd(){
       if(!dragging){ return; }
       dragging = false;
       track.style.transition = '';
-      const threshold = Math.max(40, (wrap.clientWidth || 300) * 0.15);
+      const panes = getPanes();
+      const paneW = panes[activeIndex] ? panes[activeIndex].offsetWidth : (wrap.clientWidth || 300);
+      const threshold = Math.max(40, paneW * 0.15);
       if(Math.abs(dx) > threshold && Math.abs(dx) > Math.abs(dy)){
         if(dx < 0) setActive(activeIndex + 1);
         else setActive(activeIndex - 1);
       } else {
-        setActive(activeIndex);
+        applyTransformForIndex(activeIndex, { immediate: false });
       }
-    }
-    wrap.addEventListener('touchstart', onStart, { passive: true });
+    }    wrap.addEventListener('touchstart', onStart, { passive: true });
     wrap.addEventListener('touchmove', onMove, { passive: false });
-    wrap.addEventListener('touchend', onEnd, { passive: true });
-
-    // Initial position
-    setActive(activeIndex, { immediate: true });
+    wrap.addEventListener('touchend', onEnd, { passive: true });    // Initial position - ensure proper sync
+    // Use a longer timeout to ensure DOM is fully rendered
+    setTimeout(() => {
+      console.log('=== INITIAL SYNC DEBUG ===');
+      console.log('Initial activeIndex:', activeIndex);
+      
+      // Double-check that we're showing the right view
+      const expectedIndex = VIEWS.findIndex(v => v.key === 'snapshot');
+      console.log('Expected snapshot index:', expectedIndex);
+      
+      if (expectedIndex >= 0 && expectedIndex !== activeIndex) {
+        console.log(`Correcting activeIndex from ${activeIndex} to ${expectedIndex}`);
+        activeIndex = expectedIndex;
+      }
+      
+      console.log('About to call setActive with:', activeIndex);
+      setActive(activeIndex, { immediate: true });
+      
+      // Validate sync after initial render
+      setTimeout(() => {
+        console.log('=== POST-INIT VALIDATION ===');
+        validateSync();
+      }, 100);
+    }, 50);
 
     // Ensure snapshot sidebars render at least once
     refreshSnapshotSidebars();
 
+    try{
+      window.addEventListener('resize', ()=>{
+        applyTransformForIndex(activeIndex, { immediate: true });
+        centerActiveSegment();
+      });
+      window.addEventListener('orientationchange', ()=>{
+        applyTransformForIndex(activeIndex, { immediate: true });
+        centerActiveSegment();
+      });
+      // Re-snap on wrap size changes (e.g., due to layout, fonts, or container changes)
+      if (window.ResizeObserver && wrapEl){
+        const ro = new ResizeObserver(() => {
+          try {
+            applyTransformForIndex(activeIndex, { immediate: true });
+            centerActiveSegment();
+          } catch(_e){}
+        });
+        try { ro.observe(wrapEl); } catch(_e){}
+      }
+      // Replace undefined ensureViewMatchesPicker with direct re-snap + center
+      trackEl.addEventListener('transitionend', ()=>{ try { applyTransformForIndex(activeIndex, { immediate: true }); centerActiveSegment(); } catch(_e){} });
+      window.addEventListener('pageshow', ()=>{ try { applyTransformForIndex(activeIndex, { immediate: true }); centerActiveSegment(); } catch(_e){} });
+      if(document && document.fonts && document.fonts.ready){
+        document.fonts.ready.then(()=>{ try { applyTransformForIndex(activeIndex, { immediate: true }); } catch(_e){} });
+      }
+    }catch(_e){}
+
     // Load documents module after panes exist, so it can init table and bind Ask/mic handlers
-    setTimeout(() => { try { import('/static/explore/documents.js'); } catch(_e){} }, 0);
+    setTimeout(() => { try { import('/static/explore/documents.js').then(()=>{ try { applyTransformForIndex(activeIndex, { immediate: true }); } catch(_e){} }); } catch(_e){} }, 0);
   }
 
   // Expose hook
@@ -400,8 +573,8 @@
     window.omarMobile = window.omarMobile || {};
     window.omarMobile.updatePatientTop = updatePatientTop;
     window.omarMobile.setMobileView = (key)=>{
-      const idx = VIEWS.findIndex(v=>v.key===key);
-      if(idx>=0) setActive(idx);
+      // Prefer key-based activation to avoid index drift
+      setActiveByKey(key);
     };
   } catch(_e) {}
 
