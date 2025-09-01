@@ -1239,6 +1239,12 @@ import { on, openDocument, EVENTS } from './state.js';
   }
 
   async function runNotesAsk(qOverride){
+    // If bound as an event handler by mistake, ignore the event object
+    try{
+      if(qOverride && typeof qOverride === 'object' && (qOverride.type || typeof qOverride.preventDefault === 'function')){
+        qOverride = null;
+      }
+    }catch(_e){}
     if(window._notesAskBusy){ return; }
     const askEl = document.getElementById('notesAskInput');
     const q = (qOverride != null ? String(qOverride) : (askEl && askEl.value || '')).trim();
@@ -2194,7 +2200,11 @@ import { on, openDocument, EVENTS } from './state.js';
 
     if(searchBtn && !searchBtn._bound){ searchBtn._bound = true; searchBtn.addEventListener('click', runNotesSearch); }
     if(searchInput && !searchInput._bound){ searchInput._bound = true; searchInput.addEventListener('keyup', (e)=>{ if(e.key==='Enter') runNotesSearch(); }); }
-    if(askBtn && !askBtn._bound){ askBtn._bound = true; askBtn.addEventListener('click', runNotesAsk); }
+    if(askBtn && !askBtn._bound){
+      askBtn._bound = true;
+      // Ensure the MouseEvent is not treated as a query override
+      askBtn.addEventListener('click', (e)=>{ e && e.preventDefault && e.preventDefault(); runNotesAsk(); });
+    }
     if(askInput && !askInput._bound){ askInput._bound = true; askInput.addEventListener('keyup', (e)=>{ if(e.key==='Enter') runNotesAsk(); }); }
     // NEW: Wire Summary to load prompt and call notes Q&A
     if(summaryBtn && !summaryBtn._bound){
