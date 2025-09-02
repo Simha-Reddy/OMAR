@@ -432,7 +432,7 @@
   
       const spots = {
         wbc: {x: 90, y: 45, anchor:'end'},     // left
-        hgb: {x: 140, y: 11, anchor:'middle'}, // top
+        hgb: {x: 140, y: 20, anchor:'middle'}, // top
         hct: {x: 150, y: 74, anchor:'end'},    // bottom
         plt: {x: 195, y: 45, anchor:'start'}   // right
       };
@@ -499,6 +499,7 @@
       cbcTitle.textContent = 'CBC' + (cbcDate? (' ' + fmtDateOnly(cbcDate)) : '');
       cbcTitle.style.fontSize = '0.85em'; cbcTitle.style.color = '#555'; cbcTitle.style.margin = '8px 0 4px 2px';
       const cbcSvg = renderCBCFishbone(series);
+      cbcTitle.style.margin = '8px 0 12px 2px';  // ← This controls the spacing!
   
       labsWrap.appendChild(bmpTitle);
       labsWrap.appendChild(bmpSvg);

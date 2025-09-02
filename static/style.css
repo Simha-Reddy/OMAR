@@ -1587,7 +1587,7 @@ select {
   display: grid;
   grid-template-columns: 1fr 1fr;
   gap: 12px;
-  padding: 20px;
+  padding: 40px 20px 0px 20px;
   align-items: center;
 }
 .mobile-row-buttons .circle-btn {
@@ -1758,7 +1758,7 @@ select {
   margin: 40px 0 40px 0;
   border-radius: 1px;
 }
-.labs-fishbone { margin: 6px 2px 2px 2px; }
+.labs-fishbone { margin: 12px 2px 2px 2px; }
 .labs-fishbone svg { display: block; max-width: 100%; height: auto; }
 .labs-fishbone .lab-value { font-size: 28px; font-weight: 400; }
 
@@ -2030,9 +2030,9 @@ select {
 }
 
 /* Views container */
-#mobileContent { margin: 6px 8px 10px 8px; }
+#mobileContent { margin: 10px 8px 12px 8px; }
 .mobile-views-wrap { position: relative; overflow: hidden; border: 1px solid var(--paper-border); border-radius: 10px; background: var(--paper-panel); }
-.mobile-views-track { display: flex; width: 100%; transform: translateX(0%); transition: transform 260ms ease; }
+.mobile-views-track { display: flex; width: 100%; transition: transform 260ms ease; }
 .mobile-view { flex: 0 0 100%; width: 100%; padding: 14px 16px; min-height: 36vh; box-sizing: border-box; }
 .mobile-view-title { margin: 0 0 6px 0; font-size: 1.1em; color: var(--brand-blue); }
 .mobile-view-desc { margin: 0; color: var(--paper-contrast); opacity: 0.9; }

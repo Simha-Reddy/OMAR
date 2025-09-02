@@ -14,6 +14,7 @@ This test program has numerous bugs and the code is filled with detritus from ma
   - Real-time recording/transcription and AI-assisted progress note generation
   - Customizable prompt templates (SOAP, Discharge, Primary Care, Social Work, etc.)
   - Patient dot-phrases inside prompts and notes: [[name]], [[age]], [[vitals]], [[meds/active]], [[problems/active]], [[allergies]], [[labs]] and time-window variants
+  - Server-side expansions for [[labs]], [[vitals]], and [[meds]] render as Markdown tables (including filters, days, date ranges, and active-only), with clear units and human-readable dates
 - Patient Instructions
   - Generate clear, patient-centered after-visit instructions and export as PDF
 - Explore chart data (RAG)
@@ -22,6 +23,7 @@ This test program has numerous bugs and the code is filled with detritus from ma
   - "Show me": Saying or typing "Show me" at the beginning of your chart query will trigger the program to try to find the requested data directly from the chart, without slowing down to use the LLM.
   - Outside records: paste text or drop/upload PDFs; documents are converted to markdown and chunked for querying
   - Hybrid retrieval (semantic + BM25) with answers citing the most relevant source chunks
+  - Desktop and Mobile: "Hey, OMAR" answers render as Markdown inside a styled markdown box; dot-phrases (e.g., [[labs]], [[vitals]], [[meds]]) appear as Markdown tables
 - VistA integration (best-effort socket client)
   - Select patient, fetch VPR bundle, normalize to FHIR-like structures
   - Retrieve TIU document text (single or batch), list DocumentReferences, and index for RAG
@@ -33,6 +35,16 @@ This test program has numerous bugs and the code is filled with detritus from ma
   - Save/restore in-browser session, save full sessions to archives, view and manage transcripts
 - Privacy & caching
   - Patient-scoped JSON responses set strict no-store cache headers and include DFN markers. 
+
+---
+
+## Explore Mobile
+
+- Access on phones/tablets at /explore/m
+- Top bar with patient selector and voice/Ask controls
+- Segmented views with swipe navigation between panes
+- "Hey, OMAR" answers render as Markdown in a markdown-styled box; Markdown tables are supported for dot-phrases like [[labs]], [[vitals]], [[meds]]
+- Tap the patient name/age to open the Patient Demographics modal
 
 ---
 
@@ -113,6 +125,9 @@ VISTARPC_CIPHER_FILE=path\to\cipher.txt
 Run `Setup.bat` to install python dependencies
 
 Run `Start_OMAR.bat` which will start run_local_server and open the program in your browser at http://127.0.0.1:5000.
+
+- Desktop Explore: http://127.0.0.1:5000/explore
+- Explore Mobile: http://127.0.0.1:5000/explore/m
 
 Log in with CPRS ACCESS/VERIFY codes.
 
