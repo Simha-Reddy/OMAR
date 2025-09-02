@@ -32,7 +32,8 @@ This test program has numerous bugs and the code is filled with detritus from ma
   - Create and chain simple “smart” modules that can use Explore/Scribe inputs and run safely in a sandbox
   - Toggle feature flag SAFE_MODULES_ENABLED. (THIS FEATURE IS UNSTABLE AS OF AUGUST 2025)
 - Session and Archive
-  - Save/restore in-browser session, save full sessions to archives, view and manage transcripts
+  - Save/restore in-browser session, save full sessions to archives, view and manage transcripts. Deletion after 10 days or by user.
+  - Does not write anything to VistA. Can be set in settings to create a draft email to self with note.
 - Privacy & caching
   - Patient-scoped JSON responses set strict no-store cache headers and include DFN markers. 
 
@@ -45,6 +46,7 @@ This test program has numerous bugs and the code is filled with detritus from ma
 - Segmented views with swipe navigation between panes
 - "Hey, OMAR" answers render as Markdown in a markdown-styled box; Markdown tables are supported for dot-phrases like [[labs]], [[vitals]], [[meds]]
 - Tap the patient name/age to open the Patient Demographics modal
+- If using Windows Remote Desktop on a mobile device, set resolution to smallest possible in the app. Also, use Guided Access to prevent it from going to sleep.
 
 ---
 

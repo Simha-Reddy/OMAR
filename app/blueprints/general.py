@@ -130,6 +130,68 @@ def list_custom_templates():
     files = [os.path.splitext(f)[0] for f in os.listdir(folder) if f.endswith(('.txt', '.md'))]
     return jsonify(files)
 
+# --- User preferences: email + draft settings persistence ---
+_DEF_PREFS = {
+    'email_address': '',
+    'auto_draft_email': False,
+    'email_force_owa': False,
+}
+
+def _prefs_path():
+    try:
+        return get_resource_path('user_prefs.json')
+    except Exception:
+        # fallback to project root
+        return os.path.join(os.path.dirname(__file__), '..', 'user_prefs.json')
+
+def _load_prefs() -> dict:
+    p = _prefs_path()
+    try:
+        if os.path.exists(p):
+            with open(p, 'r', encoding='utf-8') as f:
+                data = json.load(f)
+                if isinstance(data, dict):
+                    # ensure keys exist
+                    out = dict(_DEF_PREFS)
+                    out.update({k: data.get(k) for k in _DEF_PREFS.keys()})
+                    return out
+    except Exception:
+        pass
+    return dict(_DEF_PREFS)
+
+def _save_prefs(new_values: dict) -> None:
+    p = _prefs_path()
+    try:
+        os.makedirs(os.path.dirname(p), exist_ok=True)
+    except Exception:
+        pass
+    try:
+        cur = _load_prefs()
+        cur.update({k: new_values.get(k, cur.get(k)) for k in _DEF_PREFS.keys()})
+        with open(p, 'w', encoding='utf-8') as f:
+            json.dump(cur, f, ensure_ascii=False, indent=2)
+    except Exception:
+        pass
+
+@bp.route('/user_prefs', methods=['GET', 'POST'])
+def user_prefs():
+    if request.method == 'GET':
+        try:
+            prefs = _load_prefs()
+            return jsonify(prefs)
+        except Exception as e:
+            return jsonify(dict(_DEF_PREFS)), 200
+    # POST: merge and save
+    try:
+        data = request.get_json(silent=True) or {}
+        email = (data.get('email_address') or '').strip()
+        auto = bool(data.get('auto_draft_email'))
+        force = bool(data.get('email_force_owa'))
+        _save_prefs({'email_address': email, 'auto_draft_email': auto, 'email_force_owa': force})
+        return jsonify({'status': 'ok'})
+    except Exception as e:
+        return jsonify({'status': 'error', 'error': str(e)}), 500
+
 @bp.route('/templates/custom/<filename>')
 def serve_custom_template(filename):
     return send_from_directory('templates/custom', filename)
@@ -440,3 +502,64 @@ def exit_app():
         return jsonify({'status': 'ok'})
     except Exception as e:
         return jsonify({'status': 'error', 'error': str(e)}), 500
+
+# --- New: Create Outlook draft email (Windows + Outlook COM), with OWA fallback ---
+@bp.route('/email/create_draft', methods=['POST'])
+def create_outlook_draft():
+    """Create a draft email in Outlook (desktop) addressed to the given recipient.
+    Expects JSON: { to: string, subject?: string, body?: string, attachments?: [paths], force_owa?: bool }
+    If Outlook COM isn't available or force_owa is true, returns a fallback Outlook Web compose URL.
+    """
+    data = request.get_json(silent=True) or {}
+    to_addr = (data.get('to') or '').strip()
+    subject = (data.get('subject') or 'Clinic note draft').strip()
+    body = data.get('body') or ''
+    attachments = data.get('attachments') or []
+    force_owa = bool(data.get('force_owa'))
+
+    if not to_addr:
+        return jsonify({'error': 'Missing to'}), 400
+
+    # Helper to build an Outlook Web compose URL (length-limited; good fallback)
+    def _owa_compose_url(_to: str, _subject: str, _body: str) -> str:
+        import urllib.parse
+        # Keep body short to avoid URL limits; include note about truncation
+        max_len = 1500
+        safe_body = _body if len(_body) <= max_len else (_body[:max_len] + "\n\n[Truncated]")
+        return (
+            "https://outlook.office.com/mail/deeplink/compose?to="
+            + urllib.parse.quote(_to)
+            + "&subject="
+            + urllib.parse.quote(_subject)
+            + "&body="
+            + urllib.parse.quote(safe_body)
+        )
+
+    # If explicitly forcing OWA, or not Windows, return fallback immediately
+    if force_owa or os.name != 'nt':
+        return jsonify({'status': 'fallback', 'url': _owa_compose_url(to_addr, subject, body)}), 200
+
+    try:
+        import html as _html
+        import win32com.client as win32
+        # Start Outlook COM automation
+        outlook = win32.Dispatch("Outlook.Application")
+        mail = outlook.CreateItem(0)  # 0 = olMailItem
+        mail.To = to_addr
+        mail.Subject = subject
+        # Preserve formatting via HTML; escape content and wrap in <pre>
+        escaped = _html.escape(body or '')
+        mail.HTMLBody = f"<html><body><pre style='white-space:pre-wrap'>{escaped}</pre></body></html>"
+        # Add attachments if provided and exist
+        for p in attachments:
+            try:
+                ap = os.path.abspath(p)
+                if os.path.isfile(ap):
+                    mail.Attachments.Add(Source=ap)
+            except Exception:
+                continue
+        mail.Save()  # Saves into Drafts
+        return jsonify({'status': 'ok', 'message': 'Draft created in Outlook Drafts'}), 200
+    except Exception as e:
+        # Fall back to Outlook Web compose link on error
+        return jsonify({'status': 'fallback', 'url': _owa_compose_url(to_addr, subject, body), 'error': str(e)}), 200

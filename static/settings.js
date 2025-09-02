@@ -82,6 +82,122 @@ document.addEventListener("DOMContentLoaded", async () => {
             }
         });
     }
+
+    // NEW: Initialize Email Draft settings (replaces Teams)
+    try {
+        const emailKey = 'ssva:emailAddress';
+        const autoKey  = 'ssva:autoDraftEmail';
+        const forceKey = 'ssva:emailForceOWA';
+        const emailInput = document.getElementById('emailDraftAddressInput');
+        const saveBtn    = document.getElementById('saveEmailAddressBtn');
+        const statusLbl  = document.getElementById('emailAddressStatus');
+        const autoChk    = document.getElementById('toggleEmailAutoDraft');
+        const forceChk   = document.getElementById('toggleEmailForceOWA');
+
+        // First, try to hydrate from server-side preferences
+        try {
+            const resp0 = await fetch('/user_prefs', { cache: 'no-store' });
+            if (resp0.ok) {
+                const prefs = await resp0.json();
+                if (prefs && typeof prefs === 'object') {
+                    if (typeof prefs.email_address === 'string') {
+                        localStorage.setItem(emailKey, prefs.email_address || '');
+                    }
+                    if ('auto_draft_email' in prefs) {
+                        localStorage.setItem(autoKey, prefs.auto_draft_email ? '1' : '0');
+                    }
+                    if ('email_force_owa' in prefs) {
+                        localStorage.setItem(forceKey, prefs.email_force_owa ? '1' : '0');
+                    }
+                }
+            }
+        } catch(_e) { /* ignore */ }
+
+        if (emailInput && saveBtn && autoChk) {
+            const savedEmail = localStorage.getItem(emailKey) || '';
+            if (savedEmail) {
+                emailInput.value = savedEmail;
+                autoChk.disabled = false;
+                if (forceChk) forceChk.disabled = false;
+            }
+            const autoVal = localStorage.getItem(autoKey);
+            autoChk.checked = autoVal === '1';
+
+            if (forceChk) {
+                const forceVal = localStorage.getItem(forceKey);
+                forceChk.checked = forceVal === '1';
+            }
+
+            saveBtn.addEventListener('click', async () => {
+                const val = (emailInput.value || '').trim();
+                if (!val || !val.includes('@')) {
+                    alert('Enter a valid email address.');
+                    return;
+                }
+                localStorage.setItem(emailKey, val);
+                // Persist to server as well
+                try {
+                    await fetch('/user_prefs', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({
+                            email_address: val,
+                            auto_draft_email: autoChk.checked,
+                            email_force_owa: forceChk ? !!forceChk.checked : false
+                        })
+                    });
+                } catch(_e) {}
+                statusLbl.textContent = 'Saved!';
+                autoChk.disabled = false;
+                if (forceChk) forceChk.disabled = false;
+                setTimeout(()=> statusLbl.textContent = '', 1500);
+            });
+
+            autoChk.addEventListener('change', async () => {
+                if (autoChk.checked && !(emailInput.value||'').includes('@')) {
+                    alert('Please save a valid email first.');
+                    autoChk.checked = false;
+                    return;
+                }
+                localStorage.setItem(autoKey, autoChk.checked ? '1' : '0');
+                // Persist to server
+                try {
+                    await fetch('/user_prefs', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({
+                            email_address: (emailInput.value||'').trim(),
+                            auto_draft_email: autoChk.checked,
+                            email_force_owa: forceChk ? !!forceChk.checked : false
+                        })
+                    });
+                } catch(_e) {}
+            });
+
+            if (forceChk) {
+                forceChk.addEventListener('change', async () => {
+                    if (forceChk.checked && !(emailInput.value||'').includes('@')) {
+                        alert('Please save a valid email first.');
+                        forceChk.checked = false;
+                        return;
+                    }
+                    localStorage.setItem(forceKey, forceChk.checked ? '1' : '0');
+                    // Persist to server
+                    try {
+                        await fetch('/user_prefs', {
+                            method: 'POST',
+                            headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify({
+                                email_address: (emailInput.value||'').trim(),
+                                auto_draft_email: autoChk.checked,
+                                email_force_owa: forceChk.checked
+                            })
+                        });
+                    } catch(_e) {}
+                });
+            }
+        }
+    } catch(e) { console.warn('Email draft settings init failed', e); }
 });
 
 // --- Custom Prompt Template Functions ---

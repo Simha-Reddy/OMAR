@@ -307,6 +307,34 @@
                 </div>
             </fieldset>
         </div>
+
+        <!-- NEW: Email Drafts Section (replaces Teams) -->
+        <div class="module-section" style="border-left: 5px solid #2b6cb0; background:#f1f6ff;">
+            <h3>Email Drafts</h3>
+            <div class="form-group">
+                <label for="emailDraftAddressInput">Your email</label>
+                <input type="email" id="emailDraftAddressInput" placeholder="firstname.lastname@va.gov">
+                <div class="button-row">
+                    <button id="saveEmailAddressBtn">Save Email</button>
+                    <span id="emailAddressStatus" style="margin-left:8px;color:green;"></span>
+                </div>
+            </div>
+            <div class="form-group">
+                <label style="display:flex;align-items:center;gap:8px;cursor:pointer;font-weight:600;">
+                    <input type="checkbox" id="toggleEmailAutoDraft" disabled>
+                    Auto-create a draft email to yourself when a clinic note is generated
+                </label>
+                <small style="color:#555;display:block;margin-top:4px;">When enabled, after a draft note is generated on the Scribe page, a draft email will be created in Outlook (desktop if available; otherwise Outlook Web will open). No email is auto-sent.</small>
+            </div>
+            <!-- NEW: Force OWA-only option -->
+            <div class="form-group">
+                <label style="display:flex;align-items:center;gap:8px;cursor:pointer;font-weight:600;">
+                    <input type="checkbox" id="toggleEmailForceOWA" disabled>
+                    Always use Outlook Web (skip desktop Outlook)
+                </label>
+                <small style="color:#555;display:block;margin-top:4px;">If checked, drafts open in Outlook Web (OWA) even on Windows. Helpful if desktop Outlook is not installed or COM access is blocked.</small>
+            </div>
+        </div>
     </div>
     <script src="/static/SessionManager.js"></script>
     <script src="/static/settings.js"></script>

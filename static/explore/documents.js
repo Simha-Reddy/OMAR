@@ -1238,7 +1238,37 @@ import { on, openDocument, EVENTS } from './state.js';
     }catch(_e){ return String(text ?? ''); }
   }
 
-  async function runNotesAsk(qOverride){
+  // New: prepend health summary to visitNotes, replacing prior summary for same patient
+  function prependHealthSummaryToVisitNotes(ans){
+    try{
+      const summary = String(ans || '').trim();
+      if(!summary) return;
+      const ta = document.getElementById('visitNotes');
+      if(!ta) return;
+      const prev = String(ta.value || '');
+      // Identify patient (name best-effort) to scope last-summary key
+      let patient = '';
+      try{ if(window.SessionManager && SessionManager.state && SessionManager.state.patient_meta && SessionManager.state.patient_meta.name){ patient = String(SessionManager.state.patient_meta.name); } }catch(_e){}
+      const KEY_SUM = 'ssva:lastHealthSummary';
+      const KEY_PAT = 'ssva:lastHealthSummaryPatient';
+      const priorSummary = String(localStorage.getItem(KEY_SUM) || '');
+      const priorPatient = String(localStorage.getItem(KEY_PAT) || '');
+      // Find first non-empty line
+      const lines = prev.split(/\r?\n/);
+      let idx = 0; while(idx < lines.length && lines[idx].trim() === '') idx++;
+      if(priorSummary && priorPatient === patient && lines[idx] && lines[idx].trim() === priorSummary.trim()){
+        // Replace existing top summary line
+        lines[idx] = summary;
+        ta.value = lines.join('\n');
+      } else {
+        ta.value = summary + (prev ? '\n' + prev : '');
+      }
+      try{ localStorage.setItem(KEY_SUM, summary); localStorage.setItem(KEY_PAT, patient); }catch(_e){}
+      try{ if(typeof SessionManager !== 'undefined' && SessionManager.saveToSession){ SessionManager.saveToSession(); } }catch(_e){}
+    }catch(_e){}
+  }
+
+  async function runNotesAsk(qOverride, opts){
     if(window._notesAskBusy){ return; }
     const askEl = document.getElementById('notesAskInput');
     const q = (qOverride != null ? String(qOverride) : (askEl && askEl.value || '')).trim();
@@ -1251,7 +1281,8 @@ import { on, openDocument, EVENTS } from './state.js';
       window._notesAskBusy = true;
       if(btn){ btn.disabled = true; btn.textContent = 'Asking…'; }
       if(status) status.textContent = 'Asking LLM over notes...';
-      if(box){ box.style.display=''; box.innerHTML=''; box.setAttribute('aria-busy','true'); }      // NEW: resolve [[...]] tokens using FHIR endpoints before sending
+      if(box){ box.style.display=''; box.innerHTML=''; box.setAttribute('aria-busy','true'); }
+      // NEW: resolve [[...]] tokens using FHIR endpoints before sending
       const qResolved = await _replaceFhirPlaceholdersInQuery(q);
       
       // Check if demo mode is enabled
@@ -1405,6 +1436,9 @@ import { on, openDocument, EVENTS } from './state.js';
       
       if(box){ box.style.display=''; box.innerHTML = answerHtml; box.removeAttribute('aria-busy'); try{ box.scrollIntoView({behavior:'smooth', block:'nearest'}); }catch(_e){} }
       if(status) status.textContent = 'Done.';
+
+      // NEW: if this was triggered as a Health Summary, prepend it to visitNotes
+      try{ if(opts && opts.isHealthSummary){ prependHealthSummaryToVisitNotes(ans); } }catch(_e){}
     } catch(err){
       console.warn('Notes QA error', err);
       const msg = (err && err.message || '').toLowerCase().includes('no patient selected') ? 'Select a patient first, then ask.' : 'Error running notes Q&A.';
@@ -2208,8 +2242,8 @@ import { on, openDocument, EVENTS } from './state.js';
           const r = await fetch('/load_health_summary_prompt', { cache: 'no-store' });
           if(!r.ok){ throw new Error('Prompt not found'); }
           const promptText = await r.text();
-          // Delegate to existing flow (runs retrieval and rendering)
-          await runNotesAsk(promptText);
+          // Delegate to existing flow (runs retrieval and rendering) with summary flag
+          await runNotesAsk(promptText, { isHealthSummary: true });
         } catch(e){
           if(status) status.textContent = 'Error: could not load summary prompt.';
         } finally {
@@ -2461,7 +2495,7 @@ import { on, openDocument, EVENTS } from './state.js';
           startAskGlow(); setHoldVisual(true); setVoiceStatus('Listening…');
           try{
             const immediate = extractNextSentence(transcript, endIdx);
-            if(immediate && immediate.length >= 3){
+            if(immediate && immediate.length >= 1){
               submitAskText(immediate);
               stopAskGlow(); setHoldVisual(false);
               VOICE_ASK.active = false; VOICE_ASK.mode = null; VOICE_ASK.startedRecording = false; VOICE_ASK.lastWakePos = -1; VOICE_ASK.baselineLen = transcript.length; VOICE_ASK.armedAt = 0;
@@ -2476,7 +2510,7 @@ import { on, openDocument, EVENTS } from './state.js';
           nextDelay = VOICE_ASK.intervalArmed;
           const startAt = Math.max(VOICE_ASK.baselineLen, VOICE_ASK.lastWakePos>=0? VOICE_ASK.lastWakePos : 0);
           const next = extractNextSentence(transcript, startAt);
-          if(next && next.length >= 3){
+          if(next && next.length >= 1){
             submitAskText(next);
             stopAskGlow(); setHoldVisual(false);
             VOICE_ASK.active = false; VOICE_ASK.mode = null; VOICE_ASK.startedRecording = false; VOICE_ASK.lastWakePos = -1; VOICE_ASK.baselineLen = transcript.length; VOICE_ASK.armedAt = 0;
@@ -2531,17 +2565,24 @@ import { on, openDocument, EVENTS } from './state.js';
     try{ await new Promise(r=>setTimeout(r, GRACE_AFTER_STOP_MS)); }catch(_e){}
 
     // Clamp baseline to current transcript length in case server trimmed text
-    try{ const st = await fetchScribeStatus(); VOICE_ASK.baselineLen = Math.min(Math.max(0, VOICE_ASK.baselineLen||0), String(st.transcript||'').length); }catch(_e){}
+    let stNow;
+    try{ stNow = await fetchScribeStatus(); VOICE_ASK.baselineLen = Math.min(Math.max(0, VOICE_ASK.baselineLen||0), String(stNow.transcript||'').length); }catch(_e){}
 
-    // Wait briefly for any trailing transcription to land, then capture
+    // Quick no-speech short-circuit: if no delta and no pending chunks, don't wait long
     let captured = '';
     try{
-      captured = await waitForFinalDelta(Math.max(0, VOICE_ASK.baselineLen||0));
-      if(captured){
-        // Prefer the first sentence; fallback to full captured
-        captured = extractNextSentence(captured, 0) || captured;
+      const deltaNow = (stNow && stNow.transcript) ? String(stNow.transcript).slice(Math.max(0, VOICE_ASK.baselineLen||0)).trim() : '';
+      const pendingNow = Number(stNow && stNow.pending_chunks || 0);
+      if(deltaNow.length === 0 && pendingNow === 0){
+        captured = '';
+      } else {
+        // Wait briefly for any trailing transcription to land, then capture
+        captured = await waitForFinalDelta(Math.max(0, VOICE_ASK.baselineLen||0));
+        if(captured){ captured = extractNextSentence(captured, 0) || captured; }
       }
     }catch(_e){}
+
+    const hasCommand = !!(captured && captured.length >= 1);
 
     // Optionally trim global transcript back to what it was before our press
     try{
@@ -2554,8 +2595,15 @@ import { on, openDocument, EVENTS } from './state.js';
     VOICE_ASK.active = false; VOICE_ASK.mode = null; VOICE_ASK.armedAt = 0; VOICE_ASK.lastWakePos = -1;
     VOICE_ASK.startedRecording = false;
 
-    // Submit after stabilization
-    if(captured && captured.length >= 3){ submitAskText(captured); }
+    // Submit or timeout messaging
+    if(hasCommand){
+      setVoiceStatus('Sent');
+      submitAskText(captured);
+    } else {
+      // Clear the lingering "Transcribing…" and indicate timeout/no speech
+      setVoiceStatus('No command heard');
+      try{ setTimeout(()=>{ try{ setVoiceStatus(''); }catch(_e){} }, 1500); }catch(_e){}
+    }
   }
 
   function install(){

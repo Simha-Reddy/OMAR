@@ -17,3 +17,5 @@ jsonschema
 # Wake word + VAD
 openwakeword
 webrtcvad
+# Windows-only: Outlook COM for draft creation (safe to install on Windows)
+pywin32

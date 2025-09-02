@@ -445,6 +445,79 @@ async function createNote() {
     // Replace [[...]] proxies with live FHIR data before displaying
     const finalNote = await replaceFhirPlaceholders(data.note || '');
     noteBox.innerText  = finalNote;
+
+    // NEW: Auto-create a draft email if enabled in Settings (replaces Teams deep link)
+    try {
+        // Hydrate from server prefs if not present in localStorage
+        try {
+            const needEmail = !localStorage.getItem('ssva:emailAddress');
+            const needAuto  = localStorage.getItem('ssva:autoDraftEmail') === null;
+            const needForce = localStorage.getItem('ssva:emailForceOWA') === null;
+            if (needEmail || needAuto || needForce) {
+                const resp0 = await fetch('/user_prefs', { cache: 'no-store' });
+                if (resp0.ok) {
+                    const prefs = await resp0.json();
+                    if (prefs && typeof prefs === 'object') {
+                        if (typeof prefs.email_address === 'string') {
+                            localStorage.setItem('ssva:emailAddress', prefs.email_address || '');
+                        }
+                        if ('auto_draft_email' in prefs) {
+                            localStorage.setItem('ssva:autoDraftEmail', prefs.auto_draft_email ? '1' : '0');
+                        }
+                        if ('email_force_owa' in prefs) {
+                            localStorage.setItem('ssva:emailForceOWA', prefs.email_force_owa ? '1' : '0');
+                        }
+                    }
+                }
+            }
+        } catch(_e) {}
+
+        const email = localStorage.getItem('ssva:emailAddress') || '';
+        const autoDraft = localStorage.getItem('ssva:autoDraftEmail') === '1';
+        const forceOWA  = localStorage.getItem('ssva:emailForceOWA') === '1';
+        if (autoDraft && email.includes('@') && finalNote && finalNote.trim()) {
+            const subject = buildNoteEmailSubject();
+            const resp = await fetch('/email/create_draft', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ to: email, subject, body: finalNote, force_owa: forceOWA })
+            });
+            const rj = await resp.json().catch(()=>({}));
+            if (rj && rj.status === 'ok') {
+                try { showToast('Draft email created in Outlook Drafts.'); } catch(_e){ alert('Draft email created in Outlook Drafts.'); }
+            } else if (rj && rj.status === 'fallback' && rj.url) {
+                // Try to avoid truncation limits in Outlook Web by copying the full note
+                let copied = false;
+                try {
+                    if (navigator.clipboard && finalNote) {
+                        await navigator.clipboard.writeText(finalNote);
+                        copied = true;
+                    }
+                } catch(_e) { copied = false; }
+
+                if (copied) {
+                    try { showToast('Full note copied. Opening Outlook Web – paste into the email body.'); } catch(_e){}
+                    // Request a clean compose link with empty body to avoid long URL truncation
+                    try {
+                        const resp2 = await fetch('/email/create_draft', {
+                            method: 'POST',
+                            headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify({ to: email, subject, body: '', force_owa: true })
+                        });
+                        const rj2 = await resp2.json().catch(()=>({}));
+                        const url = (rj2 && rj2.url) ? rj2.url : rj.url;
+                        window.open(url, '_blank', 'noopener');
+                    } catch(_e){
+                        window.open(rj.url, '_blank', 'noopener');
+                    }
+                } else {
+                    try { showToast('Opening Outlook Web to compose draft (content may be truncated).'); } catch(_e){}
+                    window.open(rj.url, '_blank', 'noopener');
+                }
+            }
+        }
+    } catch(_e) { /* ignore */ }
+
     // Autosave after feedback reply is updated
     if (typeof SessionManager !== "undefined" && SessionManager.saveToSession) {
         await SessionManager.saveToSession();
@@ -455,6 +528,35 @@ async function createNote() {
     ];
 }
 
+// Helper: quick subject with patient name/time if available
+function buildNoteEmailSubject(){
+    try{
+        const now = new Date();
+        const hh = String(now.getHours()).padStart(2,'0');
+        const mm = String(now.getMinutes()).padStart(2,'0');
+        let patient = '';
+        // Try to pull from session patient meta if present
+        // This route returns { patient_record: {...} } among other fields
+        // We'll sync call best-effort (non-blocking subject fallback)
+        // Note: keeping it simple to avoid extra async fetch here
+        if (window.SessionManager && SessionManager.state && SessionManager.state.patient_meta && SessionManager.state.patient_meta.name){
+            patient = String(SessionManager.state.patient_meta.name);
+        }
+        const tail = patient ? ` for ${patient}` : '';
+        return `Clinic note draft ${hh}:${mm}${tail}`;
+    }catch(_e){ return 'Clinic note draft'; }
+}
+
+// Lightweight toast helper (no dependency). Optional.
+function showToast(msg){
+    try{
+        const div = document.createElement('div');
+        div.textContent = msg;
+        div.style.cssText = 'position:fixed;bottom:20px;left:50%;transform:translateX(-50%);background:#323232;color:#fff;padding:10px 16px;border-radius:6px;z-index:9999;opacity:0.95;box-shadow:0 2px 8px rgba(0,0,0,0.3);';
+        document.body.appendChild(div);
+        setTimeout(()=>{ try{ document.body.removeChild(div); }catch(_e){} }, 2200);
+    }catch(_e){ alert(msg); }
+}
 
 async function submitFeedback() {
   const input    = document.getElementById("feedbackInput");

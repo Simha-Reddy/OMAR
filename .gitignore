@@ -23,5 +23,8 @@ live_transcript.txt
 chunks/
 temp_pdf/Clinical
 
+# User-specific files
+user_prefs.json
+
 # IDE/Editor workspace files
 v_3_0_SimpleScribe.code-workspace
