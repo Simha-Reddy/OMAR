@@ -12,8 +12,4 @@ numpy
 markdown
 pdfplumber
 faiss-cpu
-cryptography
 jsonschema
-# Wake word + VAD
-openwakeword
-webrtcvad

@@ -4,6 +4,7 @@ import time
 import datetime  # added for date parsing
 import xml.etree.ElementTree as ET  # for lab XML parsing
 import threading  # added: global RPC lock
+import re as _re  # for regex operations
 
 bp = Blueprint('patient', __name__)
 
@@ -406,6 +407,118 @@ def _build_lab_secondary_indexes(labs):
     summary.sort(key=_sum_sort_key, reverse=True)
     return panels, loinc_index, summary
 
+# --- Patient safety and demographics helpers ---
+
+def _fileman_to_mmddyyyy(val: str | None):
+    """Convert FileMan date (YYYMMDD[.time]) to MM/DD/YYYY for display."""
+    if not val:
+        return None
+    try:
+        s = str(val).split('.')[0]
+        if len(s) != 7 or not s.isdigit():
+            return None
+        year = 1700 + int(s[:3])
+        month = int(s[3:5])
+        day = int(s[5:7])
+        return f"{month:02d}/{day:02d}/{year:04d}"
+    except Exception:
+        return None
+
+
+def _format_ssn(raw: str | None):
+    """Normalize SSN to 555-55-5555 if 9 digits; otherwise return as-is."""
+    if not raw:
+        return None
+    s = str(raw).strip()
+    digits = ''.join(ch for ch in s if ch.isdigit())
+    if len(digits) == 9:
+        return f"{digits[0:3]}-{digits[3:5]}-{digits[5:9]}"
+    return s
+
+
+@bp.route('/vista_sensitive_check', methods=['POST'])
+def vista_sensitive_check():
+    """Pre-check a patient for sensitive record access using DG SENSITIVE RECORD ACCESS.
+    Body: { dfn: string }
+    Returns: { allowed: bool, raw: string, message: string }
+    """
+    vista_client = current_app.config.get('VISTA_CLIENT')
+    if not vista_client:
+        return jsonify({'error': 'VistA socket client not available'}), 500
+    data = request.get_json() or {}
+    dfn = (data.get('dfn') or '').strip()
+    if not dfn:
+        return jsonify({'error': 'dfn required'}), 400
+    try:
+        raw, used_ctx = _invoke_with_context(vista_client, 'DG SENSITIVE RECORD ACCESS', [dfn], CONTEXTS_ORWPT)
+        s = (raw or '').strip()
+        allowed = False
+        msg = s
+        # Typical success is "0^OK". Treat 0 at piece 1 or containing "^OK" as allowed
+        pieces = s.split('^') if s else []
+        if pieces:
+            allowed = (pieces[0].strip() == '0') or (len(pieces) > 1 and pieces[1].strip().upper() == 'OK')
+        else:
+            allowed = False
+        if allowed:
+            msg = 'OK'
+        return _nocache_json({'allowed': bool(allowed), 'raw': s, 'message': msg, 'context': used_ctx})
+    except Exception as e:
+        return jsonify({'error': f'Sensitive check failed: {e}'}), 500
+
+
+@bp.route('/vista_patient_demographics', methods=['POST'])
+def vista_patient_demographics():
+    """Fetch patient demographics using ORWPT SELECT for confirmation prior to loading.
+    Body: { dfn: string }
+    Returns: { name, sex, dobFileman, dob, ssn, ssnFormatted, raw }
+    """
+    vista_client = current_app.config.get('VISTA_CLIENT')
+    if not vista_client:
+        return jsonify({'error': 'VistA socket client not available'}), 500
+    data = request.get_json() or {}
+    dfn = (data.get('dfn') or '').strip()
+    if not dfn:
+        return jsonify({'error': 'dfn required'}), 400
+    try:
+        raw, used_ctx = _invoke_with_context(vista_client, 'ORWPT SELECT', [dfn], CONTEXTS_ORWPT)
+        line = (raw.split('\n')[0] if isinstance(raw, str) else '')
+        parts = line.split('^') if line else []
+        # Heuristic mapping: default positions commonly NAME^SEX^DOB(FM)^SSN^...
+        name = parts[0].strip() if len(parts) >= 1 else ''
+        sex = parts[1].strip() if len(parts) >= 2 else ''
+        dob_fm = parts[2].strip() if len(parts) >= 3 else ''
+        ssn_raw = parts[3].strip() if len(parts) >= 4 else ''
+        # Fallback scans if fields missing
+        if not dob_fm:
+            # look for a piece that looks like 7-digit FM date
+            for p in parts:
+                ps = p.strip()
+                if len(ps.split('.')[0]) == 7 and ps.split('.')[0].isdigit():
+                    dob_fm = ps
+                    break
+        if not ssn_raw:
+            for p in parts:
+                pd = ''.join(ch for ch in p if ch.isdigit())
+                if len(pd) == 9:
+                    ssn_raw = pd
+                    break
+        dob_fmt = _fileman_to_mmddyyyy(dob_fm)
+        ssn_fmt = _format_ssn(ssn_raw)
+        return _nocache_json({
+            'dfn': dfn,
+            'name': name,
+            'sex': sex,
+            'dobFileman': dob_fm,
+            'dob': dob_fmt,
+            'ssn': ssn_raw,
+            'ssnFormatted': ssn_fmt,
+            'raw': line,
+            'context': used_ctx
+        })
+    except Exception as e:
+        return jsonify({'error': f'Demographics retrieval failed: {e}'}), 500
+
 @bp.route('/vista_rpc', methods=['POST'])
 def vista_rpc():
     """Generic socket RPC endpoint (diagnostic). parameters: [{"string": "value"}, ...]"""
@@ -603,14 +716,36 @@ def vista_patient_search():
     except Exception:
         pass
     search_str = q.upper()
+    # Optional pagination params for All Patients
+    cursor_name = (data.get('cursor') or '').strip()  # use last returned name as cursor
+    try:
+        page_size = int(data.get('pageSize') or 50)
+        if page_size <= 0:
+            page_size = 50
+        page_size = min(page_size, 200)  # hard cap
+    except Exception:
+        page_size = 50
     if not search_str:
         return jsonify({'error': 'No search string provided'}), 400
     try:
         rpc_params = []
+        next_cursor = None
         if len(search_str) == 5 and search_str[0].isalpha() and search_str[1:].isdigit():
+            # LAST5 search (not paginated)
             rpc_name = 'ORWPT LAST5'
             rpc_params = [search_str]
+            raw, used_ctx = _invoke_with_context(vista_client, rpc_name, rpc_params, CONTEXTS_ORWPT)
+            lines = [line for line in raw.strip().split('\n') if line.strip()]
+            matches = []
+            for line in lines:
+                parts = line.split('^')
+                if len(parts) < 2 or not parts[0].strip() or not parts[1].strip():
+                    continue
+                dfn, name = parts[0].strip(), parts[1].strip()
+                matches.append({'dfn': dfn, 'name': name, 'raw': line})
+            return _nocache_json({'matches': matches, 'context': used_ctx, 'rpc': rpc_name, 'hasMore': False, 'nextCursor': None})
         else:
+            # Name search via LIST ALL with clever FROM manipulation
             if search_str:
                 last = search_str[-1]
                 if last == 'A':
@@ -619,21 +754,32 @@ def vista_patient_search():
                     new_last = chr(ord(last) - 1)
                 else:
                     new_last = last
+                # Prime FROM just before the intended prefix
                 search_mod = search_str[:-1] + new_last + '~'
             else:
                 search_mod = '~'
             rpc_name = 'ORWPT LIST ALL'
-            rpc_params = [search_mod, '1']
-        raw, used_ctx = _invoke_with_context(vista_client, rpc_name, rpc_params, CONTEXTS_ORWPT)
-        lines = [line for line in raw.strip().split('\n') if line.strip()]
-        matches = []
-        for line in lines:
-            parts = line.split('^')
-            if len(parts) < 2 or not parts[0].strip() or not parts[1].strip():
-                continue
-            dfn, name = parts[0].strip(), parts[1].strip()
-            matches.append({'dfn': dfn, 'name': name, 'raw': line})
-        return jsonify({'matches': matches, 'context': used_ctx, 'rpc': rpc_name})
+            # If a cursor is provided (the last returned name), continue from there instead
+            from_param = cursor_name + '~' if cursor_name else search_mod
+            rpc_params = [from_param, '1']
+            raw, used_ctx = _invoke_with_context(vista_client, rpc_name, rpc_params, CONTEXTS_ORWPT)
+            lines = [line for line in raw.strip().split('\n') if line.strip()]
+            # Build results then page/slice on server to reduce network
+            results_all = []
+            for line in lines:
+                parts = line.split('^')
+                if len(parts) < 2 or not parts[0].strip() or not parts[1].strip():
+                    continue
+                dfn, name = parts[0].strip(), parts[1].strip()
+                # Filter by typed prefix when applicable (server should already be close, but ensure here)
+                if not name.upper().startswith(search_str):
+                    continue
+                results_all.append({'dfn': dfn, 'name': name, 'raw': line})
+            # Apply page-size window
+            page_matches = results_all[:page_size]
+            if len(results_all) > page_size:
+                next_cursor = page_matches[-1]['name']
+            return _nocache_json({'matches': page_matches, 'context': used_ctx, 'rpc': rpc_name, 'hasMore': bool(next_cursor), 'nextCursor': next_cursor})
     except Exception as e:
         import traceback
         traceback.print_exc()
@@ -1533,3 +1679,82 @@ def document_references():
     except Exception:
         pass
     return _nocache_json({'documents': docs, 'count': len(docs)})
+
+@bp.route('/vista_default_patient_list', methods=['GET'])
+def vista_default_patient_list():
+    """Fetch user's default patient list using ORQPT DEFAULT PATIENT LIST RPC
+    Also returns minimal user identity to allow client cache invalidation on user/site change.
+    """
+    vista_client = current_app.config.get('VISTA_CLIENT')
+    if not vista_client:
+        return jsonify({'error': 'VistA socket client not available'}), 500
+    
+    try:
+        if hasattr(vista_client, 'ensure_connected'):
+            vista_client.ensure_connected()
+    except Exception as e:
+        return jsonify({'error': f'Connection not available: {e}'}), 500
+    
+    try:
+        # Use ORQPT DEFAULT PATIENT LIST to get user's default patient list
+        raw, used_ctx = _invoke_with_context(vista_client, 'ORQPT DEFAULT PATIENT LIST', [], CONTEXTS_ORWPT)
+        lines = [line for line in raw.strip().split('\n') if line.strip()]
+        patients = []
+        
+        for line in lines:
+            parts = line.split('^')
+            if len(parts) < 2 or not parts[0].strip() or not parts[1].strip():
+                continue
+            dfn, name = parts[0].strip(), parts[1].strip()
+            patient_data = {
+                'dfn': dfn, 
+                'name': name, 
+                'raw': line
+            }
+            if len(parts) > 2:
+                patient_data['clinic'] = parts[2].strip() if len(parts) > 2 else ''
+            if len(parts) > 3:
+                patient_data['date'] = parts[3].strip() if len(parts) > 3 else ''
+            patients.append(patient_data)
+        # Also fetch minimal user identity
+        user_duz = None
+        user_name = None
+        user_division = None
+        try:
+            info_raw, _ctx2 = _invoke_with_context(vista_client, 'ORWU USERINFO', [], CONTEXTS_ORWPT)
+            # Typical return: DUZ^USER NAME^...^DIVISION IEN;DIVISION NAME;STATION
+            first_line = (info_raw.split('\n')[0] if info_raw else '')
+            p = first_line.split('^') if first_line else []
+            if len(p) >= 1 and p[0].strip():
+                user_duz = p[0].strip()
+            if len(p) >= 2 and p[1].strip():
+                user_name = p[1].strip()
+            # Try to parse division from remainder
+            try:
+                if len(p) >= 3:
+                    div_part = p[-1]
+                    # Example: 500;SOME VA;500
+                    if ';' in div_part:
+                        user_division = div_part.split(';')[-1].strip()
+                    else:
+                        user_division = div_part.strip()
+            except Exception:
+                pass
+        except Exception:
+            pass
+        payload = {
+            'patients': patients,
+            'context': used_ctx,
+            'count': len(patients),
+            'timestamp': time.time(),
+            'user': {
+                'duz': user_duz,
+                'name': user_name,
+                'division': user_division
+            }
+        }
+        return _nocache_json(payload)
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        return jsonify({'error': str(e), 'rpc': 'ORQPT DEFAULT PATIENT LIST'}), 500
