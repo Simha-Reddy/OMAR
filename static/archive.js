@@ -46,23 +46,43 @@ async function restoreArchivedSession(filename) {
         const data = await resp.json();
         if (!data) return alert("Empty archive.");
 
-        const hasPatient = !!(data.patient_meta && data.patient_meta.dfn);
+        let hasPatient = !!(data.patient_meta && data.patient_meta.dfn);
         if (hasPatient) {
-            // 3a) Load patient first so server has patient_record etc.
+            const dfn = String(data.patient_meta.dfn);
+            // 3a) Sensitive record gate + preview
             try {
-                const sel = await fetch('/select_patient', {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ patient_dfn: String(data.patient_meta.dfn) })
+                const prev = await fetch('/vista_patient_select_preview', {
+                    method: 'POST', headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ dfn })
                 });
-                if (!sel.ok) {
-                    console.warn('Patient restore failed, proceeding without patient.');
+                if (prev.status === 403) {
+                    // Sensitive record: notify and skip selecting
+                    try {
+                        const body = await prev.json();
+                        alert((body && body.message) ? body.message : 'This patient record is marked sensitive and cannot be opened.');
+                    } catch(_) { alert('This patient record is marked sensitive and cannot be opened.'); }
+                    hasPatient = false;
+                } else if (!prev.ok) {
+                    console.warn('Preview failed during archive restore; proceeding without patient.');
+                    hasPatient = false;
                 } else {
-                    // Start auto-save (no new archive will be created)
-                    try { if (window.startAutoArchiveForCurrentPatient) await window.startAutoArchiveForCurrentPatient(); } catch(_e){}
+                    // OK to proceed with selection (no modal confirmation in restore flow)
+                    const sel = await fetch('/select_patient', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ patient_dfn: dfn })
+                    });
+                    if (!sel.ok) {
+                        console.warn('Patient restore failed, proceeding without patient.');
+                        hasPatient = false;
+                    } else {
+                        // Start auto-save (no new archive will be created)
+                        try { if (window.startAutoArchiveForCurrentPatient) await window.startAutoArchiveForCurrentPatient(); } catch(_e){}
+                    }
                 }
             } catch (e) {
                 console.warn('Patient restore error', e);
+                hasPatient = false;
             }
         }
 

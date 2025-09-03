@@ -1533,3 +1533,270 @@ def document_references():
     except Exception:
         pass
     return _nocache_json({'documents': docs, 'count': len(docs)})
+
+@bp.route('/vista_patient_select_preview', methods=['POST'])
+def vista_patient_select_preview():
+    """Call ORWPT SELECT to preview selection details before loading.
+    Body: { dfn: string }
+    Returns: { dfn, name, sex, dob, ssn, serviceConnected, scPercent, location, roomBed, context, raw }
+    Does not persist anything; strictly for confirmation UI.
+    Before calling ORWPT SELECT, checks DG SENSITIVE RECORD ACCESS and blocks if not 0^OK.
+    """
+    vista_client = current_app.config.get('VISTA_CLIENT')
+    if not vista_client:
+        return jsonify({'error': 'VistA socket client not available'}), 500
+    data = request.get_json() or {}
+    dfn = (data.get('dfn') or '').strip()
+    if not dfn:
+        return jsonify({'error': 'dfn required'}), 400
+
+    # Ensure connection alive
+    try:
+        if hasattr(vista_client, 'ensure_connected'):
+            vista_client.ensure_connected()
+    except Exception as e:
+        return jsonify({'error': f'Connection not available: {e}'}), 500
+
+    # First: Sensitive record check
+    try:
+        sens_raw, sens_ctx = _invoke_with_context(vista_client, 'DG SENSITIVE RECORD ACCESS', [dfn], CONTEXTS_ORWPT)
+        sens_line = (sens_raw or '').strip().splitlines()[0] if sens_raw else ''
+        # If not explicitly 0^OK, block selection
+        is_ok = False
+        if sens_line:
+            parts = sens_line.split('^')
+            if parts and parts[0].strip() == '0':
+                is_ok = True
+        if not is_ok:
+            payload = {'dfn': dfn, 'sensitive': True, 'message': sens_line or 'Sensitive record. Access denied.', 'context': sens_ctx}
+            resp = _nocache_json(payload)
+            try:
+                resp.status_code = 403
+            except Exception:
+                pass
+            return resp
+    except Exception as e:
+        # If the sensitive check itself fails, be safe and block
+        payload = {'dfn': dfn, 'sensitive': True, 'message': f'Sensitive check failed: {e}', 'context': None}
+        resp = _nocache_json(payload)
+        try:
+            resp.status_code = 403
+        except Exception:
+            pass
+        return resp
+
+    # If OK, proceed to ORWPT SELECT for preview
+    try:
+        raw, used_ctx = _invoke_with_context(vista_client, 'ORWPT SELECT', [dfn], CONTEXTS_ORWPT)
+        # ORWPT SELECT returns caret-delimited: 0=NAME, 1=SEX, 2=DOB (FileMan), 3=SSN, ...
+        line = (raw or '').strip().splitlines()[0] if raw else ''
+        parts = line.split('^') if line else []
+        def _p(idx):
+            try:
+                return (parts[idx] or '').strip()
+            except Exception:
+                return ''
+        def _fm_to_mmddyyyy(fm: str) -> str:
+            try:
+                if not fm:
+                    return ''
+                fm_str = str(fm).split('.')[0]
+                if not fm_str.isdigit():
+                    return ''
+                n = int(fm_str)
+                y = n // 10000
+                m = (n % 10000) // 100
+                d = n % 100
+                year = y + 1700
+                if m < 1 or m > 12 or d < 1 or d > 31:
+                    return ''
+                return f"{m:02d}/{d:02d}/{year:04d}"
+            except Exception:
+                return ''
+        def _fmt_ssn(s: str) -> str:
+            try:
+                digits = ''.join(ch for ch in (s or '') if ch.isdigit())
+                if len(digits) == 9:
+                    return f"{digits[0:3]}-{digits[3:5]}-{digits[5:9]}"
+                return s or ''
+            except Exception:
+                return s or ''
+
+        name = _p(0)
+        sex = _p(1)
+        dob_fm = _p(2)
+        ssn_raw = _p(3)
+        payload = {
+            'dfn': dfn,
+            'name': name,
+            'sex': sex,
+            'dob': _fm_to_mmddyyyy(dob_fm),
+            'ssn': _fmt_ssn(ssn_raw),
+            'serviceConnected': _p(4),
+            'scPercent': _p(5),
+            'location': _p(6),
+            'roomBed': _p(7),
+            'context': used_ctx,
+            'raw': raw
+        }
+        return _nocache_json(payload)
+    except Exception as e:
+        return jsonify({'error': str(e), 'dfn': dfn}), 500
+
+@bp.route('/vista_default_patient_list', methods=['GET'])
+def vista_default_patient_list():
+    """Return the user's default patient list via ORQPT DEFAULT PATIENT LIST.
+    Preserves server order. Cached in server session for the duration of the session.
+    Response: { matches:[{dfn,name,raw}], cached: bool, context, rpc }
+    """
+    vista_client = current_app.config.get('VISTA_CLIENT')
+    if not vista_client:
+        return jsonify({'error': 'VistA socket client not available'}), 500
+
+    # Return from session cache if available
+    try:
+        cache = session.get('default_patient_list_cache') or {}
+        if cache and isinstance(cache, dict) and isinstance(cache.get('matches'), list):
+            payload = {
+                'matches': cache.get('matches', []),
+                'cached': True,
+                'context': cache.get('context'),
+                'rpc': 'ORQPT DEFAULT PATIENT LIST'
+            }
+            return _nocache_json(payload)
+    except Exception:
+        pass
+
+    # Fetch fresh
+    try:
+        raw, used_ctx = _invoke_with_context(vista_client, 'ORQPT DEFAULT PATIENT LIST', [], CONTEXTS_ORWPT)
+        lines = [ln for ln in (raw or '').split('\n') if ln.strip()]
+        matches = []
+        for ln in lines:
+            parts = ln.split('^')
+            if len(parts) >= 2 and parts[0].strip() and parts[1].strip():
+                matches.append({'dfn': parts[0].strip(), 'name': parts[1].strip(), 'raw': ln})
+        # Cache in server session (no PHI persisted beyond session)
+        try:
+            session['default_patient_list_cache'] = {
+                'matches': matches,
+                'context': used_ctx,
+                'ts': time.time(),
+            }
+        except Exception:
+            pass
+        payload = {'matches': matches, 'cached': False, 'context': used_ctx, 'rpc': 'ORQPT DEFAULT PATIENT LIST'}
+        return _nocache_json(payload)
+    except Exception as e:
+        import traceback; traceback.print_exc()
+        return jsonify({'error': str(e), 'rpc': 'ORQPT DEFAULT PATIENT LIST'}), 500
+
+
+@bp.route('/vista_patient_browse', methods=['POST'])
+def vista_patient_browse():
+    """Browse the full patient list alphabetically using ORWPT LIST ALL.
+    Body: { cursor: string (last returned name or ''), limit: int }
+    Returns: { matches:[{dfn,name,raw}], next_cursor: string, context, rpc }
+    """
+    data = request.get_json() or {}
+    cursor = (data.get('cursor') or '').strip()
+    try:
+        limit = int(data.get('limit') or 50)
+    except Exception:
+        limit = 50
+    # Clamp reasonable bounds
+    if limit < 1:
+        limit = 1
+    if limit > 200:
+        limit = 200
+
+    vista_client = current_app.config.get('VISTA_CLIENT')
+    if not vista_client:
+        return jsonify({'error': 'VistA socket client not available'}), 500
+
+    def _start_after(name: str) -> str:
+        # Compute a search seed just before the desired name, then append '~'
+        if not name:
+            return '~'
+        last = name[-1]
+        if last == 'A':
+            new_last = '@'
+        elif last.isalpha():
+            new_last = chr(ord(last) - 1)
+        else:
+            new_last = last
+        return name[:-1] + new_last + '~'
+
+    try:
+        seed = _start_after(cursor)
+        raw, used_ctx = _invoke_with_context(vista_client, 'ORWPT LIST ALL', [seed, '1'], CONTEXTS_ORWPT)
+        lines = [ln for ln in (raw or '').split('\n') if ln.strip()]
+        # Filter strictly after the cursor to avoid duplicate first item
+        cur_key = cursor.casefold()
+        matches = []
+        for ln in lines:
+            parts = ln.split('^')
+            if len(parts) < 2:
+                continue
+            dfn = parts[0].strip()
+            name = parts[1].strip()
+            if not dfn or not name:
+                continue
+            if cursor and name.casefold() <= cur_key:
+                continue
+            matches.append({'dfn': dfn, 'name': name, 'raw': ln})
+            if len(matches) >= limit:
+                break
+        next_cursor = matches[-1]['name'] if matches else cursor
+        payload = {
+            'matches': matches,
+            'next_cursor': next_cursor,
+            'context': used_ctx,
+            'rpc': 'ORWPT LIST ALL'
+        }
+        return _nocache_json(payload)
+    except Exception as e:
+        import traceback; traceback.print_exc()
+        return jsonify({'error': str(e), 'rpc': 'ORWPT LIST ALL'}), 500
+
+
+@bp.route('/vista_patient_demographics', methods=['POST'])
+def vista_patient_demographics():
+    """Minimal demographics fallback via ORWPT PTINQ.
+    Body: { dfn: string, fallback_name?: string }
+    Returns: { dfn, name?, ssn?, dob?, sex?, context, raw }
+    """
+    data = request.get_json() or {}
+    dfn = (data.get('dfn') or '').strip()
+    fallback_name = (data.get('fallback_name') or '').strip()
+    if not dfn:
+        return jsonify({'error': 'dfn required'}), 400
+    vista_client = current_app.config.get('VISTA_CLIENT')
+    if not vista_client:
+        return jsonify({'error': 'VistA socket client not available'}), 500
+    try:
+        raw, used_ctx = _invoke_with_context(vista_client, 'ORWPT PTINQ', [dfn], CONTEXTS_ORWPT)
+        # Parse simple FIELD^VALUE lines for NAME, DOB, SSN, SEX
+        name = fallback_name
+        dob = ''
+        ssn = ''
+        sex = ''
+        for ln in (raw or '').split('\n'):
+            ln = ln.strip()
+            if not ln or '^' not in ln:
+                continue
+            k, *vals = [p.strip() for p in ln.split('^')]
+            key = k.upper()
+            val = vals[0] if vals else ''
+            if key in ('NAME', 'PATIENT NAME') and val:
+                name = val
+            elif key in ('DOB', 'DATE OF BIRTH') and val:
+                dob = val
+            elif key in ('SSN', 'SOCIAL SECURITY NUMBER') and val:
+                ssn = val
+            elif key in ('SEX', 'GENDER') and val:
+                sex = val
+        payload = {'dfn': dfn, 'name': name, 'dob': dob, 'ssn': ssn, 'sex': sex, 'context': used_ctx, 'raw': raw}
+        return _nocache_json(payload)
+    except Exception as e:
+        return jsonify({'error': str(e), 'dfn': dfn}), 500
