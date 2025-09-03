@@ -1599,6 +1599,43 @@ select {
   align-items: center;
   justify-content: center;
   aspect-ratio: 1 / 1; /* equal square hit areas */
+  
+  /* Enhanced touch responsiveness for mobile buttons */
+  /* Disable text selection and highlight on touch */
+  -webkit-user-select: none;
+  -moz-user-select: none;
+  -ms-user-select: none;
+  user-select: none;
+  
+  /* Disable callout on iOS Safari */
+  -webkit-touch-callout: none;
+  
+  /* Prevent iOS zoom on double-tap */
+  touch-action: manipulation;
+  
+  /* Improve touch target size for accessibility */
+  min-width: 44px;
+  min-height: 44px;
+  
+  /* Smooth transitions for visual feedback */
+  transition: transform 0.1s ease, opacity 0.1s ease;
+}
+
+/* Visual feedback for active touch state */
+.mobile-row-buttons .circle-btn:active {
+  transform: scale(0.95);
+  opacity: 0.8;
+}
+
+/* Prevent unwanted text selection on touch */
+.mobile-row-buttons .circle-btn *,
+.mobile-row-buttons .circle-btn img {
+  -webkit-user-select: none;
+  -moz-user-select: none;
+  -ms-user-select: none;
+  user-select: none;
+  -webkit-touch-callout: none;
+  pointer-events: none; /* Let touch events bubble to button */
 }
 .mobile-row-buttons .circle-btn img {
   display: block;

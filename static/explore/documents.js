@@ -1170,7 +1170,80 @@ import { on, openDocument, EVENTS } from './state.js';
   }
 
   // Safe no-op for table keyword filter pipeline used by Clear button
-  function applyAllFilters(){ /* future: implement table-wide filters keyed by docsKeywordInput */ }
+  function applyAllFilters(){ /* future: implement table-wide filters keyed by docsKeywordInput */ }  // --- Notes Ask Request Management (Race Condition Prevention) ---
+  let notesAskRequestId = 0; // Monotonic counter for request deduplication
+  let notesAskAbortController = null; // Current in-flight request controller
+  let notesAskLastQuery = ''; // Last submitted query for deduplication
+  let notesAskLastQueryTime = 0; // Timestamp of last query for time-based deduplication
+  let notesAskDebounceTimer = null; // Debounce timer for voice submissions
+  
+  // Normalize query text consistently for both voice and typed submissions
+  function normalizeQuery(text) {
+    if (!text) return '';
+    return String(text).trim().replace(/\s+/g, ' ');
+  }
+  
+  // Central submission point with race condition protection
+  async function submitNotesAsk(queryText, options = {}) {
+    const { source = 'unknown', debounceMs = 0 } = options;
+    const normalized = normalizeQuery(queryText);
+    const requestId = ++notesAskRequestId;
+    
+    console.log(`[Notes QA] Submit attempt - ID: ${requestId}, source: ${source}, text: "${normalized.slice(0, 50)}..."`);
+    
+    if (!normalized) {
+      console.log(`[Notes QA] Empty query - ID: ${requestId}, skipping`);
+      return;
+    }
+      // Check if already busy
+    if (window._notesAskBusy) {
+      console.log(`[Notes QA] Busy guard hit - ID: ${requestId}, dropping submission`);
+      return;
+    }
+    
+    // Deduplicate identical queries within a short time window (2 seconds)
+    // This prevents rapid duplicate submissions while allowing intentional re-asks
+    const now = Date.now();
+    const timeSinceLastQuery = now - notesAskLastQueryTime;
+    if (normalized === notesAskLastQuery && timeSinceLastQuery < 2000) {
+      console.log(`[Notes QA] Duplicate query detected within ${timeSinceLastQuery}ms - ID: ${requestId}, skipping: "${normalized.slice(0, 50)}..."`);
+      return;
+    }
+    
+    // Handle debouncing for voice submissions
+    if (debounceMs > 0) {
+      if (notesAskDebounceTimer) {
+        clearTimeout(notesAskDebounceTimer);
+      }
+      
+      return new Promise((resolve) => {
+        notesAskDebounceTimer = setTimeout(() => {
+          notesAskDebounceTimer = null;
+          resolve(submitNotesAsk(queryText, { ...options, debounceMs: 0 }));
+        }, debounceMs);
+      });
+    }
+    
+    // Abort any existing request
+    if (notesAskAbortController) {
+      console.log(`[Notes QA] Aborting previous request - ID: ${requestId}`);
+      notesAskAbortController.abort();
+    }
+      // Create new abort controller for this request
+    notesAskAbortController = new AbortController();
+    notesAskLastQuery = normalized;
+    notesAskLastQueryTime = now;
+    
+    try {
+      await runNotesAskInternal(normalized, requestId, notesAskAbortController.signal);
+    } catch (error) {
+      if (error.name === 'AbortError') {
+        console.log(`[Notes QA] Request aborted - ID: ${requestId}`);
+      } else {
+        console.error(`[Notes QA] Request failed - ID: ${requestId}:`, error);
+      }
+    }
+  }
 
   // --- FHIR [[...]] token resolution for Notes Ask ---
   async function _getPatientMetaOnce(){
@@ -1238,45 +1311,77 @@ import { on, openDocument, EVENTS } from './state.js';
     }catch(_e){ return String(text ?? ''); }
   }
 
-  async function runNotesAsk(qOverride){
-    if(window._notesAskBusy){ return; }
+  async function runNotesAskInternal(queryText, requestId, abortSignal) {
+    console.log(`[Notes QA] Starting request - ID: ${requestId}, query: "${queryText.slice(0, 50)}..."`);
+    
     const askEl = document.getElementById('notesAskInput');
-    const q = (qOverride != null ? String(qOverride) : (askEl && askEl.value || '')).trim();
-    if(!q) return;
     const status = document.getElementById('docsStatus');
     const box = document.getElementById('notesAnswerBox');
     const btn = document.getElementById('notesAskBtn');
     const prevBtnText = btn ? btn.textContent : '';
-    try{
+    
+    try {
       window._notesAskBusy = true;
-      if(btn){ btn.disabled = true; btn.textContent = 'Asking…'; }
-      if(status) status.textContent = 'Asking LLM over notes...';
-      if(box){ box.style.display=''; box.innerHTML=''; box.setAttribute('aria-busy','true'); }      // NEW: resolve [[...]] tokens using FHIR endpoints before sending
-      const qResolved = await _replaceFhirPlaceholdersInQuery(q);
+      if (btn) { btn.disabled = true; btn.textContent = 'Asking…'; }
+      if (status) status.textContent = 'Asking LLM over notes...';
+      if (box) { box.style.display = ''; box.innerHTML = ''; box.setAttribute('aria-busy', 'true'); }
+      
+      // Update input to show normalized query
+      if (askEl) askEl.value = queryText;
+      
+      // Check for abort before continuing
+      if (abortSignal.aborted) {
+        throw new Error('AbortError');
+      }
+      
+      // Resolve [[...]] tokens using FHIR endpoints before sending
+      const qResolved = await _replaceFhirPlaceholdersInQuery(queryText);
+      
+      // Check for abort after async operation
+      if (abortSignal.aborted) {
+        throw new Error('AbortError');
+      }
       
       // Check if demo mode is enabled
       const demoMode = window.demoMasking && window.demoMasking.enabled;
       
       const res = await fetch('/explore/notes_qa', { 
-        method:'POST', 
-        headers:{'Content-Type':'application/json'}, 
+        method: 'POST', 
+        headers: { 'Content-Type': 'application/json' }, 
         body: JSON.stringify({ 
           query: qResolved, 
           top_k: 8,
           demo_mode: demoMode 
-        }) 
+        }),
+        signal: abortSignal
       });
+      
+      // Check if this response is still current
+      if (requestId !== notesAskRequestId) {
+        console.log(`[Notes QA] Stale response dropped - ID: ${requestId}, current: ${notesAskRequestId}`);
+        return;
+      }
+      
       let j = {};
       try { j = await res.json(); } catch(_e) { j = {}; }
-      if(!res.ok || j.error){
+      if (!res.ok || j.error) {
         const msg = (j && j.error) || `Request failed (${res.status})`;
         throw new Error(msg);
       }
-      try { console.log('[Notes QA Response]', j); } catch(_e){}
+      
+      // Final check for staleness before updating UI
+      if (requestId !== notesAskRequestId) {
+        console.log(`[Notes QA] Stale response dropped after parsing - ID: ${requestId}, current: ${notesAskRequestId}`);
+        return;
+      }
+      
+      console.log(`[Notes QA] Response received - ID: ${requestId}`, j);
+      
       const ans = j.answer || '';
       const matches = j.matches || [];
       try { window.lastNotesQAMatches = matches; } catch(_e) {}
       const esc = s => String(s ?? '').replace(/[&<>]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;'}[c] || ''));
+      
       // Answer text -> Markdown (keep same container/background)
       let answerHtml = (window.marked && typeof window.marked.parse === 'function') ? window.marked.parse(String(ans)) : esc(ans).replace(/\n/g,'<br>');
 
@@ -1392,7 +1497,8 @@ import { on, openDocument, EVENTS } from './state.js';
         if(cites.length){
           const citesHtml = `<div class="notes-citations" style="margin-top:6px; font-size:0.95em; color:#444;">Sources: ${cites.join(' ')}</div>`;
           answerHtml = `<div class="notes-answer">${answerHtml}</div>` + citesHtml;
-        }      }
+        }
+      }
       
       // Apply demo masking to the final answer HTML if enabled
       if (window.demoMasking && window.demoMasking.enabled) {
@@ -1403,20 +1509,58 @@ import { on, openDocument, EVENTS } from './state.js';
         answerHtml = window.demoMasking.maskApiResponse(answerHtml);
       }
       
-      if(box){ box.style.display=''; box.innerHTML = answerHtml; box.removeAttribute('aria-busy'); try{ box.scrollIntoView({behavior:'smooth', block:'nearest'}); }catch(_e){} }
-      if(status) status.textContent = 'Done.';
-    } catch(err){
-      console.warn('Notes QA error', err);
+      // Final staleness check before updating UI
+      if (requestId !== notesAskRequestId) {
+        console.log(`[Notes QA] Stale response dropped before UI update - ID: ${requestId}, current: ${notesAskRequestId}`);
+        return;
+      }
+      
+      if (box) { 
+        box.style.display = ''; 
+        box.innerHTML = answerHtml; 
+        box.removeAttribute('aria-busy'); 
+        try { box.scrollIntoView({behavior:'smooth', block:'nearest'}); } catch(_e) {}
+      }
+      if (status) status.textContent = 'Done.';
+      
+      console.log(`[Notes QA] Completed - ID: ${requestId}`);
+      
+    } catch (err) {
+      if (err.name === 'AbortError' || (err.message && err.message.includes('AbortError'))) {
+        console.log(`[Notes QA] Aborted - ID: ${requestId}`);
+        return; // Don't update UI for aborted requests
+      }
+      
+      console.warn(`[Notes QA] Error - ID: ${requestId}:`, err);
       const msg = (err && err.message || '').toLowerCase().includes('no patient selected') ? 'Select a patient first, then ask.' : 'Error running notes Q&A.';
-      if(status) status.textContent = msg;
-      if(box){ box.style.display=''; box.innerHTML = `<em style="color:#b91c1c;">${msg}</em>`; box.removeAttribute('aria-busy'); }
+      if (status) status.textContent = msg;
+      if (box) { 
+        box.style.display = ''; 
+        box.innerHTML = `<em style="color:#b91c1c;">${msg}</em>`; 
+        box.removeAttribute('aria-busy'); 
+      }
     } finally {
-      if(btn){ btn.disabled = false; btn.textContent = prevBtnText || 'Ask'; }
+      if (btn) { btn.disabled = false; btn.textContent = prevBtnText || 'Ask'; }
       window._notesAskBusy = false;
+      
+      // Clear abort controller if this was the current request
+      if (notesAskAbortController && !notesAskAbortController.signal.aborted) {
+        notesAskAbortController = null;
+      }
     }
+  }  async function runNotesAsk(qOverride){
+    const askEl = document.getElementById('notesAskInput');
+    // Fix: ignore event objects passed as qOverride from event handlers
+    const isEvent = qOverride && typeof qOverride === 'object' && ('type' in qOverride || 'target' in qOverride);
+    const q = (!isEvent && qOverride != null ? String(qOverride) : (askEl && askEl.value || '')).trim();
+    if (!q) return;
+    
+    // Route through centralized submission to prevent race conditions
+    await submitNotesAsk(q, { source: 'button_or_enter' });
   }
-  // Expose globally so voice-ask can call directly
+    // Expose globally so voice-ask can call directly
   try { window.runNotesAsk = runNotesAsk; } catch(_e){}
+  try { window.submitNotesAsk = submitNotesAsk; } catch(_e){}
 
   function init(){
     const container = document.getElementById('documentsTable');
@@ -2395,13 +2539,17 @@ import { on, openDocument, EVENTS } from './state.js';
   }
 
   function submitAskText(text){
-    const askEl = document.getElementById('notesAskInput');
-    if(!askEl) return;
-    askEl.value = String(text||'').trim();
+    const trimmed = String(text || '').trim();
+    if (!trimmed) return;
+    
     // Clear any transient voice status (e.g., "Transcribing…") once the query appears
-    try{ const s = document.getElementById('notesAskVoiceStatus'); if(s) s.textContent = ''; }catch(_e){}
-    if(typeof window.runNotesAsk === 'function') { try{ window.runNotesAsk(); return; }catch(_e){} }
-    try{ const b=document.getElementById('notesAskBtn'); if(b){ b.click(); return; } }catch(__){}
+    try { 
+      const s = document.getElementById('notesAskVoiceStatus'); 
+      if (s) s.textContent = ''; 
+    } catch(_e) {}
+    
+    // Route through centralized submission with debouncing for voice (200ms default)
+    submitNotesAsk(trimmed, { source: 'voice', debounceMs: 200 });
   }
 
   function extractNextSentence(fromText, startIdx){
@@ -2557,26 +2705,67 @@ import { on, openDocument, EVENTS } from './state.js';
     // Submit after stabilization
     if(captured && captured.length >= 3){ submitAskText(captured); }
   }
-
   function install(){
     try{
       const mic = document.getElementById('notesAskMicBtn');
       if(mic && !mic._voiceAskBound){
         mic._voiceAskBound = true;
-        // Pointer-based binding (covers mouse, pen, touch)
-        mic.addEventListener('pointerdown', (e)=>{
+        
+        // Enhanced mobile touch support for better iPhone/remote desktop compatibility
+        let touchHandled = false;
+        let touchActive = false;
+        
+        // Touch events for mobile devices (preferred for touch interfaces)
+        mic.addEventListener('touchstart', (e) => {
+          e.preventDefault(); // Prevent default touch behavior
+          touchHandled = true;
+          touchActive = true;
+          console.log('Hey Omar button touchstart');
+          VOICE_ASK.pointerActive = true;
+          onAskMicPressStart(e);
+        }, { passive: false });
+        
+        mic.addEventListener('touchend', (e) => {
+          e.preventDefault(); // Prevent default touch behavior and subsequent click
+          if (touchActive) {
+            console.log('Hey Omar button touchend');
+            touchActive = false;
+            VOICE_ASK.pointerActive = false;
+            onAskMicPressEnd(e);
+          }
+          setTimeout(() => { touchHandled = false; }, 100); // Reset after brief delay
+        }, { passive: false });
+        
+        mic.addEventListener('touchcancel', (e) => {
+          console.log('Hey Omar button touchcancel');
+          if (touchActive) {
+            touchActive = false;
+            VOICE_ASK.pointerActive = false;
+            onAskMicPressEnd(e);
+          }
+          touchHandled = false;
+        }, { passive: false });
+        
+        // Pointer-based binding (covers mouse, pen) - only if touch didn't handle it
+        mic.addEventListener('pointerdown', (e) => {
+          if (touchHandled) return; // Skip if touch already handled
+          
           try{ mic.setPointerCapture && mic.setPointerCapture(e.pointerId); }catch(_e){}
           VOICE_ASK.pointerActive = true;
           onAskMicPressStart(e);
         });
-        const end = (e)=>{
-          if(!VOICE_ASK.pointerActive) return;
+        
+        const end = (e) => {
+          if (touchHandled) return; // Skip if touch already handled
+          if (!VOICE_ASK.pointerActive) return;
           VOICE_ASK.pointerActive = false;
           onAskMicPressEnd(e);
         };
+        
         mic.addEventListener('pointerup', end);
         mic.addEventListener('pointercancel', end);
         mic.addEventListener('lostpointercapture', end);
+        
         // Keyboard fallback (Space/Enter)
         mic.tabIndex = mic.tabIndex || 0;
         mic.addEventListener('keydown', (e)=>{

@@ -259,7 +259,41 @@ document.addEventListener("DOMContentLoaded", async () => {
     if (btn) {
         const isRecording = await getRecordingStatus();
         setRecordBtnState(isRecording);
-        btn.onclick = toggleRecording;
+        
+        // Enhanced mobile touch support for better iPhone/remote desktop compatibility
+        let touchHandled = false;
+        
+        // Touch events for mobile devices (preferred for touch interfaces)
+        btn.addEventListener('touchstart', (e) => {
+            e.preventDefault(); // Prevent default touch behavior
+            touchHandled = true;
+            console.log('Record button touchstart');
+        }, { passive: false });
+        
+        btn.addEventListener('touchend', async (e) => {
+            e.preventDefault(); // Prevent default touch behavior and subsequent click
+            if (touchHandled) {
+                console.log('Record button touchend - triggering toggle');
+                await toggleRecording();
+                touchHandled = false;
+            }
+        }, { passive: false });
+        
+        // Fallback click handler for desktop/non-touch devices
+        btn.addEventListener('click', async (e) => {
+            // Only handle click if touch didn't already handle it
+            if (!touchHandled) {
+                console.log('Record button click - triggering toggle');
+                await toggleRecording();
+            }
+            touchHandled = false; // Reset flag
+        });
+        
+        // Handle touch cancel (e.g., finger dragged off button)
+        btn.addEventListener('touchcancel', (e) => {
+            touchHandled = false;
+            console.log('Record button touchcancel');
+        });
     }
 
     // Remove any redundant session restoration logic
