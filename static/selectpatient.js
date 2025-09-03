@@ -344,12 +344,8 @@ document.addEventListener("DOMContentLoaded", () => {
         return String(s||'').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;','\'':'&#39;'}[c]));
     }
     function highlight(text, query){
-        const t = String(text||'');
-        const q = String(query||'').trim();
-        if (!q) return escapeHtml(t);
-        const idx = t.toUpperCase().indexOf(q.toUpperCase());
-        if (idx === -1) return escapeHtml(t);
-        return escapeHtml(t.slice(0, idx)) + '<mark>' + escapeHtml(t.slice(idx+q.length)) + '<\/mark>' + escapeHtml(t.slice(idx+q.length));
+        // Highlighting removed per request: always return plain escaped text
+        return escapeHtml(String(text || ''));
     }
 
     function cleanupDropdown(){ if (dropdown) { dropdown.remove(); dropdown = null; searchInput.setAttribute('aria-expanded','false'); } currentItemsFlat=[]; currentIndex=-1; }
