@@ -131,7 +131,6 @@ CONTEXTS_SDES = ['SDECRPC', 'JLV WEB SERVICES']
 # Add TIU contexts for document/note retrieval
 CONTEXTS_TIU = [
     'OR CPRS GUI CHART',
-    'TIU TEMPLATE',  # may or may not exist; harmless if fails
     'JLV WEB SERVICES'
 ]
 
