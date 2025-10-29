@@ -1,0 +1,285 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>OMAR Platform Enhancement Proposal — Clinician Perspective (Clean)</title>
+  <style>
+    :root {
+      --va-primary: #3a6685;
+      --va-primary-dark: #2f526b;
+      --va-contrast: #ffffff;
+      --link: #1a4480;
+      --link-hover: #125ea2;
+      --highlight: #ffe066;
+      --manila: #FFF3CD;
+      --text-strong: #222;
+      --text: #333;
+      --text-muted: #555;
+      --border: #d1d5db;
+      --paper: #fff;
+      --bg: #f6f8fa;
+    }
+    @page { size: Letter; margin: 0.4in; }
+    html, body { height: 100%; }
+    body {
+      margin: 0; font-family: "Segoe UI", -apple-system, BlinkMacSystemFont, Roboto, "Noto Sans", "Helvetica Neue", Arial, sans-serif;
+      color: var(--text);
+      background: var(--bg);
+    }
+    .page {
+      max-width: 900px; margin: 24px auto; background: var(--paper); border: 1px solid var(--border);
+      border-radius: 12px; box-shadow: 0 8px 20px rgba(0,0,0,0.06); overflow: hidden;
+    }
+    .header {
+      background: var(--va-primary); color: var(--va-contrast); padding: 18px 26px; display: flex; align-items: center; justify-content: space-between;
+    }
+    .header .logo { display: flex; flex-direction: column; align-items: flex-start; }
+    .header .logo .name { color: var(--manila); font-weight: 900; letter-spacing: 0.6px; font-size: 2rem; line-height: 1; text-shadow: 0 2px 3px rgba(0,0,0,0.22); }
+    .header .logo .subtitle { color: var(--manila); font-weight: 600; font-size: 0.9rem; opacity: 0.95; margin-top: 2px; }
+    .header .tagline { font-weight: 700; font-size: 1rem; color: var(--va-contrast); text-align: right; max-width: 60%; }
+    .content { padding: 20px 26px 24px 26px; }
+    h2 { color: var(--va-primary-dark); margin: 16px 0 8px 0; font-size: 1.05rem; border-bottom: 2px solid var(--va-primary-dark); padding-bottom: 4px; }
+    h3 { color: var(--va-primary-dark); margin: 10px 0 6px 0; font-size: 1rem; }
+    ul { margin: 8px 0 12px 22px; }
+    li { margin: 4px 0; }
+    .two-col { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
+    .one-col { display: block; }
+    .note { background: #fff8dd; border-left: 4px solid var(--highlight); padding: 10px 12px; border-radius: 6px; font-size: 0.95rem; color: #4a4a4a; }
+    .callout { background: #eef6ff; border-left: 4px solid #64a1ff; padding: 10px 12px; border-radius: 6px; font-size: 0.95rem; color: #334; }
+    a { color: var(--link); text-decoration: underline; }
+    a:hover { color: var(--link-hover); }
+    .footer { padding: 14px 26px 18px; font-size: 0.9rem; color: #666; border-top: 1px solid var(--border); }
+    .pill { background: #e0f3ff; color: #0d416b; font-weight: 600; padding: 2px 8px; border-radius: 999px; display: inline-block; font-size: 0.85rem; }
+    table { width: 100%; border-collapse: collapse; margin: 12px 0; }
+    th, td { border: 1px solid #e5e7eb; padding: 10px; text-align: left; }
+    th { background: #f3f4f6; }
+
+    /* Phase cards */
+  .cards { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; align-items: start; }
+  .cards > .col-left, .cards > .col-right { display: grid; gap: 16px; align-content: start; }
+  .cards > .col-left { grid-column: 1; }
+  .cards > .col-right { grid-column: 2; }
+    .card { background: var(--paper); border: 1px solid var(--border); border-radius: 10px; padding: 14px 16px; box-shadow: 0 2px 8px rgba(0,0,0,0.04); }
+    .card h3 { margin: 0 0 6px 0; color: var(--va-primary-dark); font-size: 1rem; }
+    .card ul { margin-left: 18px; }
+    .card p { margin: 4px 0 8px 0; }
+    .card p:last-child { margin-bottom: 0; }
+    .card.span-2 { grid-column: 1 / -1; }
+  /* no span-2 to keep predictable flow in column-major layout */
+  .card h4 { margin: 8px 0 4px 0; font-size: 0.95rem; color: var(--va-primary-dark); }
+  .subhead { display: flex; align-items: center; gap: 8px; border-left: 3px solid var(--va-primary-dark); padding-left: 8px; }
+  .pill.parallel { background: #ffe7a3; color: #6b4f00; border: 1px solid #f2d07d; }
+
+    @media print {
+      html, body { height: auto; }
+      body { background: #ffffff; font-size: 9.8pt; -webkit-print-color-adjust: exact; print-color-adjust: exact; line-height: 1.35; }
+      .page { width: 100%; max-width: none; margin: 0; box-shadow: none; border: none; border-radius: 0; }
+      .header { padding: 10px 14px; }
+      .header .logo .name { font-size: 1.5rem; }
+      .header .logo .subtitle { font-size: 0.75rem; }
+      .header .tagline { font-size: 0.9rem; max-width: 58%; }
+      .content { padding: 0.03in 0; }
+      .two-col { grid-template-columns: 1fr 1fr; gap: 6px; }
+  .cards { grid-template-columns: 1fr 1fr; gap: 6px; }
+  .cards > .col-left, .cards > .col-right { gap: 6px; }
+  .card.span-2 { grid-column: 1 / -1; }
+      .card { box-shadow: none; border: 1px solid #cdd6df; padding: 8px 10px; break-inside: avoid; page-break-inside: avoid; }
+      h2 { font-size: 0.9rem; margin: 6px 0 3px 0; border-bottom: 1px solid var(--va-primary-dark); padding-bottom: 2px; }
+      .card h3 { font-size: 0.95rem; }
+      .card h4 { font-size: 0.9rem; }
+      ul { margin: 3px 0 5px 14px; }
+      li { margin: 1px 0; }
+      .note { font-size: 0.8rem; padding: 5px 7px; border-left-width: 3px; }
+      a { color: inherit; text-decoration: none; }
+      table, .callout { break-inside: avoid; page-break-inside: avoid; }
+      .page-break-before { break-before: page; page-break-before: always; height: 0 !important; margin: 0 !important; padding: 0 !important; }
+      .page-break-after { break-after: page; page-break-after: always; }
+    }
+  </style>
+</head>
+<body>
+  <div class="page">
+    <div class="header">
+      <div class="logo">
+        <div class="name">OMAR</div>
+        <div class="subtitle">Open Modular Access to Records</div>
+      </div>
+      <div class="tagline"><i>Proposal:</i> OMAR as a scaffold for collaborative, agile development of the Health Summarization project</div>
+    </div>
+    <div class="content">
+      <section>
+        <h2>Summary</h2>
+        <div class="note">
+          OMAR is a <b>clinician‑developed, AI‑connected VA clinical assistant prototype</b> that aligns closely with the prior
+          health‑summarization MVP scope. We propose using OMAR as a scaffold to accelerate development,
+          validation, and deployment of a production‑ready summarization tool - one whose integration into a clinical workflow suite will likely 
+          increase user adoption. We propose shifting to a <b>collaborative, agile development model</b> focused on OMAR, 
+          with a core team comprised of the current full-time development team and 1-2 part-time clinicians, and pulling in
+          contributors from the <b>VA Clinical Innovations Group</b>.
+        </div>
+      </section>
+
+      <section>
+        <h2>OMAR Philosophy</h2>
+        <div class="two-col">
+          <section>
+            <h3>The Clinician Problem</h3>
+            <ul>
+              <li>Great, specific tools (CDS, JLV, search) that lack integration.</li>
+              <li>Information overload and alert fatigue.</li>
+              <li>Use of AI carries significant risk, especially in clinical decision-making.</li>
+              <li>Commercial tools fail to understand diverse workflows within the VA.</li>
+            </ul>
+          </section>
+          <section>
+            <h3>Goals</h3>
+            <ul>
+              <li>Clinical flow design based on the elegance of CPRS; feels natural for CPRS users.</li>
+              <li>AI tools feel natural, traceable and always include human‑in‑the‑loop. Design metaphor is a diligent medical student.</li>
+              <li>Support clinical decision making by surfacing data in the right place and time, clearly avoiding clinical recommendations.</li>
+              <li>Build EHR-agnostic and modular for the future. Support clinician‑developers in extending the platform. </li>
+            </ul>
+          </section>
+        </div>
+      </section>
+
+      <div class="two-col">
+        <section>
+          <h2>How OMAR aligns with the prior MVP scope</h2>
+          <ul>
+            <li><strong>Pre‑encounter chart review:</strong> Hey OMAR Q&amp;A pulls both structured data and unstructured notes together to answer user questions, whether a general health summary, a condition-specific overview or a narrow query.</li>
+            <li><strong>Structured data inclusion:</strong> Dot‑phrases and endpoints for vitals, labs, meds, problems.</li>
+            <li><strong>Human‑in‑the‑loop:</strong> Drafts and answers require clinician review; sources shown inline.</li>
+            <li><strong>Trust &amp; safety foundations:</strong> Every assertion is traceable with in-line linked citations, encouraging immediate verification.</li>
+          </ul>
+          <h3>Clinical perspective: why use OMAR as the base</h3>
+          <ul>
+            <li><b>Built by clinicians</b>: designed around CPRS‑adjacent workflows.</li>
+            <li><b>Beyond summarization</b>: ambient scribing, structured data views, fast search, RAG Q&amp;A, and after‑visit instructions.</li>
+          </ul>
+        </section>
+        <section>
+          <h2>Collaborative Development Model</h2>
+          <ul>
+            <li><strong>Natural fit</strong>: OMAR was designed from the start to be modular. Features can be added independently, and feedback will be frequent. Agile-style development fits the bill.</li>
+            <li><strong>Open‑source agile</strong>: public repo (internal or external per policy), issue triage, small PRs, weekly sprints, transparent roadmap.</li>
+            <li><strong>Current core dev team as maintainers</strong>: product + engineers + UX steward architecture, security and deployment, and validation coordination.</li>
+            <li><strong>Current OMAR clinician-developers</strong>: steward overall design and feature development; provide rapid informed feedback early in processes.</li>
+            <li><strong>VA Clinical Innovations Group and others</strong>: contribute features, prompts, and validation via structured pull requests and requests for comments with code review and safety checks.</li>
+            <li><strong>Communication & norms</strong>: weekly stand‑ups, async updates, contribution guidelines, code of conduct, and onboarding sessions.</li>
+          </ul>
+        </section>
+      </div>
+
+      
+
+  <section class="page-break-before page-break-after">
+        <h2>Phases</h2>
+  <div class="cards">
+        <div class="col-left">
+          <div class="card">
+            <h3>Phase 0 — Team Development, Open‑Source Onboarding & Coordination</h3>
+            <ul>
+              <li><strong>Team building</strong>: current MVP dev team and OMAR clinicians learn from each other, create shared vision and trust.</li>
+              <li><strong>Relationships</strong>: find and listen to IT stakeholders, including CPRS/CDS/Lighthouse teams, and clinical stakeholders.</li>
+              <li><strong>Communication & norms</strong>: stand‑ups, decision logs, contribution guidelines, code of conduct.</li>
+              <li><strong>Onboarding & teaching</strong>: short workshops for VA Clinician Innovators and other contributors; dev environment setup; PR walkthroughs.</li>
+              <li><strong>Governance</strong>: maintainer roles, process for clinical feature requests and safety changes.</li>
+              <li><strong>Infrastructure for collaboration</strong>: repo, issues/labels, project board, templates (PR, issue, RFC), documentation site.</li>
+            </ul>
+          </div>
+          <div class="card">
+            <h3>Phase 1 — Secure Foundations</h3>
+            <ul>
+              <li><strong>Core team focus</strong>: product solidity, <b>security</b>, <b>deployment</b>, and <b>validation coordination</b>.</li>
+              <li>User authentication and secure server deployment</li>
+              <li>Transition fully from socket to API</li>
+              <li>Request needed RPCs for CDS context</li>
+              <li>Data‑safety hardening to enable early user testing</li>
+            </ul>
+          </div>
+          <div class="card">
+            <h3>Phase 2 — Early Use & Tuning</h3>
+            <ul>
+              <li>Early user testing with rapid feedback</li>
+              <li>Initial performance tuning</li>
+              <li>Prompt refinement for granular clinical needs</li>
+            </ul>
+          </div>
+        </div>
+        <div class="col-right">
+          <div class="card">
+            <h3>Phase 3 — Build & Validate in Parallel <span class="pill">Parallel</span></h3>
+            <h4 class="subhead">3A Technical Stabilization <span class="pill parallel">Parallel</span></h4>
+            <ul>
+              <li>Read endpoints: API access (VistA, HIE, Oracle Cerner, My HealtheVet); extract patient/user/facility; standardize and transform.</li>
+              <li>Analytics/AI layer: improve RAG; consider knowledge graphs and complementary methods.</li>
+              <li>Security & performance: robust error logging, PHI‑safe telemetry.</li>
+              <li>Write endpoints: notes, reminders/tasks and encounters only.</li>
+            </ul>
+            <h4 class="subhead">3B Clinical UX & Workflows <span class="pill parallel">Parallel</span></h4>
+            <ul>
+              <li>Workspace and UI flows focused on simplicity, clinical flow, and flexibility.</li>
+              <li>Clinician tabs: inpatient rounds, outpatient prep, social work, etc.</li>
+              <li>Alert management, secure messaging, and VistA write‑backs (unsigned notes/tasks).</li>
+              <li>Frontend: connect to backend; safe, efficient workspace (patient switch, archiving, speech‑to‑text); reusable UI tools (graphs, tables). SDK for clinician developer to make custom tabs for submission.</li>
+            </ul>
+            <h4 class="subhead">3C Validation & Safety <span class="pill parallel">Parallel</span></h4>
+            <ul>
+              <li>De‑identified charts; standardized questions and rubrics for completeness, correctness, and relevance.</li>
+              <li>Broaden across care settings and professions.</li>
+            </ul>
+          </div>
+          <div class="card">
+            <h3>Phase 4 — Pilot Rollout</h3>
+            <p>Limited rollout to pilot sites with monitoring and outcome metrics.</p>
+          </div>
+        </div>
+      </div>
+      </section>
+
+      <div class="two-col">
+        <section>
+          <h2>Validation framework</h2>
+          <table>
+            <thead><tr><th>Component</th><th>Method</th></tr></thead>
+            <tbody>
+              <tr><td>Completeness</td><td>Standard scenarios with known info requirements</td></tr>
+              <tr><td>Correctness</td><td>Expert review vs. sources</td></tr>
+              <tr><td>Relevance</td><td>Clinician utility ratings</td></tr>
+              <tr><td>Safety</td><td>Critical miss/incorrect detection</td></tr>
+              <tr><td>Qualitative interviews</td><td>Semi‑structured interviews; defer to UI/UX team member</td></tr>
+            </tbody>
+          </table>
+          <ul>
+            <li>Create robust de‑identified patient charts (MIMIC‑style).</li>
+            <li>Standardize question sets for summarization and notes.</li>
+            <li>Conduct qualitative interviews.</li>
+          </ul>
+        </section>
+        <section>
+          <h2>Expected outcomes</h2>
+          <ul>
+            <li>Secure, scalable deployment with stable endpoints and SDK for clinician‑developers.</li>
+            <li>High clinician adoption, satisfaction and ongoing use among test users.</li>
+            <li>Validated summarization quality and safety across settings and professions.</li>
+            <li>Limited rollout with measurable adoption and outcome metrics.</li>
+          </ul>
+        </section>
+      </div>
+
+      
+
+      
+    </div>
+    <div class="footer">
+      <ul>
+        <li><strong>Contact &amp; feedback:</strong> simha.reddy@va.gov, scott.hagan1@va.gov</li>
+        <li><strong>Internal use only</strong></li>
+        <li><strong>October 2025</strong></li>
+      </ul>
+    </div>
+  </div>
+</body>
+</html>

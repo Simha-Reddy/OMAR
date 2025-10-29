@@ -1,0 +1,23 @@
+# Root-level .gitignore that keeps only specific folders in the repo
+# Strategy: ignore everything, then whitelist the allowed folders and the .gitignore itself.
+
+# Ignore everything at the repository root
+/*
+
+# Allow this .gitignore to be tracked
+!.gitignore
+
+# Whitelist allowed top-level folders
+!/OMAR_refactor/
+!/flyers/
+!/Helpful\ Resources/
+
+# Allow all contents within those whitelisted folders
+!/OMAR_refactor/**
+!/flyers/**
+!/Helpful\ Resources/**
+
+# Inside OMAR_refactor, ignore environment files/folders
+/OMAR_refactor/.env
+/OMAR_refactor/.venv
+/OMAR_refactor/.venv/**

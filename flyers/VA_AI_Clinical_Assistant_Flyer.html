@@ -1,0 +1,164 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>VA AI Clinical Assistant (OMAR) — One‑Page Flyer</title>
+  <style>
+    :root {
+      --va-primary: #3a6685;
+      --va-primary-dark: #2f526b;
+      --va-contrast: #ffffff;
+      --link: #1a4480;
+      --link-hover: #125ea2;
+      --highlight: #ffe066;
+      --manila: #FFF3CD; /* manila highlight used for OMAR wordmark */
+      --text-strong: #222;
+      --text: #333;
+      --text-muted: #555;
+      --border: #d1d5db;
+      --paper: #fff;
+      --bg: #f6f8fa;
+    }
+  @page { size: Letter; margin: 0.4in; }
+    html, body { height: 100%; }
+    body {
+      margin: 0; font-family: "Segoe UI", -apple-system, BlinkMacSystemFont, Roboto, "Noto Sans", "Helvetica Neue", Arial, sans-serif;
+      color: var(--text);
+      background: var(--bg);
+    }
+    .page {
+      max-width: 900px; margin: 24px auto; background: var(--paper); border: 1px solid var(--border);
+      border-radius: 12px; box-shadow: 0 8px 20px rgba(0,0,0,0.06); overflow: hidden;
+    }
+    .header {
+      background: var(--va-primary); color: var(--va-contrast); padding: 18px 26px; display: flex; align-items: center; justify-content: space-between;
+    }
+    .header .logo { display: flex; flex-direction: column; align-items: flex-start; }
+    .header .logo .name { color: var(--manila); font-weight: 900; letter-spacing: 0.6px; font-size: 2rem; line-height: 1; text-shadow: 0 2px 3px rgba(0,0,0,0.22); }
+    .header .logo .subtitle { color: var(--manila); font-weight: 600; font-size: 0.9rem; opacity: 0.95; margin-top: 2px; }
+    .header .tagline { font-weight: 700; font-size: 1rem; color: var(--va-contrast); text-align: right; max-width: 60%; }
+    .content { padding: 20px 26px 24px 26px; }
+    h2 { color: var(--va-primary-dark); margin: 16px 0 8px 0; font-size: 1.05rem; border-bottom: 2px solid var(--va-primary-dark); padding-bottom: 4px; }
+    ul { margin: 8px 0 12px 22px; }
+    li { margin: 4px 0; }
+    .two-col { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
+    .one-col { display: block; }
+    .note { background: #fff8dd; border-left: 4px solid var(--highlight); padding: 10px 12px; border-radius: 6px; font-size: 0.95rem; color: #4a4a4a; }
+    a { color: var(--link); text-decoration: underline; }
+    a:hover { color: var(--link-hover); }
+    .footer { padding: 14px 26px 18px; font-size: 0.9rem; color: #666; border-top: 1px solid var(--border); }
+    .pill { background: #e0f3ff; color: #0d416b; font-weight: 600; padding: 2px 8px; border-radius: 999px; display: inline-block; font-size: 0.85rem; }
+    @media print {
+      html, body { height: auto; }
+      body { background: #ffffff; font-size: 10pt; -webkit-print-color-adjust: exact; print-color-adjust: exact; line-height: 1.35; }
+      /* Fit to printable width; remove container look */
+      .page { width: 100%; max-width: none; margin: 0; box-shadow: none; border: none; border-radius: 0; }
+      .header { padding: 12px 18px; }
+      .header .logo .name { font-size: 1.6rem; }
+      .header .logo .subtitle { font-size: 0.8rem; }
+      .header .tagline { font-size: 0.95rem; max-width: 58%; }
+      .content { padding: 0.05in 0; }
+      .two-col { grid-template-columns: 1fr 1fr; gap: 8px; }
+      h2 { font-size: 0.95rem; margin: 8px 0 4px 0; border-bottom: 1px solid var(--va-primary-dark); padding-bottom: 2px; }
+      ul { margin: 4px 0 6px 18px; }
+      li { margin: 2px 0; }
+      .note { font-size: 0.85rem; padding: 6px 8px; border-left-width: 3px; }
+      a { color: inherit; text-decoration: none; }
+      /* Allow normal page breaking to pack content efficiently */
+      section { break-inside: auto; page-break-inside: auto; }
+      h2 { break-after: auto; page-break-after: auto; }
+    }
+  </style>
+</head>
+<body>
+  <div class="page">
+    <div class="header">
+      <div class="logo">
+        <div class="name">OMAR</div>
+        <div class="subtitle">Open Modular Access to Records</div>
+      </div>
+      <div class="tagline">AI-connected VA Clinical Assistant.</div>
+    </div>
+    <div class="content">
+      <div class="two-col">
+        <section>
+          <h2>What it is</h2>
+          <ul>
+            <li>Browser-based app with a clinician‑friendly workspace, based on CPRS.</li>
+            <li>AI‑powered assistant to help VA clinicians find and summarize chart information quickly.</li>
+            <li>AI‑powered note drafting with ambient transcription or dictation.</li>
+          </ul>
+          <h2>Who it’s for</h2>
+          <ul>
+            <li>Clinicians of all types that need quick patient context, deep chart exploration, and documentation drafting.</li>
+            <li>Designed to reduce cognitive load and documentation burden, allowing clinicians to focus on decision-making and patient care.</li>
+            <li>For those comfortable with CPRS. Intended to work alongside the EHR.</li>
+          </ul>
+        </section>
+        <section>
+          <h2>What it can do</h2>
+          <ul>
+            <li><strong>CPRS sync:</strong> Syncs to CPRS even when on a remote desktop.</li>
+            <li><strong>Question answering:</strong> Ask free‑text questions; answers show citations and date context.</li>
+            <li><strong>Scribing support:</strong> Optional live transcription and draft note assistance.</li>
+            <li><strong>Structured data:</strong> Dot‑phrase expander for quick labs/vitals/med lists or view in Snapshot tab.</li>
+          </ul>
+          <h2>How it works</h2>
+          <ul>
+            <li><strong>Chunking:</strong> Section‑aware text processing; boilerplate detection and de‑duplication.</li>
+            <li><strong>Retrieval:</strong> Keyword index + internal VA Azure OpenAI embeddings; hybrid ranking with diversity and mild recency weighting.</li>
+            <li><strong>Note Drafting:</strong> VA Azure Speech-to-Text for transcription, coupled with default or custom prompts, and sent to internal VA Azure OpenAI model.</li>
+          </ul>
+        </section>
+      </div>
+
+      <div class="two-col">
+        <section>
+          <h2>Data & interoperability</h2>
+          <ul>
+            <li>Works with VistA data. Outside records can be added manually for summarization.</li>
+            <li>Intended to be EHR-agnostic, eventually will be able to accept data in FHIR format from any source.</li>
+          </ul>
+          <h2>Privacy</h2>
+          <ul>
+            <li>Works only within the VA network.</li>
+            <li>All data remains within VA at all times, with AI calls using VA's internal Azure OpenAI model.</li>
+            <li>Embeddings and indices are kept in memory (LRU cache) only during a session.</li>
+            <li>Archived transcripts can be written to disk, but requires explicit configuration, and are deleted after set time.</li>
+            <li>Patient data is not used for model training or sent outside the clinician's environment.</li>
+          </ul>
+          <h2>What it doesn’t do (by default)</h2>
+          <ul>
+            <li>No background vector DB persistence out‑of‑the‑box (FAISS is in‑memory).</li>
+            <li>No automatic EHR write‑back—outputs are clinician‑facing summaries and drafts.</li>
+          </ul>
+        </section>
+        <section>
+          <h2>Quick start</h2>
+          <ul>
+            <li>Launch the app → select a patient.</li>
+            <li>Move tabs around per your preference</li>
+            <li>Open Snapshot for a fast overview (vitals, labs, meds, problems).</li>
+            <li>Ask a question in plain English → review answer with citations.</li>
+            <li>Press record to transcribe and to draft notes faster.</li>
+            <li><strong>Explicit verbal consent from patients must be obtained and documented for any recording.</strong></li>
+          </ul>
+          <h2>Safety & guardrails</h2>
+          <ul>
+            <li>Every answer cites the exact excerpts used.</li>
+            <li>Abnormal and critical lab values are visually distinguished.</li>
+            <li>Time‑sensitive statements include date context in prompts and outputs.</li>
+          </ul>
+          <div class="note">
+            <strong>Warning:</strong> This product is in early development and has not been clinically validated. <strong>It cannot be relied upon for clinical care at this time.</strong> Restricted to test users only.
+          </div>
+        </section>
+      </div>
+    </div>
+    <div class="footer">
+      <li><strong>Contact & feedback:</strong> simha.reddy@va.gov, scott.hagan1@va.gov  //  <strong>Internal use only</strong> // <strong>October 2025.</strong></li>
+    </div>
+  </div>
+</body>
+</html>

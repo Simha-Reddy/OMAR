@@ -1,0 +1,8 @@
+VA Clinical Health API information - this is an API that lays over vista-api-x, returning patient data in a formatted fashion.
+https://developer.va.gov/explore/api/clinical-health/docs?version=current
+
+VPR GET PATIENT DATA JSON - This is a Remote Procedure Call that can be called via vista-api-x in the CDSP RPC CONTEXT, and it can return the full or filtered patient chart.
+This is a link to a brief description of the call on worldvista
+https://vivian.worldvista.org/vivian-data/ICR/ICR-4746.html
+This is a link to a Developer's guide to the Virtual Patient Record, including detailed information on the json elements of this call.
+https://www.va.gov/vdl_test/documents/Clinical/virtual_patient_record/vpr_dg.pdf

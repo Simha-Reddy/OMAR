@@ -1,0 +1,300 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>OMAR Glossary — Technical Terms</title>
+  <style>
+    :root {
+      --va-primary: #3a6685;
+      --va-primary-dark: #2f526b;
+      --va-contrast: #ffffff;
+      --link: #1a4480;
+      --link-hover: #125ea2;
+      --highlight: #ffe066;
+      --manila: #FFF3CD;
+      --text-strong: #222;
+      --text: #333;
+      --text-muted: #555;
+      --border: #d1d5db;
+      --paper: #fff;
+      --bg: #f6f8fa;
+    }
+    @page { size: Letter; margin: 0.4in; }
+    html, body { height: 100%; }
+    body {
+      margin: 0; font-family: "Segoe UI", -apple-system, BlinkMacSystemFont, Roboto, "Noto Sans", "Helvetica Neue", Arial, sans-serif;
+      color: var(--text);
+      background: var(--bg);
+    }
+    .page { max-width: 900px; margin: 24px auto; background: var(--paper); border: 1px solid var(--border);
+      border-radius: 12px; box-shadow: 0 8px 20px rgba(0,0,0,0.06); overflow: hidden; }
+    .header { background: var(--va-primary); color: var(--va-contrast); padding: 18px 26px; display: flex; align-items: center; justify-content: space-between; }
+    .header .logo { display: flex; flex-direction: column; align-items: flex-start; }
+    .header .logo .name { color: var(--manila); font-weight: 900; letter-spacing: 0.6px; font-size: 2rem; line-height: 1; text-shadow: 0 2px 3px rgba(0,0,0,0.22); }
+    .header .logo .subtitle { color: var(--manila); font-weight: 600; font-size: 0.9rem; opacity: 0.95; margin-top: 2px; }
+    .header .tagline { font-weight: 700; font-size: 1rem; color: var(--va-contrast); text-align: right; max-width: 60%; }
+    .content { padding: 20px 26px 24px 26px; }
+    h2 { color: var(--va-primary-dark); margin: 16px 0 8px 0; font-size: 1.05rem; border-bottom: 2px solid var(--va-primary-dark); padding-bottom: 4px; }
+    h3 { color: var(--va-primary-dark); margin: 10px 0 6px 0; font-size: 1rem; }
+    .note { background: #eef6ff; border-left: 4px solid #64a1ff; padding: 10px 12px; border-radius: 6px; font-size: 0.95rem; color: #334; }
+    a { color: var(--link); text-decoration: underline; }
+    a:hover { color: var(--link-hover); }
+    .footer { padding: 14px 26px 18px; font-size: 0.9rem; color: #666; border-top: 1px solid var(--border); }
+    table { width: 100%; border-collapse: collapse; margin: 12px 0; }
+    th, td { border: 1px solid #e5e7eb; padding: 10px; text-align: left; vertical-align: top; }
+    th { background: #f3f4f6; }
+
+    .index { display: flex; flex-wrap: wrap; gap: 8px; margin: 8px 0 14px; }
+    .index a { display: inline-block; padding: 4px 8px; border: 1px solid var(--border); border-radius: 6px; background: #fff; text-decoration: none; }
+  .search { display: flex; align-items: center; gap: 10px; margin: 12px 0 10px; flex-wrap: wrap; }
+  .search input[type="search"] { flex: 1 1 380px; max-width: 560px; padding: 10px 12px; border: 1px solid var(--border); border-radius: 8px; font-size: 0.98rem; }
+  .search .meta { color: var(--text-muted); font-size: 0.92rem; }
+  .sr-only { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0,0,1px,1px); white-space: nowrap; border: 0; }
+
+    @media print {
+      html, body { height: auto; }
+      body { background: #ffffff; font-size: 9.8pt; -webkit-print-color-adjust: exact; print-color-adjust: exact; line-height: 1.35; }
+      .page { width: 100%; max-width: none; margin: 0; box-shadow: none; border: none; border-radius: 0; }
+      .header { padding: 10px 14px; }
+      .header .logo .name { font-size: 1.5rem; }
+      .header .logo .subtitle { font-size: 0.75rem; }
+      .header .tagline { font-size: 0.9rem; max-width: 58%; }
+      .content { padding: 0.03in 0; }
+      .note { font-size: 0.85rem; padding: 6px 8px; border-left-width: 3px; }
+      table { page-break-inside: avoid; }
+    }
+  </style>
+</head>
+<body>
+  <div class="page">
+    <div class="header">
+      <div class="logo">
+        <div class="name">OMAR</div>
+        <div class="subtitle">Open Modular Access to Records</div>
+      </div>
+      <div class="tagline">Glossary — Plain-language definitions of technical terms</div>
+    </div>
+    <div class="content">
+
+      <section>
+        <h2>How to use this glossary</h2>
+        <div class="note">This page explains terms used across OMAR’s architecture, security, data access, and ML features. It’s written to be quickly scannable by clinicians and developers. If a term feels unclear or is missing, we can add or refine it.</div>
+        <div class="index">
+          <a href="#A">A</a><a href="#B">B</a><a href="#C">C</a><a href="#D">D</a><a href="#E">E</a><a href="#F">F</a><a href="#G">G</a><a href="#H">H</a><a href="#I">I</a><a href="#J">J</a><a href="#K">K</a><a href="#L">L</a><a href="#M">M</a><a href="#N">N</a><a href="#O">O</a><a href="#P">P</a><a href="#Q">Q</a><a href="#R">R</a><a href="#S">S</a><a href="#T">T</a><a href="#U">U</a><a href="#V">V</a><a href="#W">W</a>
+        </div>
+        <div class="search">
+          <label for="glossarySearch" class="sr-only">Search glossary</label>
+          <input type="search" id="glossarySearch" placeholder="Search terms and definitions..." aria-label="Search glossary terms" autocomplete="off" />
+          <span id="searchMeta" class="meta" aria-live="polite"></span>
+        </div>
+        <div id="noResults" class="note" style="display:none">No matching terms. Try another search.</div>
+      </section>
+
+      <section>
+        <h2 id="A">A</h2>
+        <table>
+          <tr><th>Term</th><th>Definition</th></tr>
+          <tr><td>ASGI</td><td>Asynchronous Server Gateway Interface — the modern Python web app interface that supports async I/O and better concurrency than WSGI.</td></tr>
+          <tr><td>Audit log</td><td>Immutable record of who did what and when (e.g., user, patient, action, result). Never store raw PHI in messages; use IDs.</td></tr>
+          <tr><td>Azure OpenAI deployment</td><td>A named model endpoint (e.g., chat vs. embeddings) configured in Azure OpenAI; referenced in code via environment variables.</td></tr>
+          <tr><td>Azure Speech-to-Text</td><td>Cloud service that converts audio chunks into text; used by the transcription worker.</td></tr>
+        </table>
+
+        <h2 id="B">B</h2>
+        <table>
+          <tr><th>Term</th><th>Definition</th></tr>
+          <tr><td>Backpressure</td><td>Safeguards that slow or queue work when the system is overloaded, preventing crashes or timeouts.</td></tr>
+          <tr><td>BM25</td><td>A ranking function for keyword search that scores how relevant a document is to a query based on term frequency and length.</td></tr>
+        </table>
+
+        <h2 id="C">C</h2>
+        <table>
+          <tr><th>Term</th><th>Definition</th></tr>
+          <tr><td>Cache (in-memory)</td><td>Temporary storage in the app’s RAM to speed up repeated reads. OMAR uses an LRU cache for per‑patient RAG indices.</td></tr>
+          <tr><td>Celery / RQ</td><td>Python background job systems (task queues) used to run long‑running work outside the web request cycle.</td></tr>
+          <tr><td>Circuit breaker</td><td>Pattern that stops calling a failing dependency for a short time, quickly returning errors while it recovers.</td></tr>
+          <tr><td>Cosine similarity</td><td>Metric to measure how similar two vectors are; common for comparing embeddings.</td></tr>
+          <tr><td>CSRF (double‑submit cookie)</td><td>Protection that requires a token in both a cookie and request header to prevent cross‑site request forgery.</td></tr>
+        </table>
+
+        <h2 id="D">D</h2>
+        <table>
+          <tr><th>Term</th><th>Definition</th></tr>
+          <tr><td>DFN</td><td>VistA’s internal patient identifier used by many RPCs. OMAR maps DFN to a patient context.</td></tr>
+          <tr><td>Draft (scribe)</td><td>The clinician’s in‑progress note produced by transcription + RAG assistance; stored in session/UI until saved.</td></tr>
+        </table>
+
+        <h2 id="E">E</h2>
+        <table>
+          <tr><th>Term</th><th>Definition</th></tr>
+          <tr><td>Embedding</td><td>Numeric vector representation of text captured by a model; used to find semantically similar passages.</td></tr>
+          <tr><td>Error budget (retries/timeouts)</td><td>Operational guardrails that define how often it’s acceptable to fail or retry before surfacing an error.</td></tr>
+        </table>
+
+        <h2 id="F">F</h2>
+        <table>
+          <tr><th>Term</th><th>Definition</th></tr>
+          <tr><td>FAISS</td><td>Facebook AI Similarity Search — fast in‑memory vector index library used for nearest‑neighbor search.</td></tr>
+          <tr><td>Feature flag</td><td>A runtime switch that turns features on/off (e.g., to select vista‑api‑x vs. socket client) without code changes.</td></tr>
+          <tr><td>FHIR</td><td>Fast Healthcare Interoperability Resources — HL7 standard for healthcare data exchange.</td></tr>
+          <tr><td>Flask‑Session</td><td>Flask extension that stores session data server‑side (Redis/FakeRedis) instead of putting it in cookies.</td></tr>
+        </table>
+
+        <h2 id="H">H</h2>
+        <table>
+          <tr><th>Term</th><th>Definition</th></tr>
+          <tr><td>Hybrid search</td><td>Combines embedding similarity (semantic) with lexical ranking (e.g., BM25) to improve retrieval quality.</td></tr>
+          <tr><td>HTTPOnly / SameSite</td><td>Cookie attributes that prevent JS access (HTTPOnly) and limit cross‑site sending (SameSite) to improve security.</td></tr>
+        </table>
+
+        <h2 id="I">I</h2>
+        <table>
+          <tr><th>Term</th><th>Definition</th></tr>
+          <tr><td>Idempotent</td><td>Operation that can be repeated safely without changing the result beyond the first application (e.g., reindex task).</td></tr>
+          <tr><td>Inverted index</td><td>Map from terms to documents that contain them, used for fast keyword search.</td></tr>
+        </table>
+
+        <h2 id="L">L</h2>
+        <table>
+          <tr><th>Term</th><th>Definition</th></tr>
+          <tr><td>LLM</td><td>Large Language Model — generates and summarizes text; used for Q&A and drafting.</td></tr>
+          <tr><td>LOINC</td><td>Logical Observation Identifiers Names and Codes — common code system for labs; loaded for labeling and grouping.</td></tr>
+          <tr><td>LRU cache</td><td>Least‑Recently Used cache — evicts the item that hasn’t been accessed in the longest time.</td></tr>
+        </table>
+
+        <h2 id="M">M</h2>
+        <table>
+          <tr><th>Term</th><th>Definition</th></tr>
+          <tr><td>Manifest (RAG)</td><td>Lightweight metadata describing which notes/chunks are included in the patient’s in‑memory index.</td></tr>
+          <tr><td>Memurai</td><td>Redis‑compatible server for Windows; a drop‑in alternative to Redis for session storage.</td></tr>
+          <tr><td>Metrics</td><td>Numeric signals (e.g., latency, errors, cache hit rate) used for monitoring and alerting.</td></tr>
+        </table>
+
+        <h2 id="O">O</h2>
+        <table>
+          <tr><th>Term</th><th>Definition</th></tr>
+          <tr><td>Observability</td><td>Combination of logs, metrics, and traces that help understand system health and diagnose issues.</td></tr>
+          <tr><td>OneDrive archive</td><td>Where session transcripts are saved on clinician machines; outside version control and subject to retention.</td></tr>
+        </table>
+
+        <h2 id="P">P</h2>
+        <table>
+          <tr><th>Term</th><th>Definition</th></tr>
+          <tr><td>Patient context</td><td>Selected patient in the current session; all PHI‑touching routes must validate this context.</td></tr>
+          <tr><td>PHI / PII</td><td>Protected Health Information / Personally Identifiable Information — sensitive data with strict handling rules.</td></tr>
+        </table>
+
+        <h2 id="R">R</h2>
+        <table>
+          <tr><th>Term</th><th>Definition</th></tr>
+          <tr><td>RAG</td><td>Retrieval‑Augmented Generation — retrieves relevant snippets from the record and feeds them to an LLM for better answers.</td></tr>
+          <tr><td>RBAC</td><td>Role‑Based Access Control — permissions model that grants access based on user roles.</td></tr>
+          <tr><td>Redis</td><td>In‑memory data store used here for server‑side sessions across processes/hosts.</td></tr>
+          <tr><td>FakeRedis</td><td>In‑process emulator of Redis used for local/dev sessions without installing a Redis server.</td></tr>
+          <tr><td>Reverse proxy</td><td>Fronts the app (e.g., NGINX) to terminate TLS, handle routing, and add security headers.</td></tr>
+          <tr><td>Retry / Timeout</td><td>Patterns to re‑attempt failed calls and cap how long to wait on external dependencies.</td></tr>
+        </table>
+
+        <h2 id="S">S</h2>
+        <table>
+          <tr><th>Term</th><th>Definition</th></tr>
+          <tr><td>SSO</td><td>Single Sign‑On — centralized authentication that lets users log in with their VA identity.</td></tr>
+          <tr><td>Structured logging</td><td>Logs emitted as key‑value pairs (JSON‑like) with request/user/patient context (no raw PHI).</td></tr>
+        </table>
+
+        <h2 id="T">T</h2>
+        <table>
+          <tr><th>Term</th><th>Definition</th></tr>
+          <tr><td>ThreadPoolExecutor</td><td>Python utility to run multiple tasks concurrently using a pool of threads (e.g., for parallel chunk transcription).</td></tr>
+          <tr><td>TLS / HTTPS</td><td>Encryption and authentication for web traffic; required for production to protect PHI.</td></tr>
+          <tr><td>Token (NLP)</td><td>A unit of text for LLMs (roughly a word/part‑word); used to size prompts and chunk text.</td></tr>
+          <tr><td>TTL</td><td>Time‑to‑Live — how long an item remains valid in a cache before expiring.</td></tr>
+          <tr><td>Transcription (chunks)</td><td>Audio recorded into small WAV files in <span class="kbd">chunks/</span>; each is sent to Azure Speech, appended to the live transcript, then deleted.</td></tr>
+          <tr><td>Tracing / Correlation ID</td><td>Unique IDs passed through logs/calls to tie together events for a single request or job.</td></tr>
+        </table>
+
+        <h2 id="V">V</h2>
+        <table>
+          <tr><th>Term</th><th>Definition</th></tr>
+          <tr><td>Vector DB</td><td>Database specialized for vector search. OMAR does not persist vectors by default; FAISS is in‑memory.</td></tr>
+          <tr><td>vista‑api‑x</td><td>The standardized HTTP API facade to access VistA; target for replacing legacy socket/RPC calls.</td></tr>
+          <tr><td>VistA</td><td>VA’s Veterans Health Information Systems and Technology Architecture (EHR system).</td></tr>
+          <tr><td>VPR (VistA Patient Record)</td><td>Legacy XML format of patient data; older paths may reference VPR extraction.</td></tr>
+        </table>
+
+        <h2 id="W">W</h2>
+        <table>
+          <tr><th>Term</th><th>Definition</th></tr>
+          <tr><td>Worker (background job)</td><td>A separate process that runs long‑running tasks (e.g., transcription, indexing) so the web app stays responsive.</td></tr>
+          <tr><td>WSGI</td><td>Web Server Gateway Interface — the classic Python web app interface; synchronous; widely supported.</td></tr>
+        </table>
+
+      </section>
+
+    </div>
+    <div class="footer">
+      <ul>
+        <li><strong>Internal use only</strong></li>
+        <li>Last updated: October 2025</li>
+        <li>See also: <a href="/static/flyers/OMAR_Refactor_and_Migration_Plan.html">Refactor & Migration Plan</a></li>
+      </ul>
+    </div>
+  </div>
+  <script>
+    (function(){
+      const input = document.getElementById('glossarySearch');
+      const meta = document.getElementById('searchMeta');
+      const noRes = document.getElementById('noResults');
+      const sections = Array.from(document.querySelectorAll('.content > section'));
+      // Term tables live after the first section (instructions/index)
+      const termSections = sections.slice(1);
+
+      function normalize(s){ return (s || '').toString().toLowerCase(); }
+
+      function filter(q){
+        const query = normalize(q);
+        let totalVisible = 0;
+        termSections.forEach(sec => {
+          // Each letter section has one or more tables; we hide the H2 and each table body rows
+          const h2s = sec.querySelectorAll('h2');
+          const tables = Array.from(sec.querySelectorAll('table'));
+          let sectionVisible = false;
+          tables.forEach(tbl => {
+            const rows = Array.from(tbl.querySelectorAll('tr'));
+            if(rows.length === 0){ return; }
+            // Keep header row
+            const header = rows[0];
+            let visibleInTable = 0;
+            for(let i=1;i<rows.length;i++){
+              const tr = rows[i];
+              const tds = tr.querySelectorAll('td');
+              const hay = normalize((tds[0]?.textContent||'') + ' ' + (tds[1]?.textContent||''));
+              const show = !query || hay.indexOf(query) !== -1;
+              tr.style.display = show ? '' : 'none';
+              if(show) visibleInTable++;
+            }
+            // Show table if any data rows visible
+            tbl.style.display = (visibleInTable > 0) ? '' : 'none';
+            if(visibleInTable > 0){ sectionVisible = true; totalVisible += visibleInTable; }
+            // Always keep header visible if table is visible
+            header.style.display = '';
+          });
+          // Hide the section heading(s) if nothing visible in this section
+          h2s.forEach(h => { h.style.display = sectionVisible ? '' : 'none'; });
+        });
+        if(query){
+          meta.textContent = `Showing ${totalVisible} result${totalVisible===1?'':'s'}`;
+        } else {
+          meta.textContent = '';
+        }
+        noRes.style.display = (query && totalVisible === 0) ? '' : 'none';
+      }
+
+      input?.addEventListener('input', (e) => {
+        filter(e.target.value);
+      });
+    })();
+  </script>
+</body>
+</html>

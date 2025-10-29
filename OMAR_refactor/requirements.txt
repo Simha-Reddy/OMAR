@@ -1,0 +1,8 @@
+flask
+Flask-Session==0.7.0
+python-dotenv
+requests
+redis
+fakeredis
+waitress
+openai

@@ -1,0 +1,530 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>OMAR Architecture & Migration Plan — Multi‑User, vista-api-x</title>
+  <style>
+    :root {
+      --va-primary: #3a6685;
+      --va-primary-dark: #2f526b;
+      --va-contrast: #ffffff;
+      --link: #1a4480;
+      --link-hover: #125ea2;
+      --highlight: #ffe066;
+      --manila: #FFF3CD;
+      --text-strong: #222;
+      --text: #333;
+      --text-muted: #555;
+      --border: #d1d5db;
+      --paper: #fff;
+      --bg: #f6f8fa;
+    }
+    @page { size: Letter; margin: 0.4in; }
+    html, body { height: 100%; }
+    body {
+      margin: 0; font-family: "Segoe UI", -apple-system, BlinkMacSystemFont, Roboto, "Noto Sans", "Helvetica Neue", Arial, sans-serif;
+      color: var(--text);
+      background: var(--bg);
+    }
+    .page {
+      max-width: 900px; margin: 24px auto; background: var(--paper); border: 1px solid var(--border);
+      border-radius: 12px; box-shadow: 0 8px 20px rgba(0,0,0,0.06); overflow: hidden;
+    }
+    .header {
+      background: var(--va-primary); color: var(--va-contrast); padding: 18px 26px; display: flex; align-items: center; justify-content: space-between;
+    }
+    .header .logo { display: flex; flex-direction: column; align-items: flex-start; }
+    .header .logo .name { color: var(--manila); font-weight: 900; letter-spacing: 0.6px; font-size: 2rem; line-height: 1; text-shadow: 0 2px 3px rgba(0,0,0,0.22); }
+    .header .logo .subtitle { color: var(--manila); font-weight: 600; font-size: 0.9rem; opacity: 0.95; margin-top: 2px; }
+    .header .tagline { font-weight: 700; font-size: 1rem; color: var(--va-contrast); text-align: right; max-width: 60%; }
+    .content { padding: 20px 26px 24px 26px; }
+    h2 { color: var(--va-primary-dark); margin: 16px 0 8px 0; font-size: 1.05rem; border-bottom: 2px solid var(--va-primary-dark); padding-bottom: 4px; }
+    h3 { color: var(--va-primary-dark); margin: 10px 0 6px 0; font-size: 1rem; }
+    ul { margin: 8px 0 12px 22px; }
+    li { margin: 4px 0; }
+    .two-col { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
+    .one-col { display: block; }
+    .note { background: #fff8dd; border-left: 4px solid var(--highlight); padding: 10px 12px; border-radius: 6px; font-size: 0.95rem; color: #4a4a4a; }
+    .callout { background: #eef6ff; border-left: 4px solid #64a1ff; padding: 10px 12px; border-radius: 6px; font-size: 0.95rem; color: #334; }
+    a { color: var(--link); text-decoration: underline; }
+    a:hover { color: var(--link-hover); }
+    .footer { padding: 14px 26px 18px; font-size: 0.9rem; color: #666; border-top: 1px solid var(--border); }
+    .pill { background: #e0f3ff; color: #0d416b; font-weight: 600; padding: 2px 8px; border-radius: 999px; display: inline-block; font-size: 0.85rem; }
+    table { width: 100%; border-collapse: collapse; margin: 12px 0; }
+    th, td { border: 1px solid #e5e7eb; padding: 10px; text-align: left; }
+    th { background: #f3f4f6; }
+
+    .cards { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; align-items: start; }
+    .cards > .col-left, .cards > .col-right { display: grid; gap: 16px; align-content: start; }
+    .cards > .col-left { grid-column: 1; }
+    .cards > .col-right { grid-column: 2; }
+    .card { background: var(--paper); border: 1px solid var(--border); border-radius: 10px; padding: 14px 16px; box-shadow: 0 2px 8px rgba(0,0,0,0.04); }
+    .card h3 { margin: 0 0 6px 0; color: var(--va-primary-dark); font-size: 1rem; }
+    .card ul { margin-left: 18px; }
+    .card p { margin: 4px 0 8px 0; }
+    .card p:last-child { margin-bottom: 0; }
+    .card h4 { margin: 8px 0 4px 0; font-size: 0.95rem; color: var(--va-primary-dark); }
+    .subhead { display: flex; align-items: center; gap: 8px; border-left: 3px solid var(--va-primary-dark); padding-left: 8px; }
+    .pill.parallel { background: #ffe7a3; color: #6b4f00; border: 1px solid #f2d07d; }
+
+    .kbd { font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace; background:#f3f4f6; border:1px solid #e5e7eb; border-radius:4px; padding:0 6px; font-size:0.85rem; }
+    .small { font-size: 0.92rem; color: var(--text-muted); }
+
+    @media print {
+      html, body { height: auto; }
+      body { background: #ffffff; font-size: 9.8pt; -webkit-print-color-adjust: exact; print-color-adjust: exact; line-height: 1.35; }
+      .page { width: 100%; max-width: none; margin: 0; box-shadow: none; border: none; border-radius: 0; }
+      .header { padding: 10px 14px; }
+      .header .logo .name { font-size: 1.5rem; }
+      .header .logo .subtitle { font-size: 0.75rem; }
+      .header .tagline { font-size: 0.9rem; max-width: 58%; }
+      .content { padding: 0.03in 0; }
+      .two-col { grid-template-columns: 1fr 1fr; gap: 6px; }
+      .cards { grid-template-columns: 1fr 1fr; gap: 6px; }
+      .cards > .col-left, .cards > .col-right { gap: 6px; }
+      .card { box-shadow: none; border: 1px solid #cdd6df; padding: 8px 10px; break-inside: avoid; page-break-inside: avoid; }
+      h2 { font-size: 0.9rem; margin: 6px 0 3px 0; border-bottom: 1px solid var(--va-primary-dark); padding-bottom: 2px; }
+      .card h3 { font-size: 0.95rem; }
+      .card h4 { font-size: 0.9rem; }
+      ul { margin: 3px 0 5px 14px; }
+      li { margin: 1px 0; }
+      .note { font-size: 0.8rem; padding: 5px 7px; border-left-width: 3px; }
+      a { color: inherit; text-decoration: none; }
+      table, .callout { break-inside: avoid; page-break-inside: avoid; }
+      .page-break-before { break-before: page; page-break-before: always; height: 0 !important; margin: 0 !important; padding: 0 !important; }
+      .page-break-after { break-after: page; page-break-after: always; }
+    }
+  </style>
+</head>
+<body>
+  <div class="page">
+    <div class="header">
+      <div class="logo">
+        <div class="name">OMAR</div>
+        <div class="subtitle">Open Modular Access to Records</div>
+      </div>
+      <div class="tagline"><i>Plan:</i> Architecture, refactor roadmap, and prompts for multi‑user deployment via vista‑api‑x</div>
+    </div>
+    <div class="content">
+
+      <section>
+        <h2>Summary</h2>
+        <div class="note">
+          Refactor the clinician‑built OMAR prototype into a <b>secure, multi‑user server application</b> with a <b>clean, modular architecture</b>,
+          consolidating all patient‑data retrieval through <b>vista‑api‑x</b> and removing socket‑based access. Deliver in <b>incremental phases</b> with
+          feature flags, tests, and rollback. This document is the working plan plus the <b>exact prompts</b> we will use phase‑by‑phase.
+        </div>
+  <p class="small">Ground truth: backend is Python/Flask; Redis may be used for sessions; transcripts are saved locally (e.g., on VA OneDrive) outside version control; audio chunks in <span class="kbd">chunks/</span> are temporary and removed after STT; RAG embeddings and indices are kept in memory (LRU, per patient/session) with optional in‑memory FAISS—no persistent vector DB by default; deployment target is containerized behind a reverse proxy. See the <a href="/static/flyers/OMAR_Glossary.html">OMAR Glossary</a> for definitions. Quick link: <a href="#prereqs">What we need to succeed</a>.</p>
+      </section>
+
+      
+
+      <section>
+        <h2>Pluggable model strategies for HeyOmar</h2>
+        <div class="cards">
+          <div class="col-left">
+            <div class="card">
+              <h3>Goals</h3>
+              <ul>
+                <li>Enable easy swapping of different RAG and prompting approaches (“models”) without code changes.</li>
+                <li>Let users select a strategy at runtime (e.g., “Default”, “Strict citations”, “Hybrid‑heavy”, “Local‑only”).</li>
+                <li>Support controlled trials and A/B tests with clear metrics and safe fallbacks.</li>
+              </ul>
+            </div>
+            <div class="card">
+              <h3>Contract (interface)</h3>
+              <ul>
+                <li><span class="kbd">ModelProvider</span> interface exposes: <span class="kbd">id</span>, <span class="kbd">name</span>, <span class="kbd">capabilities</span> (chat | rag | scribe), <span class="kbd">config</span>.</li>
+                <li>Core methods (sync/async): <span class="kbd">answer(query, context)</span>, <span class="kbd">scribeDraft(context)</span>, <span class="kbd">retrieve(context, k)</span>.</li>
+                <li>Inputs: patient/session context, note text, constraints (max tokens), safety settings; Outputs: response text, citations, telemetry.</li>
+                <li>Error/timeout behavior: bounded time, structured error codes, automatic fallback to default provider.</li>
+              </ul>
+            </div>
+          </div>
+          <div class="col-right">
+            <div class="card">
+              <h3>Runtime selection & safety</h3>
+              <ul>
+                <li><b>ModelRegistry</b> loads providers from a known folder or entry points; validates manifest (version, limits).</li>
+                <li>Per‑user selection stored in session (and optional user prefs); admin‑controllable allowlist.</li>
+                <li>Feature flags to disable risky providers; PHI‑safe logging; metrics tagged by <span class="kbd">provider_id</span>.</li>
+              </ul>
+            </div>
+            <div class="card">
+              <h3>Minimal UI</h3>
+              <ul>
+                <li>Settings dropdown to choose provider (with description/tooltips); quick switch in workspace header optional.</li>
+                <li>Show provider badge in responses; link to glossary for terms.</li>
+              </ul>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <div class="two-col">
+        <section>
+          <h2>Goals</h2>
+          <ul>
+            <li>Multi‑user support with secure auth, sessions, patient context scoping, and audit logging (PHI‑safe).</li>
+            <li>Single standardized data access layer using <span class="kbd">vista‑api‑x</span> with retries, caching, and typed contracts.</li>
+            <li>Remove dead/duplicate code; improve cohesion and reduce coupling; enable team collaboration.</li>
+            <li>Introduce tests, type checking, linting, and CI/CD; add structured observability.</li>
+          </ul>
+        </section>
+        <section>
+          <h2>Inputs</h2>
+          <ul>
+            <li>Repo structure under <span class="kbd">OMAR/</span> (app, services, prompts, static, templates, data access modules).</li>
+            <li>Key files: <span class="kbd">vista_api_x.py</span>, <span class="kbd">vista_api.py</span>, <span class="kbd">run_local_server.py</span>, <span class="kbd">rag_index.py</span>, <span class="kbd">monitor_transcription.py</span>.</li>
+            <li>Existing UI under <span class="kbd">OMAR/templates/</span> and <span class="kbd">OMAR/static/</span>.</li>
+          </ul>
+        </section>
+      </div>
+
+      <section>
+  <h2 id="prereqs">What we need to succeed</h2>
+        <div class="cards">
+          <div class="col-left">
+            <div class="card">
+              <h3>Most important</h3>
+              <ul>
+                <li><b>Single‑Sign‑On (SSO) access</b> for clinicians; integrate with VA identity and session security.</li>
+                <li><b>vista‑api‑x login with real data</b>; prefer <b>VA Clinical Health API</b> where possible for standardized access.</li>
+                <li><b>Health Information Exchange (HIE)</b> connectivity for outside record access.</li>
+                <li><b>Permission to use CDS CONTEXT</b> (instead of OR CPRS GUI CHART) for running RPCs.</li>
+                <li><b>Azure resource access</b> for Speech‑to‑Text, embeddings, and generative AI; if limited, provide <b>pluggable fallbacks</b> (e.g., whisper.cpp, local inference) with feature flags.</li>
+                <li><b>Server hosting for multiple users</b>: containerized app behind a reverse proxy with TLS and basic observability.</li>
+              </ul>
+              <p class="small">Scope note: If integration surfaces major design debt, be prepared to <b>rewrite the backend with help</b> (service‑oriented, adapter pattern, tests) — potentially from scratch while preserving user‑facing flows.</p>
+            </div>
+          </div>
+          <div class="col-right">
+            <div class="card">
+              <h3>Nice to have (not required)</h3>
+              <ul>
+                <li>Access to <b>Secure Messaging</b> APIs for patient communications.</li>
+                <li>Access to <b>Oracle VA data</b> sources where relevant.</li>
+                <li><b>Limited write RPCs</b> added to CDS context to support constrained write‑back workflows.</li>
+              </ul>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <section>
+        <h2>Target architecture (C4 summary)</h2>
+        <div class="cards">
+          <div class="col-left">
+            <div class="card">
+              <h3>System context</h3>
+              <ul>
+                <li>Users: clinicians and staff (RBAC).</li>
+                <li>External systems: <b>vista‑api‑x</b>, VA identity/SSO, LLM provider(s), storage (object/file), Redis, logging/metrics backend.</li>
+                <li>Boundary: OMAR Web/API + Workers; PHI never leaves boundary unencrypted; audit trail persists events.</li>
+              </ul>
+            </div>
+            <div class="card">
+              <h3>Container view</h3>
+              <ul>
+                <li><b>Web/API</b> (Flask today; ASGI‑ready path): routes, auth, sessions, request scoping.</li>
+                <li><b>Services</b>: Patient, Notes, RAG, Transcription; pure business logic.</li>
+                <li><b>Gateways</b>: <span class="kbd">VistaApiXClient</span>, RedisCache, FileStore, LLMClient; side‑effect boundaries.</li>
+                <li><b>Workers</b>: background jobs (transcription, indexing) via RQ/Celery.</li>
+                <li><b>Frontend</b>: templates + JS modules (workspace, scribe, explore).</li>
+              </ul>
+            </div>
+            <div class="card">
+              <h3>Observability</h3>
+              <ul>
+                <li>Structured logs with request/user/patient context (no raw PHI in messages; IDs only).</li>
+                <li>Metrics: latency, error rates, cache hit %, job runtimes; health checks.</li>
+                <li>Tracing around gateway calls (correlation IDs across web ↔ gateway ↔ worker).</li>
+              </ul>
+            </div>
+          </div>
+          <div class="col-right">
+            <div class="card">
+              <h3>Component view</h3>
+              <ul>
+                <li><b>PatientService</b>: patient context, demographics, problems, meds, labs; uses <span class="kbd">VistaApiXClient</span>.</li>
+                <li><b>RAGService</b>: chunking, indexing, querying; async reindex; citations.</li>
+                <li><b>TranscriptionService</b>: audio ingest → STT → note draft; idempotent and resumable.</li>
+                <li><b>NoteService</b>: compose drafts, dot‑phrases, write‑back preparation.</li>
+                <li><b>Auth/Session</b>: VA SSO or app login; Redis session store; CSRF protection; role checks.</li>
+                <li><b>ModelRegistry + ModelProvider</b>: pluggable strategies for RAG and prompting; user‑selectable at runtime under guardrails.</li>
+              </ul>
+            </div>
+            <div class="card">
+              <h3>Integration contracts (examples)</h3>
+              <ul>
+                <li><span class="kbd">VistaApiXClient.get_patient(patient_id)</span> → FHIR Patient JSON | 404, 5xx retry, circuit‑breaker.</li>
+                <li><span class="kbd">VistaApiXClient.search_notes(patient_id, filters)</span> → List[NoteMeta]; paginated; cached.</li>
+                <li><span class="kbd">RAGService.query(patient_id, query, k)</span> → answer + citations; timeboxed with fallback.</li>
+              </ul>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <section>
+        <h2>Security & compliance (overview)</h2>
+        <ul>
+          <li>PHI handling: encrypt in transit, restricted logs, audit every access/use (who, when, patient, action, route).</li>
+          <li>Session: secure cookies, Redis store, short TTL + sliding; patient‑context validation on every request.</li>
+          <li>Secrets: environment‑based, never in repo; principle of least privilege for API scopes.</li>
+          <li>Threats: auth/session fixation, SSRF on API calls, prompt injection in notes; mitigations documented per feature.</li>
+        </ul>
+      </section>
+
+      <section class="page-break-before page-break-after">
+        <h2>Phased migration roadmap</h2>
+        <div class="cards">
+          <div class="col-left">
+
+            <div class="card">
+              <h3>Phase 0 — Baseline quality gates</h3>
+              <h4>Scope</h4>
+              <ul>
+                <li>Freeze behavior; add tests around critical flows (patient load, Q&A, scribe draft).</li>
+                <li>Introduce type checking (mypy/pyright), linting (ruff), formatting (black), pre‑commit hooks, basic CI.</li>
+              </ul>
+              <h4>Acceptance criteria</h4>
+              <ul>
+                <li>CI green on tests, type check, and lint for current code.</li>
+                <li>Smoke test: app starts; key pages render; no PHI in logs.</li>
+              </ul>
+              <h4>Prompts to run</h4>
+              <ul>
+                <li>"Create a minimal pytest suite that covers: patient selection, health summary route, and scribe draft generation using test doubles."</li>
+                <li>"Add mypy, ruff, and black config files with conservative rules; wire pre‑commit; add a GitHub Actions CI YAML that runs tests + checks."</li>
+                <li>"Wrap current start‑up with structured logging; redact PHI; add a smoke test script."</li>
+              </ul>
+            </div>
+
+            <div class="card">
+              <h3>Phase 1 — vista‑api‑x adapter (dual‑path)</h3>
+              <h4>Scope</h4>
+              <ul>
+                <li>Create <span class="kbd">VistaApiXClient</span> and a <b>DataGateway</b> interface; add feature flag to choose adapter vs socket.</li>
+                <li>Route PatientService reads through gateway; keep socket client as fallback; add retries/caching.</li>
+              </ul>
+              <h4>Acceptance criteria</h4>
+              <ul>
+                <li>Toggle flag switches all reads to vista‑api‑x with no UI change.</li>
+                <li>Error budget respected: retries, timeouts, and clear user feedback on failure.</li>
+              </ul>
+              <h4>Prompts to run</h4>
+              <ul>
+                <li>"Generate a <VistaApiXClient> with methods: get_patient, list_problems, list_meds, list_labs, search_notes; include retry, timeout, and cache decorators."</li>
+                <li>"Introduce an abstract DataGateway and implement SocketGateway (existing) and VistaApiXGateway (new); add a feature flag and wire PatientService to use it."</li>
+                <li>"Add integration tests with a mocked vista‑api‑x HTTP server; verify parity with socket outputs on a sample patient."</li>
+              </ul>
+            </div>
+
+            <div class="card">
+              <h3>Phase 1b — Clinical Health API parity + CDS CONTEXT</h3>
+              <h4>Scope</h4>
+              <ul>
+                <li>Prefer <b>VA Clinical Health API</b> endpoints for standardized access; map required reads (problems, meds, labs, notes).</li>
+                <li>Where RPCs are still needed, enforce <b>CDS CONTEXT</b> and formalize permission checks (role, facility, patient).</li>
+                <li>Extend gateway contracts to include scope requirements and structured errors for insufficient permissions.</li>
+              </ul>
+              <h4>Acceptance criteria</h4>
+              <ul>
+                <li>For target entities, API responses match or exceed socket parity on fixtures (shape and critical fields).</li>
+                <li>Any RPC call path requires CDS CONTEXT and denies access with a clear user‑visible error if missing.</li>
+                <li>Unit and integration tests cover allowed/denied cases; audit logs include scope and context IDs.</li>
+              </ul>
+              <h4>Prompts to run</h4>
+              <ul>
+                <li>"Augment VistaApiXClient to favor Clinical Health API endpoints with adapters that normalize to our domain models."</li>
+                <li>"Introduce a PermissionGuard that validates CDS CONTEXT for RPC paths; add tests for allowed/denied scenarios."</li>
+                <li>"Add contract tests to assert field‑level parity between socket outputs and Clinical Health API for a sample patient."</li>
+              </ul>
+            </div>
+
+            <div class="card">
+              <h3>Phase 2 — Multi‑user: auth, sessions, tenancy</h3>
+              <h4>Scope</h4>
+              <ul>
+                <li>Add login (SSO or local), RBAC, Redis‑backed sessions, CSRF, and patient‑context scoping.</li>
+                <li>Audit log schema + writer; secure secrets management.</li>
+              </ul>
+              <h4>Acceptance criteria</h4>
+              <ul>
+                <li>Two concurrent users cannot access each other's data; patient context enforced per request.</li>
+                <li>Audit events appear for login, patient switch, data access, and draft creation.</li>
+              </ul>
+              <h4>Prompts to run</h4>
+              <ul>
+                <li>"Add session middleware with Redis store; secure cookies; implement login/logout routes and role checks."</li>
+                <li>"Implement patient‑context guard: every route that touches PHI must validate a selected patient in session."</li>
+                <li>"Define an audit log writer with structured fields (ts, user_id, facility_id, patient_id, action, route, result, correlation_id)."</li>
+              </ul>
+            </div>
+
+          </div>
+          <div class="col-right">
+
+            <div class="card">
+              <h3>Phase 3 — Service layering & workers</h3>
+              <h4>Scope</h4>
+              <ul>
+                <li>Extract domain services (RAG, Transcription, Notes); move heavy tasks to workers (RQ/Celery).</li>
+                <li>Make RAG indexing idempotent; add backpressure and job monitoring.</li>
+              </ul>
+              <h4>Acceptance criteria</h4>
+              <ul>
+                <li>Long‑running tasks don't block web; jobs survive restarts and can be retried safely.</li>
+                <li>RAG queries return answers with citations within SLA; indexing is resumable.</li>
+              </ul>
+              <h4>Prompts to run</h4>
+              <ul>
+                <li>"Refactor RAG into a service with interfaces for chunk, index, query; add background worker for index updates with idempotency keys."</li>
+                <li>"Wrap transcription pipeline as a job; stream progress to UI; persist artifacts by user/session."</li>
+                <li>"Add job dashboard endpoints and metrics (queue depth, durations, failures)."</li>
+              </ul>
+            </div>
+
+            <div class="card">
+              <h3>Phase 4 — UI cleanup & workflows</h3>
+              <h4>Scope</h4>
+              <ul>
+                <li>Remove dead assets, unify templates, standardize components (tables, graphs, citations).</li>
+                <li>Accessibility pass; mobile considerations for workspace.</li>
+              </ul>
+              <h4>Acceptance criteria</h4>
+              <ul>
+                <li>No unused JS/CSS/images; consistent styles; key flows are WCAG‑aware.</li>
+                <li>Navigation for patient switch, scribe, Q&A, and archive is consistent and fast.</li>
+              </ul>
+              <h4>Prompts to run</h4>
+              <ul>
+                <li>"Inventory and remove unused static assets; create a shared components JS module and a base template."</li>
+                <li>"Add an accessibility checklist run and fix tab order, contrast, and ARIA where needed."</li>
+              </ul>
+            </div>
+
+            <div class="card">
+              <h3>Phase 4a — ModelRegistry rollout (user‑selectable)</h3>
+              <h4>Scope</h4>
+              <ul>
+                <li>Implement <b>ModelRegistry</b> with provider manifests (id, name, capabilities, limits) and validation.</li>
+                <li>Add <b>ModelProvider</b> contract methods (answer, retrieve, scribeDraft) with timeouts and safe fallbacks.</li>
+                <li>Minimal UI: settings dropdown for provider selection; provider badge in responses.</li>
+                <li>Telemetry: tag metrics and audit with <span class="kbd">provider_id</span>; feature flags and allowlist for providers.</li>
+              </ul>
+              <h4>Acceptance criteria</h4>
+              <ul>
+                <li>User can select among at least two providers; selection persists per session; admin can restrict choices.</li>
+                <li>Timeouts/errors auto‑fallback to default provider; errors are user‑friendly and auditable.</li>
+                <li>Metrics show usage by provider; no PHI leak in logs; glossary link present near selector.</li>
+                <li>Unit tests for selection, fallback, and telemetry tagging; integration test for end‑to‑end provider swap.</li>
+              </ul>
+              <h4>Prompts to run</h4>
+              <ul>
+                <li>"Create ModelRegistry and a sample DefaultProvider and StrictCitationsProvider implementing the provider interface."</li>
+                <li>"Add a settings UI dropdown to select provider; store in session; display a provider badge on responses."</li>
+                <li>"Instrument responses with provider_id; add tests for timeouts and fallback to default provider."</li>
+              </ul>
+            </div>
+
+            <div class="card">
+              <h3>Phase 5 — Observability & pilot readiness</h3>
+              <h4>Scope</h4>
+              <ul>
+                <li>Add dashboards and alerts; finalize runbooks; load testing; incident drill.</li>
+                <li>Finalize security review and data handling docs; enable pilot rollout flag.</li>
+              </ul>
+              <h4>Acceptance criteria</h4>
+              <ul>
+                <li>Dashboards show golden signals; on‑call runbook covers top incidents.</li>
+                <li>Pilot site enabled with auditing, backups, and rollback plan.</li>
+              </ul>
+              <h4>Prompts to run</h4>
+              <ul>
+                <li>"Instrument key routes and gateway calls with metrics/tracing; export to the chosen backend; add dashboards."</li>
+                <li>"Write runbooks for outages, API failures, and cache issues; add synthetic health checks."</li>
+              </ul>
+            </div>
+
+          </div>
+        </div>
+      </section>
+
+      <div class="two-col">
+        <section>
+          <h2>Codebase audit checklist</h2>
+          <ul>
+            <li>Generate a dependency map (imports between modules); flag dead/duplicate code.</li>
+            <li>Identify socket‑based accessors (e.g., <span class="kbd">vista_api.py</span>, <span class="kbd">call_VistA_VPR_XML.py</span>) for deprecation/migration.</li>
+            <li>Review potential duplicates: <span class="kbd">vpr_XML_to_FHIR.py</span> vs <span class="kbd">vista_to_FHIR.py</span>; validate which to keep.</li>
+            <li>Isolate testable seams: Services vs Gateways; define interfaces.</li>
+            <li>Inventory background scripts (transcription, indexing) and plan workerization.</li>
+          </ul>
+          <h3>Initial deprecation candidates (validate)</h3>
+          <ul>
+            <li><span class="kbd">vista_api.py</span> (socket) → replace via <span class="kbd">VistaApiXClient</span>.</li>
+            <li><span class="kbd">call_VistA_VPR_XML.py</span> (legacy VPR XML) → retire after API parity.</li>
+            <li><span class="kbd">TEST_RPC.py</span> (ad‑hoc) → move to proper tests or remove.</li>
+            <li>Duplicated FHIR converters (<span class="kbd">vpr_XML_to_FHIR.py</span> / <span class="kbd">vista_to_FHIR.py</span>) → consolidate one.</li>
+          </ul>
+        </section>
+        <section>
+          <h2>Minimal test plan</h2>
+          <ul>
+            <li><b>Unit</b>: PatientService with mocked gateway; RAGService query selection; TranscriptionService state transitions.</li>
+            <li><b>Integration</b>: Web routes call gateway via feature flag; mocked vista‑api‑x server; parity tests vs socket on fixtures.</li>
+            <li><b>E2E smoke</b>: Start app, login, select patient, load summary, run Q&A, draft note; assert 200s and key text present.</li>
+            <li><b>Non‑functional</b>: timeouts/retries test for API failures; cache hit ratio; basic load test for hot routes.</li>
+          </ul>
+        </section>
+      </div>
+
+      <section>
+        <h2>Reusable prompt pack (cut‑paste ready)</h2>
+        <div class="card">
+          <h3>Architecture & groundwork</h3>
+          <ul>
+            <li>"Create a top‑level RFC for OMAR target architecture (C4 summary, contracts, risks). Do not change code; output Markdown for review."</li>
+            <li>"Add ruff, black, mypy with sane defaults; configure pre‑commit; add a CI workflow that runs tests and checks."</li>
+            <li>"Generate a module dependency graph and list of dead/duplicate modules, with a proposed deprecation plan."</li>
+          </ul>
+          <h3>vista‑api‑x standardization</h3>
+          <ul>
+            <li>"Implement VistaApiXClient with retry/timeout/cache; add unit tests for error modes; include structured logging and correlation IDs."</li>
+            <li>"Introduce DataGateway interface and wire PatientService through it with a feature flag switching between socket and API."</li>
+          </ul>
+          <h3>Security, sessions, audit</h3>
+          <ul>
+            <li>"Add login/session middleware (Redis); secure cookies; CSRF; role checks; patient‑context guard for PHI routes."</li>
+            <li>"Implement audit logger and a redact helper that ensures no PHI is logged; add audit events to key flows."</li>
+          </ul>
+          <h3>Workers & RAG</h3>
+          <ul>
+            <li>"Refactor RAG pipeline into chunk/index/query interfaces; move indexing to a worker; make idempotent with keys."</li>
+            <li>"Wrap transcription as a background job with progress updates; persist artifacts per user/session."</li>
+          </ul>
+          <h3>UI cleanup</h3>
+          <ul>
+            <li>"Create a base template and shared UI components; remove unused static assets; run an accessibility checklist and fixes."</li>
+          </ul>
+          <h3>Observability & pilot</h3>
+          <ul>
+            <li>"Instrument routes and gateways with metrics/tracing; add dashboards and alerts; write runbooks and synthetic checks."</li>
+          </ul>
+        </div>
+      </section>
+
+    </div>
+    <div class="footer">
+      <ul>
+        <li><strong>Working plan owners:</strong> core dev team + clinician‑developers</li>
+        <li><strong>Internal use only</strong></li>
+        <li><strong>October 2025</strong></li>
+      </ul>
+    </div>
+  </div>
+</body>
+</html>
