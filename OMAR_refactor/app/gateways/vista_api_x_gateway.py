@@ -9,6 +9,8 @@ BASE_URL = os.getenv("VISTA_API_BASE_URL", "https://vista-api-x.vetext.app/api")
 API_KEY = os.getenv("VISTA_API_KEY")
 VERIFY_SSL = os.getenv("VISTA_API_VERIFY_SSL", "true").lower() in ("1","true","yes","on")
 SUPPRESS_TLS_WARNINGS = os.getenv("VISTA_API_SUPPRESS_TLS_WARNINGS", "0").lower() in ("1","true","yes","on")
+# RPC context: default to LHS RPC CONTEXT for now; configurable via .env
+VPR_RPC_CONTEXT = os.getenv("VISTA_API_RPC_CONTEXT", "LHS RPC CONTEXT")
 
 if not VERIFY_SSL and SUPPRESS_TLS_WARNINGS:
     try:
@@ -53,7 +55,8 @@ class VistaApiXGateway(DataGateway):
             self._token = self._get_token()
             headers["Authorization"] = f"Bearer {self._token}"
             r = requests.post(url, json=body, headers=headers, timeout=timeout, verify=VERIFY_SSL)
-        return r, self._token
+        # mypy: _token is ensured by _ensure_token, but coerce to str for type stability
+        return r, (self._token or "")
 
     def get_demographics(self, dfn: str) -> Dict[str, Any]:
         return self.get_vpr_domain(dfn, domain="patient")
@@ -67,7 +70,7 @@ class VistaApiXGateway(DataGateway):
         if params and isinstance(params, dict):
             body_params.update({k: v for k, v in params.items() if v is not None})
         body = {
-            "context": "LHS RPC CONTEXT",
+            "context": VPR_RPC_CONTEXT,
             "rpc": "VPR GET PATIENT DATA JSON",
             "jsonResult": True,
             "parameters": [ { "namedArray": body_params } ]
@@ -91,3 +94,35 @@ class VistaApiXGateway(DataGateway):
                     continue
                 raise GatewayError(f"VPR domain '{domain}' request failed: {e}")
         raise GatewayError(f"VPR domain '{domain}' request failed after retries")
+
+    def get_vpr_fullchart(self, dfn: str, params: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+        """Call VPR GET PATIENT DATA JSON without a domain filter to retrieve the entire chart.
+        Warning: This can be a very large payload. Consider using start/stop where supported.
+        """
+        body_params: Dict[str, Any] = {"patientId": str(dfn)}
+        if params and isinstance(params, dict):
+            body_params.update({k: v for k, v in params.items() if v is not None})
+        body = {
+            "context": VPR_RPC_CONTEXT,
+            "rpc": "VPR GET PATIENT DATA JSON",
+            "jsonResult": True,
+            "parameters": [ { "namedArray": body_params } ]
+        }
+        path = f"/vista-sites/{self.station}/users/{self.duz}/rpc/invoke"
+        for attempt in range(3):
+            try:
+                r, _tok = self._post(path, body, timeout=120)
+                if r.status_code >= 500:
+                    time.sleep(0.8 * (attempt+1))
+                    continue
+                r.raise_for_status()
+                try:
+                    return r.json()
+                except Exception:
+                    return {"raw": r.text}
+            except requests.RequestException as e:
+                if attempt < 2:
+                    time.sleep(0.8 * (attempt+1))
+                    continue
+                raise GatewayError(f"VPR fullchart request failed: {e}")
+        raise GatewayError("VPR fullchart request failed after retries")

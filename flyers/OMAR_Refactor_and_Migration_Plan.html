@@ -112,10 +112,10 @@
         <h2>Summary</h2>
         <div class="note">
           Refactor the clinician‑built OMAR prototype into a <b>secure, multi‑user server application</b> with a <b>clean, modular architecture</b>,
-          consolidating all patient‑data retrieval through <b>vista‑api‑x</b> and removing socket‑based access. Deliver in <b>incremental phases</b> with
+          consolidating all patient‑data retrieval through <b>vista‑api‑x</b> using <b>VPR GET PATIENT DATA JSON</b> (default <b>LHS RPC CONTEXT</b>, configurable). Deliver in <b>incremental phases</b> with
           feature flags, tests, and rollback. This document is the working plan plus the <b>exact prompts</b> we will use phase‑by‑phase.
         </div>
-  <p class="small">Ground truth: backend is Python/Flask; Redis may be used for sessions; transcripts are saved locally (e.g., on VA OneDrive) outside version control; audio chunks in <span class="kbd">chunks/</span> are temporary and removed after STT; RAG embeddings and indices are kept in memory (LRU, per patient/session) with optional in‑memory FAISS—no persistent vector DB by default; deployment target is containerized behind a reverse proxy. See the <a href="/static/flyers/OMAR_Glossary.html">OMAR Glossary</a> for definitions. Quick link: <a href="#prereqs">What we need to succeed</a>.</p>
+  <p class="small">Ground truth: backend is Python/Flask; Redis may be used for sessions; transcripts are saved locally (e.g., on VA OneDrive) outside version control; audio chunks in <span class="kbd">chunks/</span> are temporary and removed after STT; RAG embeddings and indices are kept in memory (LRU, per patient/session) with optional in‑memory FAISS—no persistent vector DB by default; deployment target is containerized behind a reverse proxy. Patient‑data retrieval is via vista‑api‑x calling VPR; current default context is <span class="kbd">LHS RPC CONTEXT</span> and is configurable in environment to <span class="kbd">CDSP</span> later. See the <a href="/static/flyers/OMAR_Glossary.html">OMAR Glossary</a> for definitions. Quick link: <a href="#prereqs">What we need to succeed</a>.</p>
       </section>
 
       
@@ -167,7 +167,7 @@
           <h2>Goals</h2>
           <ul>
             <li>Multi‑user support with secure auth, sessions, patient context scoping, and audit logging (PHI‑safe).</li>
-            <li>Single standardized data access layer using <span class="kbd">vista‑api‑x</span> with retries, caching, and typed contracts.</li>
+            <li>Single standardized data access layer using <span class="kbd">vista‑api‑x</span> (VPR JSON under <span class="kbd">CDSP</span>) with retries, caching, and typed contracts.</li>
             <li>Remove dead/duplicate code; improve cohesion and reduce coupling; enable team collaboration.</li>
             <li>Introduce tests, type checking, linting, and CI/CD; add structured observability.</li>
           </ul>
@@ -190,7 +190,7 @@
               <h3>Most important</h3>
               <ul>
                 <li><b>Single‑Sign‑On (SSO) access</b> for clinicians; integrate with VA identity and session security.</li>
-                <li><b>vista‑api‑x login with real data</b>; prefer <b>VA Clinical Health API</b> where possible for standardized access.</li>
+                <li><b>vista‑api‑x login with real data</b>; calls limited to <b>VPR GET PATIENT DATA JSON</b> under <b>LHS RPC CONTEXT</b> by default (configurable).</li>
                 <li><b>Health Information Exchange (HIE)</b> connectivity for outside record access.</li>
                 <li><b>Permission to use CDS CONTEXT</b> (instead of OR CPRS GUI CHART) for running RPCs.</li>
                 <li><b>Azure resource access</b> for Speech‑to‑Text, embeddings, and generative AI; if limited, provide <b>pluggable fallbacks</b> (e.g., whisper.cpp, local inference) with feature flags.</li>
@@ -229,7 +229,7 @@
               <ul>
                 <li><b>Web/API</b> (Flask today; ASGI‑ready path): routes, auth, sessions, request scoping.</li>
                 <li><b>Services</b>: Patient, Notes, RAG, Transcription; pure business logic.</li>
-                <li><b>Gateways</b>: <span class="kbd">VistaApiXClient</span>, RedisCache, FileStore, LLMClient; side‑effect boundaries.</li>
+                <li><b>Gateways</b>: <span class="kbd">VistaApiXClient</span> (CDSP/VPR), RedisCache, FileStore, LLMClient; side‑effect boundaries.</li>
                 <li><b>Workers</b>: background jobs (transcription, indexing) via RQ/Celery.</li>
                 <li><b>Frontend</b>: templates + JS modules (workspace, scribe, explore).</li>
               </ul>
@@ -258,8 +258,8 @@
             <div class="card">
               <h3>Integration contracts (examples)</h3>
               <ul>
-                <li><span class="kbd">VistaApiXClient.get_patient(patient_id)</span> → FHIR Patient JSON | 404, 5xx retry, circuit‑breaker.</li>
-                <li><span class="kbd">VistaApiXClient.search_notes(patient_id, filters)</span> → List[NoteMeta]; paginated; cached.</li>
+                <li><span class="kbd">VistaApiXClient.get_vpr_domain(patient_id, domain)</span> → Raw VPR JSON | 404, 5xx retry, circuit‑breaker.</li>
+                <li><span class="kbd">VistaApiXClient.documents(patient_id, filters)</span> → Raw VPR `documents`; paginated; cached.</li>
                 <li><span class="kbd">RAGService.query(patient_id, query, k)</span> → answer + citations; timeboxed with fallback.</li>
               </ul>
             </div>
@@ -273,7 +273,7 @@
           <li>PHI handling: encrypt in transit, restricted logs, audit every access/use (who, when, patient, action, route).</li>
           <li>Session: secure cookies, Redis store, short TTL + sliding; patient‑context validation on every request.</li>
           <li>Secrets: environment‑based, never in repo; principle of least privilege for API scopes.</li>
-          <li>Threats: auth/session fixation, SSRF on API calls, prompt injection in notes; mitigations documented per feature.</li>
+          <li>Threats: auth/session fixation, SSRF on API calls, prompt injection in notes; mitigations documented per feature. No socket code or alternate API surface is used.</li>
         </ul>
       </section>
 
@@ -303,46 +303,26 @@
             </div>
 
             <div class="card">
-              <h3>Phase 1 — vista‑api‑x adapter (dual‑path)</h3>
+              <h3>Phase 1 — vista‑api‑x adapter (single‑path)</h3>
               <h4>Scope</h4>
               <ul>
-                <li>Create <span class="kbd">VistaApiXClient</span> and a <b>DataGateway</b> interface; add feature flag to choose adapter vs socket.</li>
-                <li>Route PatientService reads through gateway; keep socket client as fallback; add retries/caching.</li>
+                <li>Create <span class="kbd">VistaApiXClient</span> and a <b>DataGateway</b> interface (no socket code).</li>
+                <li>Route PatientService reads through gateway; add retries/caching and a simple circuit breaker.</li>
               </ul>
               <h4>Acceptance criteria</h4>
               <ul>
-                <li>Toggle flag switches all reads to vista‑api‑x with no UI change.</li>
+                <li>All reads use vista‑api‑x (CDSP/VPR) with no UI change.</li>
                 <li>Error budget respected: retries, timeouts, and clear user feedback on failure.</li>
               </ul>
               <h4>Prompts to run</h4>
               <ul>
-                <li>"Generate a <VistaApiXClient> with methods: get_patient, list_problems, list_meds, list_labs, search_notes; include retry, timeout, and cache decorators."</li>
-                <li>"Introduce an abstract DataGateway and implement SocketGateway (existing) and VistaApiXGateway (new); add a feature flag and wire PatientService to use it."</li>
-                <li>"Add integration tests with a mocked vista‑api‑x HTTP server; verify parity with socket outputs on a sample patient."</li>
+                <li>"Generate a <VistaApiXClient> with methods: get_vpr_domain (patient, meds, labs, vitals, problems, visits, documents, radiology); include retry, timeout, and cache decorators."</li>
+                <li>"Introduce an abstract DataGateway and wire PatientService to use it (no socket fallback)."</li>
+                <li>"Add integration tests with a mocked vista‑api‑x HTTP server; verify shapes against curated fixtures."</li>
               </ul>
             </div>
 
-            <div class="card">
-              <h3>Phase 1b — Clinical Health API parity + CDS CONTEXT</h3>
-              <h4>Scope</h4>
-              <ul>
-                <li>Prefer <b>VA Clinical Health API</b> endpoints for standardized access; map required reads (problems, meds, labs, notes).</li>
-                <li>Where RPCs are still needed, enforce <b>CDS CONTEXT</b> and formalize permission checks (role, facility, patient).</li>
-                <li>Extend gateway contracts to include scope requirements and structured errors for insufficient permissions.</li>
-              </ul>
-              <h4>Acceptance criteria</h4>
-              <ul>
-                <li>For target entities, API responses match or exceed socket parity on fixtures (shape and critical fields).</li>
-                <li>Any RPC call path requires CDS CONTEXT and denies access with a clear user‑visible error if missing.</li>
-                <li>Unit and integration tests cover allowed/denied cases; audit logs include scope and context IDs.</li>
-              </ul>
-              <h4>Prompts to run</h4>
-              <ul>
-                <li>"Augment VistaApiXClient to favor Clinical Health API endpoints with adapters that normalize to our domain models."</li>
-                <li>"Introduce a PermissionGuard that validates CDS CONTEXT for RPC paths; add tests for allowed/denied scenarios."</li>
-                <li>"Add contract tests to assert field‑level parity between socket outputs and Clinical Health API for a sample patient."</li>
-              </ul>
-            </div>
+            <!-- Phase 1b (Clinical Health API) removed: project is CDSP/VPR-only via vista-api-x. -->
 
             <div class="card">
               <h3>Phase 2 — Multi‑user: auth, sessions, tenancy</h3>
@@ -410,8 +390,8 @@
               <h3>Phase 4a — ModelRegistry rollout (user‑selectable)</h3>
               <h4>Scope</h4>
               <ul>
-                <li>Implement <b>ModelRegistry</b> with provider manifests (id, name, capabilities, limits) and validation.</li>
-                <li>Add <b>ModelProvider</b> contract methods (answer, retrieve, scribeDraft) with timeouts and safe fallbacks.</li>
+                <li>Implement <b>ModelRegistry</b> with model manifests (id, name, capabilities, limits) and validation. Models live in <span class="kbd">app/query/query_models/*</span>.</li>
+                <li>Add <b>ModelProvider</b> contract methods (answer, retrieve) with timeouts and safe fallbacks. Scribe is separate.</li>
                 <li>Minimal UI: settings dropdown for provider selection; provider badge in responses.</li>
                 <li>Telemetry: tag metrics and audit with <span class="kbd">provider_id</span>; feature flags and allowlist for providers.</li>
               </ul>
@@ -424,7 +404,7 @@
               </ul>
               <h4>Prompts to run</h4>
               <ul>
-                <li>"Create ModelRegistry and a sample DefaultProvider and StrictCitationsProvider implementing the provider interface."</li>
+                <li>"Create ModelRegistry and a sample DefaultModel in <code>app/query/query_models/default</code> plus a template model folder with README instructions."</li>
                 <li>"Add a settings UI dropdown to select provider; store in session; display a provider badge on responses."</li>
                 <li>"Instrument responses with provider_id; add tests for timeouts and fallback to default provider."</li>
               </ul>
@@ -514,6 +494,98 @@
           <ul>
             <li>"Instrument routes and gateways with metrics/tracing; add dashboards and alerts; write runbooks and synthetic checks."</li>
           </ul>
+        </div>
+      </section>
+
+      <section class="page-break-before">
+        <h2>Frontend refactor plan — workspace & tabs</h2>
+        <div class="cards">
+          <div class="col-left">
+            <div class="card">
+              <h3>Scope & principles</h3>
+              <ul>
+                <li><b>Keep UX feel</b> while simplifying. No legacy compatibility shims.</li>
+                <li><b>HTML‑first + light JS</b>: server shapes data; client enhances interactivity.</li>
+                <li><b>No pagination</b>: infinite scroll with IntersectionObserver; server paging tokens.</li>
+                <li><b>Safety</b>: strict patient isolation; abort in‑flight on switch; PHI never cached cross‑patient.</li>
+                <li><b>Remove</b>: <i>modules</i> sandbox, <i>deep search</i> demo, <i>demo PHI masking</i>, legacy Explore page.</li>
+              </ul>
+            </div>
+            <div class="card">
+              <h3>Pages and tabs</h3>
+              <p><b>Pages (4)</b>: <span class="pill">landing</span>, <span class="pill">workspace</span>, <span class="pill">archive</span>, <span class="pill">settings</span></p>
+              <p><b>Workspace tabs</b> (initial set):</p>
+              <ul>
+                <li><b>note</b> (scribe composer)</li>
+                <li><b>heyomar</b> (Q&A)</li>
+                <li><b>after_visit_summary</b></li>
+                <li><b>outside_records</b></li>
+                <li><b>todo</b></li>
+                <li><b>documents</b></li>
+                <li><b>radiology</b></li>
+                <li><b>snapshot</b></li>
+                <li><b>labs</b></li>
+                <li><b>template_example</b> (developer sample)</li>
+              </ul>
+            </div>
+            <div class="card">
+              <h3>Data contracts (server‑shaped)</h3>
+              <ul>
+                <li><b>List envelope</b>: <span class="kbd">{ items: T[], next: string|null, total?: number }</span></li>
+                <li><b>Search envelope</b>: <span class="kbd">{ query: Q, items: T[], next: string|null, partial: boolean }</span></li>
+                <li><b>Document item</b> (example): <span class="kbd">{ id, date, title, class, type, author, encounter?, preview?, text?: string }</span></li>
+                <li><b>Paging</b>: opaque <span class="kbd">next</span> token; server sorts/filters; stateless requests within patient scope.</li>
+              </ul>
+            </div>
+            <div class="card">
+              <h3>Infinite scroll & viewer</h3>
+              <ul>
+                <li>IntersectionObserver on a sentinel → fetch next page → append → auto‑enqueue for indexing.</li>
+                <li>Sticky column headers; server‑mode table for sort/filter; minimal JS state.</li>
+                <li>Document overlay panel (keyboard nav, esc to close); prefetch next/prev text.</li>
+              </ul>
+            </div>
+          </div>
+          <div class="col-right">
+            <div class="card">
+              <h3>Patient isolation & safety</h3>
+              <ul>
+                <li>Every request carries a <span class="kbd">patient_id</span> and <span class="kbd">generation</span> header; server rejects mismatches.</li>
+                <li>On patient switch: abort xhr/fetch, clear in‑memory caches, reset scroll/tables.</li>
+                <li>Server caches and indices are <b>keyed by (user, patient)</b>; content hashing for idempotency.</li>
+              </ul>
+            </div>
+            <div class="card">
+              <h3>Search & indexing (automatic)</h3>
+              <ul>
+                <li>No manual "index visible". Append/view/search → enqueue index with priority (viewer &gt; viewport &gt; backlog).</li>
+                <li>As‑you‑type search: 150–250ms debounce → server returns <span class="kbd">partial=true</span> until full‑text ready.</li>
+                <li>FTS store (SQLite FTS5 or Redis module) scoped per user+patient; eviction by LRU and patient switch.</li>
+              </ul>
+            </div>
+            <div class="card">
+              <h3>Persistence</h3>
+              <ul>
+                <li>Server‑side storage for layout, preferences, dot‑phrases/prompts, and archives (by user).</li>
+                <li>Endpoints: <span class="kbd">GET/PUT /api/user/layout</span>, <span class="kbd">/api/user/prefs</span>, <span class="kbd">/api/user/prompts</span>, <span class="kbd">/api/user/archives</span>.</li>
+                <li>Client loads state on page init; writes are debounced and acknowledged.</li>
+              </ul>
+            </div>
+            <div class="card">
+              <h3>Implementation sequencing</h3>
+              <ol>
+                <li><b>FE‑0 Skeleton</b>: Four pages, workspace shell, base template, shared CSS/JS; wire patient guard banners.</li>
+                <li><b>FE‑1 Contracts</b>: Standard list/search envelopes; <span class="kbd">/documents</span>, <span class="kbd">/radiology</span>, <span class="kbd">/labs</span> read APIs with paging tokens.</li>
+                <li><b>FE‑2 Documents tab</b>: Server‑mode table + infinite scroll + overlay viewer; remove legacy Explore load; parity keyboard nav.</li>
+                <li><b>FE‑3 Search</b>: Debounced server search; show <span class="kbd">partial</span> indicator; highlight hits in preview; cache results per query.</li>
+                <li><b>FE‑4 Auto‑index</b>: Background queue + idempotent content hashing; enqueue on append/view/search; priority handling.</li>
+                <li><b>FE‑5 Scribe & HeyOmar</b>: Port scribe autosave/poll; add ModelRegistry selector; consistent headers and panels.</li>
+                <li><b>FE‑6 Persistence</b>: Layout/prefs/prompts endpoints; server‑first state restore; multi‑device verification.</li>
+                <li><b>FE‑7 Cleanup</b>: Remove legacy modules/deep search/PHI mask; a11y and performance pass.</li>
+              </ol>
+              <p class="small"><b>Acceptance (per step)</b>: renders without console errors; patient switch guard works; scroll never leaks across patients; API returns correct envelopes; no cross‑patient results; Lighthouse a11y ≥ 90 on workspace.</p>
+            </div>
+          </div>
         </div>
       </section>
 

@@ -152,21 +152,61 @@ def map_vpr_patient_to_quick_demographics(vpr_payload: Any) -> Dict[str, Any]:
 
 # ===================== Medications (direct VPR → quick) =====================
 
+def _fileman_to_iso(val: Any) -> Optional[str]:
+    """Convert FileMan date/time (YYYMMDD[.HHMM[SS]]) to ISO8601 Z.
+    YYY = year - 1700. Example: 3251029.1430 -> 2025-10-29T14:30:00Z
+    """
+    try:
+        s = str(val).strip()
+        if not s:
+            return None
+        # Accept forms: 7 digits or 7 digits + . + time
+        head = s
+        tail = ''
+        if '.' in s:
+            head, tail = s.split('.', 1)
+        if not head.isdigit() or len(head) != 7:
+            return None
+        yyy = int(head[0:3])
+        y = yyy + 1700
+        m = int(head[3:5])
+        d = int(head[5:7])
+        hh = mm = ss = 0
+        if tail:
+            tdigits = ''.join(ch for ch in tail if ch.isdigit())
+            if len(tdigits) >= 2:
+                hh = int(tdigits[0:2])
+            if len(tdigits) >= 4:
+                mm = int(tdigits[2:4])
+            if len(tdigits) >= 6:
+                ss = int(tdigits[4:6])
+        obj = dt.datetime(y, m, d, hh, mm, ss, tzinfo=dt.timezone.utc)
+        return obj.isoformat().replace('+00:00', 'Z')
+    except Exception:
+        return None
+
+
 def _parse_any_datetime_to_iso(val: Any) -> Optional[str]:
-    """Best-effort parse of date representations to ISO8601 Z format."""
+    """Best-effort parse of date representations to ISO8601 Z format.
+    Supports ISO, yyyymmdd[HHMMSS], and FileMan YYYMMDD[.HHMM[SS]].
+    """
     if val is None:
         return None
     try:
         s = str(val).strip()
         if not s:
             return None
-        # Try ISO
+        # Try ISO first
         try:
             if 'T' in s or '-' in s:
                 d = dt.datetime.fromisoformat(s.replace('Z', '+00:00'))
                 return d.astimezone(dt.timezone.utc).replace(tzinfo=dt.timezone.utc).isoformat().replace('+00:00', 'Z')
         except Exception:
             pass
+        # Try FileMan
+        fm = _fileman_to_iso(s)
+        if fm:
+            return fm
         # yyyymmdd[hhmmss]
         digits = ''.join(ch for ch in s if ch.isdigit())
         if len(digits) >= 8:
@@ -179,6 +219,106 @@ def _parse_any_datetime_to_iso(val: Any) -> Optional[str]:
     except Exception:
         return None
     return None
+
+
+def to_fileman_datetime(val: Any) -> Optional[str]:
+    """Convert common date/time representations to FileMan date/time string.
+    Accepted inputs:
+      - ISO date or datetime string (e.g., '2025-10-29' or '2025-10-29T14:30:00Z')
+      - Digits 'yyyymmdd' optionally followed by HHMM or HHMMSS
+      - Existing FileMan date/time (e.g., '3251029' or '3251029.1430') is returned as-is
+    Output:
+      - 'YYYMMDD' or 'YYYMMDD.HHMM[SS]' where YYY = year-1700
+    """
+    try:
+        if val is None:
+            return None
+        s = str(val).strip()
+        if not s:
+            return None
+        # Already looks like FileMan date or date.time
+        #  - 7 digits (e.g., 3251029) or 7 digits + . + time
+        if s.isdigit() and (len(s) == 7):
+            return s
+        if '.' in s:
+            head, tail = s.split('.', 1)
+            if head.isdigit() and len(head) == 7 and tail.replace(':','').isdigit():
+                # Accept forms like 3251029.1430 or 3251029.14:30
+                return head + '.' + tail.replace(':','')
+        # ISO date/time
+        try:
+            iso = s.replace('Z', '+00:00')
+            dt_obj = None
+            # fromisoformat works for 'YYYY-MM-DD' and 'YYYY-MM-DDTHH:MM[:SS][+/-offset]'
+            dt_obj = dt.datetime.fromisoformat(iso)
+            y = dt_obj.year; m = dt_obj.month; d = dt_obj.day
+            hh = dt_obj.hour; mm = dt_obj.minute; ss = dt_obj.second
+            yyy = y - 1700
+            date_part = f"{yyy:03d}{m:02d}{d:02d}"
+            if hh or mm or ss:
+                # Emit HHMMSS when seconds present, else HHMM
+                if ss:
+                    return f"{date_part}.{hh:02d}{mm:02d}{ss:02d}"
+                return f"{date_part}.{hh:02d}{mm:02d}"
+            return date_part
+        except Exception:
+            pass
+        # Digits yyyymmdd[HHMM[SS]] → convert to FileMan
+        digits = ''.join(ch for ch in s if ch.isdigit())
+        if len(digits) >= 8:
+            y = int(digits[0:4]); m = int(digits[4:6]); d = int(digits[6:8])
+            yyy = y - 1700
+            date_part = f"{yyy:03d}{m:02d}{d:02d}"
+            if len(digits) >= 12:
+                hh = int(digits[8:10]); mm = int(digits[10:12])
+                if len(digits) >= 14:
+                    ss = int(digits[12:14])
+                    return f"{date_part}.{hh:02d}{mm:02d}{ss:02d}"
+                return f"{date_part}.{hh:02d}{mm:02d}"
+            return date_part
+        return None
+    except Exception:
+        return None
+
+
+# --------------------- Relative date helpers ---------------------
+
+def parse_relative_last_to_iso_range(last: str, now: Optional[dt.datetime] = None) -> Optional[tuple[str, str]]:
+    """Parse relative phrase like '14d', '6m', '1y', '2w' into (start_iso, stop_iso).
+    Units:
+      d=days, w=weeks, m=months, y=years, h=hours. Default unit is days if omitted.
+    """
+    try:
+        if not last:
+            return None
+        s = str(last).strip().lower()
+        if not s:
+            return None
+        # Extract number and unit
+        num_str = ''.join(ch for ch in s if ch.isdigit())
+        unit = ''.join(ch for ch in s if ch.isalpha()) or 'd'
+        if not num_str:
+            return None
+        n = int(num_str)
+        now = now or dt.datetime.now(dt.timezone.utc)
+        # Compute delta
+        if unit.startswith('h'):
+            delta = dt.timedelta(hours=n)
+        elif unit.startswith('w'):
+            delta = dt.timedelta(weeks=n)
+        elif unit.startswith('m'):
+            # months: approximate by 30 days per month
+            delta = dt.timedelta(days=30*n)
+        elif unit.startswith('y'):
+            # years: approximate by 365 days per year
+            delta = dt.timedelta(days=365*n)
+        else:
+            delta = dt.timedelta(days=n)
+        start = now - delta
+        stop = now
+        return (start.isoformat().replace('+00:00', 'Z'), stop.isoformat().replace('+00:00', 'Z'))
+    except Exception:
+        return None
 
 
 def _normalize_med_status(s: Any) -> str:

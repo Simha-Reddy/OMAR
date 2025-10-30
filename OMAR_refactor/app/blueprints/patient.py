@@ -1,4 +1,5 @@
 from __future__ import annotations
+import os
 from flask import Blueprint, jsonify, current_app, request
 from ..services.patient_service import PatientService
 from ..gateways.vista_api_x_gateway import VistaApiXGateway
@@ -9,9 +10,56 @@ bp = Blueprint('patient_api', __name__)
 # Very small composition for now; later use DI container
 
 def _get_patient_service() -> PatientService:
-    # Station/DUZ will come from session/SSO later; use defaults for scaffold
-    gw = VistaApiXGateway(station=request.args.get('station','500'), duz=request.args.get('duz','983'))
+    """Build PatientService with station/duz bound to session when available.
+    If query params include station/duz, persist them into session; otherwise use persisted values.
+    Defaults: station=500, duz=983 (dev).
+    """
+    from flask import session as flask_session
+    # Persist station/duz from query if provided
+    sta_arg = request.args.get('station')
+    duz_arg = request.args.get('duz')
+    if sta_arg:
+        flask_session['station'] = str(sta_arg)
+    if duz_arg:
+        flask_session['duz'] = str(duz_arg)
+    station = str(flask_session.get('station') or os.getenv('DEFAULT_STATION','500'))
+    duz = str(flask_session.get('duz') or os.getenv('DEFAULT_DUZ','983'))
+    gw = VistaApiXGateway(station=station, duz=duz)
     return PatientService(gateway=gw)
+
+# ----------------- Maintainability helpers -----------------
+
+# Per-domain allowlists for pass-through filters
+_ALLOWED: dict[str, tuple[str, ...]] = {
+    'meds': ('start','stop','max','id','uid','vaType'),
+    'labs': ('start','stop','max','id','uid','category','nowrap'),
+    'vitals': ('start','stop','max','id','uid'),
+    'documents': ('start','stop','max','id','uid','status','category','text','nowrap'),
+    'radiology': ('start','stop','max','id','uid'),
+    'procedures': ('start','stop','max','id','uid'),
+    'encounters': ('start','stop','max','id','uid'),
+    'problems': ('max','id','uid','status'),
+    'allergies': ('start','stop','max','id','uid'),
+    # Additional VPR domains
+    'appointment': ('start','stop','max','id','uid'),
+    'order': ('start','stop','max','id','uid'),
+    'consult': ('start','stop','max','id','uid','nowrap'),
+    'immunization': ('start','stop','max','id','uid'),
+    'cpt': ('start','stop','max','id','uid'),
+    'exam': ('start','stop','max','id','uid'),
+    'education': ('start','stop','max','id','uid'),
+    'factor': ('start','stop','max','id','uid'),
+    'pov': ('start','stop','max','id','uid'),
+    'skin': ('start','stop','max','id','uid'),
+    'obs': ('start','stop','max','id','uid'),
+    'ptf': ('start','stop','max','id','uid'),
+    'surgery': ('start','stop','max','id','uid'),
+    'image': ('start','stop','max','id','uid'),
+}
+
+def _collect_for(domain_key: str, *extra: str) -> dict:
+    keys = list(_ALLOWED.get(domain_key, ())) + list(extra)
+    return _collect_params(*keys)
 
 
 # ----------------- Helpers to enrich quick results from raw -----------------
@@ -139,6 +187,85 @@ def _extract_problem_comments(raw_item: dict) -> list[dict] | None:
         return out or None
     except Exception:
         return None
+
+
+# ----------------- Simple pagination helpers (envelope) -----------------
+
+def _parse_limit(default: int = 50, max_limit: int = 200) -> int:
+    try:
+        val = int((request.args.get('limit') or '').strip() or default)
+        if val < 1:
+            return default
+        return min(val, max_limit)
+    except Exception:
+        return default
+
+
+def _parse_offset() -> int:
+    # Supports either explicit offset or opaque next token that is an int
+    raw = request.args.get('offset') or request.args.get('next') or '0'
+    try:
+        off = int(str(raw).strip() or '0')
+        return max(0, off)
+    except Exception:
+        return 0
+
+
+def _envelope_list(items: list[dict] | list) -> dict:
+    """Return a standard list envelope with paging.
+    Token is a simple integer offset for now (opaque to clients).
+    """
+    if not isinstance(items, list):
+        items = []
+    total = len(items)
+    limit = _parse_limit()
+    offset = _parse_offset()
+    start = min(offset, total)
+    end = min(start + limit, total)
+    page = items[start:end]
+    next_token = str(end) if end < total else None
+    return {
+        'items': page,
+        'next': next_token,
+        'total': total,
+    }
+
+
+# ----------------- VPR pass-through param helpers -----------------
+
+def _collect_params(*keys: str) -> dict:
+    """Collect allowed params and normalize dates.
+    - Converts start/stop to FileMan when provided.
+    - Supports relative range via last=14d|2w|6m|1y when start/stop absent; emits start/stop.
+    """
+    out: dict = {}
+    provided_keys = set(keys)
+    for k in keys:
+        v = request.args.get(k)
+        if v is None:
+            continue
+        s = str(v).strip()
+        if s == '':
+            continue
+        if k in ('start','stop'):
+            fm = T.to_fileman_datetime(s)
+            out[k] = fm or s
+        else:
+            out[k] = s
+    # Relative date convenience: only if endpoint accepts start/stop and not already provided
+    if ('start' in provided_keys or 'stop' in provided_keys) and ('start' not in out and 'stop' not in out):
+        last = request.args.get('last')
+        if last:
+            rng = T.parse_relative_last_to_iso_range(last)  # type: ignore
+            if rng:
+                s_iso, e_iso = rng
+                s_fm = T.to_fileman_datetime(s_iso)
+                e_fm = T.to_fileman_datetime(e_iso)
+                if s_fm:
+                    out['start'] = s_fm
+                if e_fm:
+                    out['stop'] = e_fm
+    return out
 
 @bp.get('/<dfn>/demographics')
 def demographics(dfn: str):
@@ -292,7 +419,7 @@ def documents_quick(dfn: str):
     svc = _get_patient_service()
     try:
         # Fetch raw and quick lists
-        vpr = svc.get_vpr_raw(dfn, 'notes')  # alias -> documents
+        vpr = svc.get_vpr_raw(dfn, 'document')
         quick_list = svc.get_documents_quick(dfn)
 
         include_raw = request.args.get('includeRaw','0').lower() in ('1','true','yes','on')
@@ -369,6 +496,70 @@ def documents_quick(dfn: str):
     except Exception as e:
         return jsonify({'error': str(e)}), 500
 
+
+@bp.get('/<dfn>/list/documents')
+def documents_list_envelope(dfn: str):
+    """Paginated list envelope for documents with optional filters.
+    Returns: { items: [], next: string|null, total: number }
+    Filters via query params `class` and `type` are supported (same as /quick/documents) but
+    envelope is always applied to the resulting list. Full text/raw are not included here by default
+    to keep payloads small; clients can follow-up on individual items using quick endpoints with
+    includeText/includeEncounter when needed.
+    """
+    svc = _get_patient_service()
+    try:
+        # Reuse the quick + filters logic to get the full filtered list, then paginate
+        vpr = svc.get_vpr_raw(dfn, 'notes')  # alias -> documents
+        quick_list = svc.get_documents_quick(dfn)
+
+        def _split_params(val: str | None) -> list[str]:
+            if not val:
+                return []
+            parts = []
+            for p in str(val).split(','):
+                s = p.strip()
+                if s:
+                    parts.append(s)
+            return parts
+
+        class_filters = [s.lower() for s in _split_params(request.args.get('class'))]
+        type_filters = [s.lower() for s in _split_params(request.args.get('type'))]
+
+        if not isinstance(quick_list, list):
+            quick_list = []
+
+        # Filter using the same rules as documents_quick (without enrichment)
+        items: list[dict] = []
+        raw_items = []
+        try:
+            raw_items = T._get_nested_items(vpr)  # type: ignore
+        except Exception:
+            raw_items = []
+        for idx, q in enumerate(quick_list):
+            if not isinstance(q, dict):
+                continue
+            r = raw_items[idx] if idx < len(raw_items) else None
+            # Class filter
+            if class_filters:
+                qc = (q.get('documentClass') or '')
+                rc = (r.get('documentClass') if isinstance(r, dict) else '')
+                s = (qc or rc or '')
+                if s.strip().lower() not in class_filters:
+                    continue
+            # Type filter
+            if type_filters:
+                name = (q.get('documentType') or '')
+                rname = (r.get('documentTypeName') if isinstance(r, dict) else '')
+                rcode = (r.get('documentTypeCode') if isinstance(r, dict) else '')
+                vals = [str(name).lower(), str(rname).lower(), str(rcode).lower()]
+                if not any(v in type_filters for v in vals if v):
+                    continue
+            items.append(q)
+
+        return jsonify(_envelope_list(items))
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
 @bp.get('/<dfn>/quick/radiology')
 def radiology_quick(dfn: str):
     svc = _get_patient_service()
@@ -402,6 +593,121 @@ def radiology_quick(dfn: str):
                 out.append(obj)
             quick = out
         return jsonify(quick)
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+@bp.get('/<dfn>/list/labs')
+def labs_list_envelope(dfn: str):
+    """Paginated list envelope for labs (quick shape), with optional filters converted to FileMan.
+    Returns: { items: [], next: string|null, total: number }
+    Supported params: start, stop, max, id, uid, category (CH|MI|AP), nowrap
+    """
+    svc = _get_patient_service()
+    try:
+        params = _collect_params('start','stop','max','id','uid','category','nowrap')
+        vpr = svc.get_vpr_raw(dfn, 'labs', params=params)
+        quick = svc.get_labs_quick(dfn)
+        # For alignment and includeRaw if requested
+        include_raw = request.args.get('includeRaw','0').lower() in ('1','true','yes','on')
+        raw_items = []
+        try:
+            raw_items = T._get_nested_items(vpr)  # type: ignore
+        except Exception:
+            raw_items = []
+        items = []
+        if isinstance(quick, list):
+            for idx, q in enumerate(quick):
+                obj = dict(q)
+                if include_raw and idx < len(raw_items):
+                    obj['_raw'] = raw_items[idx]
+                items.append(obj)
+        return jsonify(_envelope_list(items))
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+@bp.get('/<dfn>/list/radiology')
+def radiology_list_envelope(dfn: str):
+    """Paginated list envelope for radiology (quick shape), with optional filters converted to FileMan.
+    Returns: { items: [], next: string|null, total: number }
+    Supported params: start, stop, max, id, uid
+    """
+    svc = _get_patient_service()
+    try:
+        params = _collect_params('start','stop','max','id','uid')
+        vpr = svc.get_vpr_raw(dfn, 'radiology', params=params)
+        quick = svc.get_radiology_quick(dfn)
+        include_raw = request.args.get('includeRaw','0').lower() in ('1','true','yes','on')
+        raw_items = []
+        try:
+            raw_items = T._get_nested_items(vpr)  # type: ignore
+        except Exception:
+            raw_items = []
+        items = []
+        if isinstance(quick, list):
+            for idx, q in enumerate(quick):
+                obj = dict(q)
+                if include_raw and idx < len(raw_items):
+                    obj['_raw'] = raw_items[idx]
+                items.append(obj)
+        return jsonify(_envelope_list(items))
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+@bp.get('/<dfn>/list/meds')
+def meds_list_envelope(dfn: str):
+    """Paginated list envelope for medications (quick shape).
+    Returns: { items: [], next: string|null, total: number }
+    Supported params: start, stop, max, id, uid, vaType
+    Supports relative range via last=14d|2w|6m|1y.
+    """
+    svc = _get_patient_service()
+    try:
+        params = _collect_params('start','stop','max','id','uid','vaType')
+        vpr = svc.get_vpr_raw(dfn, 'meds', params=params)
+        quick = svc.get_medications_quick(dfn)
+        include_raw = request.args.get('includeRaw','0').lower() in ('1','true','yes','on')
+        raw_items = []
+        try:
+            raw_items = T._get_nested_items(vpr)  # type: ignore
+        except Exception:
+            raw_items = []
+        items = []
+        if isinstance(quick, list):
+            for idx, q in enumerate(quick):
+                obj = dict(q)
+                if include_raw and idx < len(raw_items):
+                    obj['_raw'] = raw_items[idx]
+                items.append(obj)
+        return jsonify(_envelope_list(items))
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+@bp.get('/<dfn>/list/vitals')
+def vitals_list_envelope(dfn: str):
+    """Paginated list envelope for vitals (quick shape).
+    Returns: { items: [], next: string|null, total: number }
+    Supported params: start, stop, max, id, uid
+    Supports relative range via last=14d|2w|6m|1y.
+    """
+    svc = _get_patient_service()
+    try:
+        params = _collect_params('start','stop','max','id','uid')
+        vpr = svc.get_vpr_raw(dfn, 'vitals', params=params)
+        quick = svc.get_vitals_quick(dfn)
+        include_raw = request.args.get('includeRaw','0').lower() in ('1','true','yes','on')
+        raw_items = []
+        try:
+            raw_items = T._get_nested_items(vpr)  # type: ignore
+        except Exception:
+            raw_items = []
+        items = []
+        if isinstance(quick, list):
+            for idx, q in enumerate(quick):
+                obj = dict(q)
+                if include_raw and idx < len(raw_items):
+                    obj['_raw'] = raw_items[idx]
+                items.append(obj)
+        return jsonify(_envelope_list(items))
     except Exception as e:
         return jsonify({'error': str(e)}), 500
 
@@ -468,7 +774,37 @@ def encounters_quick(dfn: str):
 def vpr_raw(dfn: str, domain: str):
     svc = _get_patient_service()
     try:
-        vpr = svc.get_vpr_raw(dfn, domain)
+        # Best-effort param collection using a union of commonly safe keys
+        params = _collect_params('start','stop','max','id','uid','status','category','text','nowrap','vaType')
+        vpr = svc.get_vpr_raw(dfn, domain, params=params)
+        return jsonify(vpr)
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+@bp.get('/<dfn>/vpr/<domain>/item')
+def vpr_item(dfn: str, domain: str):
+    """Fetch a single item by uid or id for any VPR domain.
+    Usage: /<dfn>/vpr/<domain>/item?uid=... or ?id=...
+    Accepts optional nowrap. If both uid and id provided, both are forwarded.
+    """
+    svc = _get_patient_service()
+    try:
+        uid = (request.args.get('uid') or '').strip()
+        id_ = (request.args.get('id') or '').strip()
+        if not uid and not id_:
+            return jsonify({'error': 'one of uid or id is required'}), 400
+        params = _collect_params('id','uid','nowrap','start','stop','max')
+        vpr = svc.get_vpr_raw(dfn, domain, params=params)
+        return jsonify(vpr)
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+# Full VPR chart without domain filtering (large payload)
+@bp.get('/<dfn>/fullchart')
+def fullchart(dfn: str):
+    svc = _get_patient_service()
+    try:
+        vpr = svc.get_fullchart(dfn)
         return jsonify(vpr)
     except Exception as e:
         return jsonify({'error': str(e)}), 500
@@ -490,7 +826,7 @@ def compare_domain(dfn: str, domain: str):
             quick = svc.get_vitals_quick(dfn)
         elif domain == 'notes':
             quick = svc.get_notes_quick(dfn)
-        elif domain == 'documents':
+        elif domain in ('documents','document'):
             quick = svc.get_documents_quick(dfn)
         elif domain == 'radiology':
             quick = svc.get_radiology_quick(dfn)
@@ -513,7 +849,8 @@ def compare_domain(dfn: str, domain: str):
 def meds_default_vpr(dfn: str):
     svc = _get_patient_service()
     try:
-        vpr = svc.get_vpr_raw(dfn, 'meds')
+        params = _collect_for('meds')
+        vpr = svc.get_vpr_raw(dfn, 'meds', params=params)
         return jsonify(vpr)
     except Exception as e:
         return jsonify({'error': str(e)}), 500
@@ -523,7 +860,8 @@ def meds_default_vpr(dfn: str):
 def labs_default_vpr(dfn: str):
     svc = _get_patient_service()
     try:
-        vpr = svc.get_vpr_raw(dfn, 'labs')
+        params = _collect_for('labs')
+        vpr = svc.get_vpr_raw(dfn, 'labs', params=params)
         return jsonify(vpr)
     except Exception as e:
         return jsonify({'error': str(e)}), 500
@@ -532,7 +870,8 @@ def labs_default_vpr(dfn: str):
 def vitals_default_vpr(dfn: str):
     svc = _get_patient_service()
     try:
-        vpr = svc.get_vpr_raw(dfn, 'vitals')
+        params = _collect_for('vitals')
+        vpr = svc.get_vpr_raw(dfn, 'vitals', params=params)
         return jsonify(vpr)
     except Exception as e:
         return jsonify({'error': str(e)}), 500
@@ -541,7 +880,8 @@ def vitals_default_vpr(dfn: str):
 def notes_default_vpr(dfn: str):
     svc = _get_patient_service()
     try:
-        vpr = svc.get_vpr_raw(dfn, 'notes')
+        params = _collect_for('documents')
+        vpr = svc.get_vpr_raw(dfn, 'notes', params=params)
         return jsonify(vpr)
     except Exception as e:
         return jsonify({'error': str(e)}), 500
@@ -550,7 +890,8 @@ def notes_default_vpr(dfn: str):
 def radiology_default_vpr(dfn: str):
     svc = _get_patient_service()
     try:
-        vpr = svc.get_vpr_raw(dfn, 'radiology')
+        params = _collect_for('radiology')
+        vpr = svc.get_vpr_raw(dfn, 'radiology', params=params)
         return jsonify(vpr)
     except Exception as e:
         return jsonify({'error': str(e)}), 500
@@ -559,7 +900,8 @@ def radiology_default_vpr(dfn: str):
 def procedures_default_vpr(dfn: str):
     svc = _get_patient_service()
     try:
-        vpr = svc.get_vpr_raw(dfn, 'procedures')
+        params = _collect_for('procedures')
+        vpr = svc.get_vpr_raw(dfn, 'procedures', params=params)
         return jsonify(vpr)
     except Exception as e:
         return jsonify({'error': str(e)}), 500
@@ -568,7 +910,8 @@ def procedures_default_vpr(dfn: str):
 def encounters_default_vpr(dfn: str):
     svc = _get_patient_service()
     try:
-        vpr = svc.get_vpr_raw(dfn, 'encounters')
+        params = _collect_for('encounters')
+        vpr = svc.get_vpr_raw(dfn, 'encounters', params=params)
         return jsonify(vpr)
     except Exception as e:
         return jsonify({'error': str(e)}), 500
@@ -577,7 +920,8 @@ def encounters_default_vpr(dfn: str):
 def problems_default_vpr(dfn: str):
     svc = _get_patient_service()
     try:
-        vpr = svc.get_vpr_raw(dfn, 'problems')
+        params = _collect_for('problems')
+        vpr = svc.get_vpr_raw(dfn, 'problems', params=params)
         return jsonify(vpr)
     except Exception as e:
         return jsonify({'error': str(e)}), 500
@@ -586,7 +930,8 @@ def problems_default_vpr(dfn: str):
 def allergies_default_vpr(dfn: str):
     svc = _get_patient_service()
     try:
-        vpr = svc.get_vpr_raw(dfn, 'allergies')
+        params = _collect_for('allergies')
+        vpr = svc.get_vpr_raw(dfn, 'allergies', params=params)
         return jsonify(vpr)
     except Exception as e:
         return jsonify({'error': str(e)}), 500
@@ -596,7 +941,8 @@ def allergies_default_vpr(dfn: str):
 def documents_default_vpr(dfn: str):
     svc = _get_patient_service()
     try:
-        vpr = svc.get_vpr_raw(dfn, 'documents')
+        params = _collect_for('documents')
+        vpr = svc.get_vpr_raw(dfn, 'document', params=params)
         return jsonify(vpr)
     except Exception as e:
         return jsonify({'error': str(e)}), 500
@@ -669,5 +1015,166 @@ def allergies_quick(dfn: str):
                 out.append(obj)
             quick = out
         return jsonify(quick)
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+
+# ----------------- Additional VPR domains (raw passthrough) -----------------
+
+@bp.get('/<dfn>/appointments')
+def appointments_vpr(dfn: str):
+    """Scheduling appointments (VPR domain 'appointment').
+    Filters: start (defaults to today), stop (future), max, id, uid
+    """
+    svc = _get_patient_service()
+    try:
+        params = _collect_for('appointment')
+        vpr = svc.get_vpr_raw(dfn, 'appointment', params=params)
+        return jsonify(vpr)
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+@bp.get('/<dfn>/orders')
+def orders_vpr(dfn: str):
+    """Orders (VPR domain 'order'). Filters: start/stop (date released), max, id, uid"""
+    svc = _get_patient_service()
+    try:
+        params = _collect_for('order')
+        vpr = svc.get_vpr_raw(dfn, 'order', params=params)
+        return jsonify(vpr)
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+@bp.get('/<dfn>/consults')
+def consults_vpr(dfn: str):
+    """Consults (VPR domain 'consult'). Filters: start/stop (dateTime), max, id, uid, nowrap"""
+    svc = _get_patient_service()
+    try:
+        params = _collect_for('consult')
+        vpr = svc.get_vpr_raw(dfn, 'consult', params=params)
+        return jsonify(vpr)
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+@bp.get('/<dfn>/immunizations')
+def immunizations_vpr(dfn: str):
+    """Immunizations (VPR domain 'immunization'). Filters: start/stop (administeredDateTime), max, id, uid"""
+    svc = _get_patient_service()
+    try:
+        params = _collect_for('immunization')
+        vpr = svc.get_vpr_raw(dfn, 'immunization', params=params)
+        return jsonify(vpr)
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+@bp.get('/<dfn>/cpt')
+def cpt_vpr(dfn: str):
+    """CPT procedures (VPR domain 'cpt'). Filters: start/stop (entered), max, id, uid"""
+    svc = _get_patient_service()
+    try:
+        params = _collect_for('cpt')
+        vpr = svc.get_vpr_raw(dfn, 'cpt', params=params)
+        return jsonify(vpr)
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+@bp.get('/<dfn>/exams')
+def exams_vpr(dfn: str):
+    """Exams (VPR domain 'exam'). Filters: start/stop (entered), max, id, uid"""
+    svc = _get_patient_service()
+    try:
+        params = _collect_for('exam')
+        vpr = svc.get_vpr_raw(dfn, 'exam', params=params)
+        return jsonify(vpr)
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+@bp.get('/<dfn>/education')
+def education_vpr(dfn: str):
+    """Education (VPR domain 'education'). Filters: start/stop (entered), max, id, uid"""
+    svc = _get_patient_service()
+    try:
+        params = _collect_for('education')
+        vpr = svc.get_vpr_raw(dfn, 'education', params=params)
+        return jsonify(vpr)
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+@bp.get('/<dfn>/factors')
+def factors_vpr(dfn: str):
+    """Health Factors (VPR domain 'factor'). Filters: start/stop (entered), max, id, uid"""
+    svc = _get_patient_service()
+    try:
+        params = _collect_for('factor')
+        vpr = svc.get_vpr_raw(dfn, 'factor', params=params)
+        return jsonify(vpr)
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+@bp.get('/<dfn>/pov')
+def pov_vpr(dfn: str):
+    """Purpose of Visit (VPR domain 'pov'). Filters: start/stop (entered), max, id, uid"""
+    svc = _get_patient_service()
+    try:
+        params = _collect_for('pov')
+        vpr = svc.get_vpr_raw(dfn, 'pov', params=params)
+        return jsonify(vpr)
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+@bp.get('/<dfn>/skin')
+def skin_vpr(dfn: str):
+    """Skin Tests (VPR domain 'skin'). Filters: start/stop (entered), max, id, uid"""
+    svc = _get_patient_service()
+    try:
+        params = _collect_for('skin')
+        vpr = svc.get_vpr_raw(dfn, 'skin', params=params)
+        return jsonify(vpr)
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+@bp.get('/<dfn>/observations')
+def observations_vpr(dfn: str):
+    """Clinical Observations (VPR domain 'obs'). Filters: start/stop (observed), max, id, uid"""
+    svc = _get_patient_service()
+    try:
+        params = _collect_for('obs')
+        vpr = svc.get_vpr_raw(dfn, 'obs', params=params)
+        return jsonify(vpr)
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+@bp.get('/<dfn>/ptf')
+def ptf_vpr(dfn: str):
+    """Patient Treatment File (VPR domain 'ptf'). Filters: start/stop (movement date), max, id, uid"""
+    svc = _get_patient_service()
+    try:
+        params = _collect_for('ptf')
+        vpr = svc.get_vpr_raw(dfn, 'ptf', params=params)
+        return jsonify(vpr)
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+@bp.get('/<dfn>/surgery')
+def surgery_vpr(dfn: str):
+    """Surgery (VPR domain 'surgery'). Filters: start/stop (dateTime), max, id, uid"""
+    svc = _get_patient_service()
+    try:
+        params = _collect_for('surgery')
+        vpr = svc.get_vpr_raw(dfn, 'surgery', params=params)
+        return jsonify(vpr)
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+@bp.get('/<dfn>/image')
+def image_vpr(dfn: str):
+    """Radiology/Nuclear Medicine images (VPR domain 'image'). Filters: start/stop (dateTime), max, id, uid
+    Note: `/radiology` is an alias that uses the same underlying VPR domain.
+    """
+    svc = _get_patient_service()
+    try:
+        params = _collect_for('image')
+        vpr = svc.get_vpr_raw(dfn, 'image', params=params)
+        return jsonify(vpr)
     except Exception as e:
         return jsonify({'error': str(e)}), 500

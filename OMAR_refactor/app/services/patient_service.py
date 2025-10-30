@@ -18,17 +18,60 @@ class PatientService:
     def __init__(self, gateway: DataGateway):
         self.gateway = gateway
         # Route-friendly to VPR domain mapping when names differ
+        # Map friendly route names to VPR JSON domain tokens (singular per VPR 1.0 Guide)
+        # Keep common plural aliases to avoid breaking callers.
         self.domain_alias = {
             'demographics': 'patient',
-            'meds': 'meds',
-            'labs': 'labs',
-            'vitals': 'vitals',
-            'notes': 'documents',  # VPR uses 'documents'
-            'radiology': 'radiology',  # if different in your environment, adjust here
-            'procedures': 'procedures',
-            'encounters': 'visits',    # VPR uses 'visits'
-            'problems': 'problems',
-            'allergies': 'allergies',
+            'patient': 'patient',
+            # Medications
+            'meds': 'med',
+            'med': 'med',
+            # Labs
+            'labs': 'lab',
+            'lab': 'lab',
+            # Vitals
+            'vitals': 'vital',
+            'vital': 'vital',
+            # Documents (TIU)
+            'notes': 'document',
+            'documents': 'document',
+            'document': 'document',
+            # Radiology/Nuclear Medicine images
+            'radiology': 'image',
+            'image': 'image',
+            # Procedures
+            'procedures': 'procedure',
+            'procedure': 'procedure',
+            # Encounters/Visits
+            'encounters': 'visit',
+            'visits': 'visit',
+            'visit': 'visit',
+            # Problems & Allergies
+            'problems': 'problem',
+            'problem': 'problem',
+            'allergies': 'allergy',
+            'allergy': 'allergy',
+            # Scheduling & others (future use)
+            'appointments': 'appointment',
+            'appointment': 'appointment',
+            'surgery': 'surgery',
+            'consult': 'consult',
+            'order': 'order',
+            'orders': 'order',
+            # Additional VPR domains
+            'immunization': 'immunization',
+            'immunizations': 'immunization',
+            'obs': 'obs',
+            'observations': 'obs',
+            'cpt': 'cpt',
+            'exam': 'exam',
+            'exams': 'exam',
+            'education': 'education',
+            'factor': 'factor',
+            'factors': 'factor',
+            'pov': 'pov',
+            'skin': 'skin',
+            'ptf': 'ptf',
         }
 
     def get_demographics(self, dfn: str) -> Dict[str, Any]:
@@ -65,7 +108,7 @@ class PatientService:
         """Unified documents quick list from VPR 'documents' domain.
         Uses the document-centric notes transform.
         """
-        vpr = self.gateway.get_vpr_domain(dfn, domain=self.domain_alias['notes'])
+        vpr = self.gateway.get_vpr_domain(dfn, domain=self.domain_alias['document'])
         return vpr_to_quick_notes(vpr)
 
     # --- Radiology ---
@@ -94,7 +137,11 @@ class PatientService:
         return vpr_to_quick_allergies(vpr)
 
     # Raw VPR passthrough
-    def get_vpr_raw(self, dfn: str, domain: str):
+    def get_vpr_raw(self, dfn: str, domain: str, params: dict | None = None):
         # Map incoming alias to VPR canonical domain when known
         dom = self.domain_alias.get(domain, domain)
-        return self.gateway.get_vpr_domain(dfn, domain=dom)
+        return self.gateway.get_vpr_domain(dfn, domain=dom, params=params)
+
+    # Full chart (no domain filter)
+    def get_fullchart(self, dfn: str):
+        return self.gateway.get_vpr_fullchart(dfn)

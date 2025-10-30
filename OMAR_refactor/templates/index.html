@@ -4,16 +4,112 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>OMAR Refactor</title>
+    <link rel="stylesheet" href="/static/styles/theme.css" />
     <style>
       body { font-family: Segoe UI, Arial, sans-serif; margin: 24px; }
       code { background:#f3f4f6; padding:2px 6px; border-radius:4px; }
+      .card { border:1px solid #e5e7eb; border-radius:8px; padding:16px; margin-top:16px; background:#fff; }
+      .row { display:flex; gap:12px; align-items:center; }
+      .row > * { flex: 1 1 auto; }
+      .row .narrow { flex: 0 0 180px; }
+      label { font-weight:600; font-size:14px; color:#374151; display:block; margin-bottom:6px; }
+      input[type="text"], textarea { width:100%; padding:10px 12px; border:1px solid #d1d5db; border-radius:6px; font-size:14px; }
+      textarea { min-height: 120px; }
+      button { background:#2563eb; color:#fff; border:none; border-radius:6px; padding:10px 14px; font-weight:600; cursor:pointer; }
+      button[disabled]{ opacity:0.6; cursor:not-allowed; }
+      .muted { color:#6b7280; }
+      .answer { white-space:pre-wrap; line-height:1.5; }
+      .citations { margin-top:8px; }
+      .citation { font-size: 13px; color:#374151; padding:8px 10px; background:#f9fafb; border:1px solid #e5e7eb; border-radius:6px; margin-top:6px; }
     </style>
   </head>
   <body>
     <h1>OMAR Refactor</h1>
-    <p>This is the new scaffolded application. Try the sample API:</p>
-    <ul>
-      <li><code>GET /api/patient/&lt;dfn&gt;/demographics</code></li>
-    </ul>
+    <p class="muted">Enter a patient DFN and ask a clinical question. This calls <code>POST /api/query/ask</code> and returns an answer with citations.</p>
+
+    <div class="card" id="ask-card">
+      <div class="row">
+        <div class="narrow">
+          <label for="dfn">Patient DFN</label>
+          <input type="text" id="dfn" placeholder="e.g., 123" autocomplete="off" />
+        </div>
+        <div style="flex: 3 1 auto;">
+          <label for="question">Question</label>
+          <textarea id="question" placeholder="e.g., Summarize anticoagulation and any bleeding complications in the past year."></textarea>
+        </div>
+      </div>
+      <div style="margin-top:12px; display:flex; gap:12px; align-items:center;">
+        <button id="askBtn">Ask Hey OMAR</button>
+        <span id="status" class="muted"></span>
+      </div>
+    </div>
+
+    <div class="card" id="result-card" style="display:none;">
+      <h3 style="margin:0 0 8px 0;">Answer</h3>
+      <div id="answer" class="answer"></div>
+      <h4 style="margin:16px 0 8px 0;">Citations</h4>
+      <div id="citations" class="citations"></div>
+    </div>
+
+    <script type="module">
+      import { csrfFetch, qs } from '/static/js/ui.js';
+
+      const dfnEl = qs('#dfn');
+      const qEl = qs('#question');
+      const btn = qs('#askBtn');
+      const statusEl = qs('#status');
+      const resultCard = qs('#result-card');
+      const answerEl = qs('#answer');
+      const citesEl = qs('#citations');
+
+      async function ask() {
+        const dfn = (dfnEl.value || '').trim();
+        const prompt = (qEl.value || '').trim();
+        if (!prompt) {
+          statusEl.textContent = 'Enter a question.';
+          return;
+        }
+        btn.disabled = true;
+        statusEl.textContent = 'Asking…';
+        answerEl.textContent = '';
+        citesEl.innerHTML = '';
+        resultCard.style.display = 'none';
+        try {
+          const body = dfn ? { prompt, patient: { DFN: dfn } } : { prompt };
+          const resp = await csrfFetch('/api/query/ask', {
+            method: 'POST',
+            body: JSON.stringify(body)
+          });
+          const data = await resp.json();
+          if (data.error) throw new Error(data.error);
+          answerEl.textContent = data.answer || '';
+          const cites = Array.isArray(data.citations) ? data.citations : [];
+          for (const c of cites) {
+            const div = document.createElement('div');
+            div.className = 'citation';
+            const ex = c.excerpt ?? '?';
+            const dt = c.date ? `, Date: ${c.date}` : '';
+            const tt = c.title ? `, Title: ${c.title}` : '';
+            const pv = c.preview ? `\n${c.preview}` : '';
+            div.textContent = `Excerpt ${ex}${dt}${tt}${pv}`;
+            citesEl.appendChild(div);
+          }
+          resultCard.style.display = 'block';
+          statusEl.textContent = '';
+        } catch (err) {
+          console.error(err);
+          statusEl.textContent = 'Error: ' + (err?.message || 'request failed');
+        } finally {
+          btn.disabled = false;
+        }
+      }
+
+      btn.addEventListener('click', ask);
+      qEl.addEventListener('keydown', (e) => {
+        if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'enter') {
+          ask();
+        }
+      });
+    </script>
   </body>
-</html>
+  </html>
