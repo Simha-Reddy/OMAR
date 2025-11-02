@@ -27,6 +27,7 @@ def _get_patient_service() -> PatientService:
     gw = VistaApiXGateway(station=station, duz=duz)
     return PatientService(gateway=gw)
 
+
 # ----------------- Maintainability helpers -----------------
 
 # Per-domain allowlists for pass-through filters
@@ -229,6 +230,39 @@ def _envelope_list(items: list[dict] | list) -> dict:
         'next': next_token,
         'total': total,
     }
+
+
+# ----------------- Sensitive record check -----------------
+
+@bp.get('/<dfn>/sensitive')
+def sensitive_check(dfn: str):
+    """Best-effort sensitive-record check using a VistA RPC.
+    Attempts DG SENSITIVE RECORD ACCESS. If response indicates sensitivity,
+    return allowed=False and a message; otherwise allowed=True.
+    Response shape mirrors the legacy frontend expectation: { allowed: bool, message: str }.
+    """
+    try:
+        # Use gateway directly to avoid type ambiguity on service facade
+        gw = VistaApiXGateway()
+        context = 'OR CPRS GUI CHART'
+        # Many sites use 'DG SENSITIVE RECORD ACCESS' with DFN
+        raw = gw.call_rpc(context=context, rpc='DG SENSITIVE RECORD ACCESS', parameters=[{'string': str(dfn)}], json_result=False, timeout=30)  # type: ignore[attr-defined]
+        text = str(raw or '').strip()
+        low = text.lower()
+        # Heuristics: treat any affirmative indicator as sensitive
+        is_sensitive = False
+        if low:
+            if any(token in low for token in ('1', 'yes', 'sensitive', 'requires break', 'restricted')):
+                # But ignore lone '1' if accompanied by explicit 'not'
+                if 'not sensitive' in low:
+                    is_sensitive = False
+                else:
+                    is_sensitive = True
+        msg = 'This patient record is sensitive.' if is_sensitive else ''
+        return jsonify({ 'allowed': (not is_sensitive), 'message': msg, 'raw': text })
+    except Exception as e:
+        # On failure, do not block; allow with a warning message
+        return jsonify({ 'allowed': True, 'message': '', 'error': str(e) })
 
 
 # ----------------- VPR pass-through param helpers -----------------
@@ -935,6 +969,7 @@ def allergies_default_vpr(dfn: str):
         return jsonify(vpr)
     except Exception as e:
         return jsonify({'error': str(e)}), 500
+
 
 # Default VPR shortcut for unified documents
 @bp.get('/<dfn>/documents')

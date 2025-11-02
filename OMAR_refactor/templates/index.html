@@ -44,6 +44,52 @@
       </div>
     </div>
 
+    <div class="card" id="endpoints-card">
+      <h3 style="margin:0 0 8px 0;">Explore Patient APIs</h3>
+      <p class="muted" style="margin-top:0;">Click to fetch JSON for Quick or VPR endpoints. Requires a DFN.</p>
+      <div class="row" style="flex-wrap:wrap;">
+        <div style="flex: 1 1 360px; min-width:300px;">
+          <h4 style="margin:0 0 8px 0;">Quick endpoints</h4>
+          <div style="display:flex; flex-wrap:wrap; gap:8px;">
+            <button class="ep" data-kind="quick" data-end="demographics">/quick/demographics</button>
+            <button class="ep" data-kind="quick" data-end="meds">/quick/meds</button>
+            <button class="ep" data-kind="quick" data-end="labs">/quick/labs</button>
+            <button class="ep" data-kind="quick" data-end="vitals">/quick/vitals</button>
+            <button class="ep" data-kind="quick" data-end="problems">/quick/problems</button>
+            <button class="ep" data-kind="quick" data-end="allergies">/quick/allergies</button>
+            <button class="ep" data-kind="quick" data-end="notes">/quick/notes</button>
+            <button class="ep" data-kind="quick" data-end="documents">/quick/documents</button>
+            <button class="ep" data-kind="quick" data-end="radiology">/quick/radiology</button>
+            <button class="ep" data-kind="quick" data-end="procedures">/quick/procedures</button>
+            <button class="ep" data-kind="quick" data-end="encounters">/quick/encounters</button>
+          </div>
+        </div>
+        <div style="flex: 1 1 360px; min-width:300px;">
+          <h4 style="margin:0 0 8px 0;">VPR endpoints</h4>
+          <div style="display:flex; flex-wrap:wrap; gap:8px;">
+            <button class="ep" data-kind="vpr" data-end="demographics">/demographics</button>
+            <button class="ep" data-kind="vpr" data-end="meds">/meds</button>
+            <button class="ep" data-kind="vpr" data-end="labs">/labs</button>
+            <button class="ep" data-kind="vpr" data-end="vitals">/vitals</button>
+            <button class="ep" data-kind="vpr" data-end="problems">/problems</button>
+            <button class="ep" data-kind="vpr" data-end="allergies">/allergies</button>
+            <button class="ep" data-kind="vpr" data-end="notes">/notes</button>
+            <button class="ep" data-kind="vpr" data-end="documents">/documents</button>
+            <button class="ep" data-kind="vpr" data-end="radiology">/radiology</button>
+            <button class="ep" data-kind="vpr" data-end="procedures">/procedures</button>
+            <button class="ep" data-kind="vpr" data-end="encounters">/encounters</button>
+          </div>
+        </div>
+      </div>
+      <div style="margin-top:12px;" class="muted" id="ep-status"></div>
+    </div>
+
+    <div class="card" id="json-card" style="display:none;">
+      <h3 style="margin:0 0 8px 0;">Endpoint Result</h3>
+      <div id="json-path" class="muted" style="margin-bottom:8px;"></div>
+      <pre id="json-view" style="max-height:400px; overflow:auto; background:#0b1020; color:#e5e7eb; padding:12px; border-radius:8px;"></pre>
+    </div>
+
     <div class="card" id="result-card" style="display:none;">
       <h3 style="margin:0 0 8px 0;">Answer</h3>
       <div id="answer" class="answer"></div>
@@ -110,6 +156,43 @@
           ask();
         }
       });
+
+      // Endpoint explorer
+      const epStatus = qs('#ep-status');
+      const jsonCard = qs('#json-card');
+      const jsonView = qs('#json-view');
+      const jsonPath = qs('#json-path');
+      for (const b of document.querySelectorAll('button.ep')) {
+        b.addEventListener('click', async () => {
+          const dfn = (dfnEl.value || '').trim();
+          if (!dfn) { epStatus.textContent = 'Enter a DFN first.'; return; }
+          const kind = b.getAttribute('data-kind');
+          const end = b.getAttribute('data-end');
+          let url = '';
+          if (kind === 'quick') {
+            url = `/api/patient/${encodeURIComponent(dfn)}/quick/${end}`;
+          } else if (kind === 'vpr') {
+            url = end === 'demographics'
+              ? `/api/patient/${encodeURIComponent(dfn)}/demographics`
+              : `/api/patient/${encodeURIComponent(dfn)}/${end}`;
+          }
+          if (!url) return;
+          epStatus.textContent = `GET ${url}`;
+          jsonCard.style.display = 'none';
+          try {
+            const resp = await fetch(url, { credentials: 'same-origin' });
+            const txt = await resp.text();
+            let pretty = txt;
+            try { const obj = JSON.parse(txt); pretty = JSON.stringify(obj, null, 2); } catch {}
+            jsonView.textContent = pretty;
+            jsonPath.textContent = url;
+            jsonCard.style.display = 'block';
+            epStatus.textContent = '';
+          } catch (err) {
+            epStatus.textContent = 'Error fetching endpoint.';
+          }
+        });
+      }
     </script>
   </body>
   </html>

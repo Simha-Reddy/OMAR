@@ -1,8 +1,8 @@
-from app.query.query_models.default.provider import model
+from app.query.providers.default.provider import provider
 
 
 def test_provider_smoke_no_patient():
-    out = model.answer({ 'prompt': 'What is the A1c?' })
+    out = provider.answer({ 'prompt': 'What is the A1c?' })
     assert isinstance(out, dict)
-    assert out.get('model_id') == 'default'
+    assert out.get('provider_id') == 'default'
     assert 'answer' in out

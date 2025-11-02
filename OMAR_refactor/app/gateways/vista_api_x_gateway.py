@@ -96,22 +96,22 @@ class VistaApiXGateway(DataGateway):
         raise GatewayError(f"VPR domain '{domain}' request failed after retries")
 
     def get_vpr_fullchart(self, dfn: str, params: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
-        """Call VPR GET PATIENT DATA JSON without a domain filter to retrieve the entire chart.
-        Warning: This can be a very large payload. Consider using start/stop where supported.
+        """Fetch full VPR JSON for a patient (no domain filter).
+        Accepts optional params such as start/stop/max when supported by the site.
         """
-        body_params: Dict[str, Any] = {"patientId": str(dfn)}
+        body_named: Dict[str, Any] = {"patientId": str(dfn)}
         if params and isinstance(params, dict):
-            body_params.update({k: v for k, v in params.items() if v is not None})
+            body_named.update({k: v for k, v in params.items() if v is not None})
         body = {
             "context": VPR_RPC_CONTEXT,
             "rpc": "VPR GET PATIENT DATA JSON",
             "jsonResult": True,
-            "parameters": [ { "namedArray": body_params } ]
+            "parameters": [ { "namedArray": body_named } ]
         }
         path = f"/vista-sites/{self.station}/users/{self.duz}/rpc/invoke"
         for attempt in range(3):
             try:
-                r, _tok = self._post(path, body, timeout=120)
+                r, _tok = self._post(path, body, timeout=90)
                 if r.status_code >= 500:
                     time.sleep(0.8 * (attempt+1))
                     continue
@@ -126,3 +126,41 @@ class VistaApiXGateway(DataGateway):
                     continue
                 raise GatewayError(f"VPR fullchart request failed: {e}")
         raise GatewayError("VPR fullchart request failed after retries")
+
+    def call_rpc(self, *, context: str, rpc: str, parameters: Optional[list[dict]] = None, json_result: bool = False, timeout: int = 60) -> Any:
+        """Generic vista-api-x RPC invoker mirroring original call_rpc behavior.
+        - context: RPC context (e.g., 'OR CPRS GUI CHART')
+        - rpc: RPC name (e.g., 'ORWPT LAST5')
+        - parameters: list of parameter specs, typically [{"string": "..."}] or named/list forms
+        - json_result: when True, server attempts to JSON-encode the result; else raw text is returned
+        - timeout: request timeout seconds
+        Returns parsed JSON (when json_result=True and response is JSON) or raw text.
+        """
+        body = {
+            "context": str(context),
+            "rpc": str(rpc),
+            "jsonResult": bool(json_result),
+            "parameters": parameters or []
+        }
+        path = f"/vista-sites/{self.station}/users/{self.duz}/rpc/invoke"
+        # minimal backoff similar to VPR helpers
+        for attempt in range(3):
+            try:
+                r, _tok = self._post(path, body, timeout=timeout)
+                if r.status_code >= 500:
+                    time.sleep(0.8 * (attempt+1))
+                    continue
+                r.raise_for_status()
+                if json_result:
+                    try:
+                        return r.json()
+                    except Exception:
+                        return {"raw": r.text}
+                # raw text path
+                return r.text
+            except requests.RequestException as e:
+                if attempt < 2:
+                    time.sleep(0.8 * (attempt+1))
+                    continue
+                raise GatewayError(f"RPC '{rpc}' call failed: {e}")
+        raise GatewayError(f"RPC '{rpc}' call failed after retries")

@@ -14,10 +14,10 @@ def ask():
         patient = data.get('patient')
         if not prompt:
             return jsonify({ 'error': 'Missing prompt' }), 400
-        model = _registry.get(model_id)
-        result = model.answer({ 'prompt': prompt, 'patient': patient })
-        # Ensure model_id is present
-        result['model_id'] = getattr(model, 'model_id', model_id) or model_id
+        provider = _registry.get(model_id)
+        result = provider.answer({ 'prompt': prompt, 'patient': patient })
+        # Ensure provider_id is present
+        result['provider_id'] = getattr(provider, 'provider_id', model_id) or model_id
         return jsonify(result)
     except Exception as e:
         return jsonify({ 'error': str(e) }), 500

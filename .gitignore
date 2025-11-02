@@ -21,3 +21,7 @@
 /OMAR_refactor/.env
 /OMAR_refactor/.venv
 /OMAR_refactor/.venv/**
+
+# Ignore bundled/portable Python runtime inside OMAR_refactor
+/OMAR_refactor/python
+/OMAR_refactor/python/**

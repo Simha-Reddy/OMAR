@@ -1,0 +1,60 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Transcript Archive</title>
+    <link rel="icon" type="image/x-icon" href="/static/icon.ico">
+    <link rel="stylesheet" href="/static/style.css">
+    <meta name="csrf-token" content="{{ csrf_token }}">
+    <style>
+      /* Match Workspace record button size/style */
+      .global-top-bar .circle-btn.image-record-btn { height: 40px; width: 40px; padding: 0; border: none; background: white; border-radius: 50%; display: flex; align-items: center; justify-content: center; cursor: pointer; transition: all 0.2s ease; }
+      .global-top-bar .circle-btn.image-record-btn img { height: 100%; width: 100%; object-fit: contain; }
+      .global-top-bar .circle-btn.image-record-btn:hover { transform: scale(1.05); }
+      .global-top-bar .circle-btn.image-record-btn:active { transform: scale(0.95); }
+    </style>
+</head>
+<body>
+    <div class="global-top-bar">
+        <div class="left-controls">
+            <a href="/" class="header-title">OMAR</a>
+            <button id="recordBtn"
+                    class="circle-btn image-record-btn"
+                    title="Record"
+                    aria-label="Record"
+                    data-visual="image"
+                    data-start-src="/static/images/start_Recording_circle_button.png"
+                    data-stop-src="/static/images/stop_Recording_circle_button.png">
+                <img id="recordBtnImg" src="/static/images/start_Recording_circle_button.png" alt="Start Recording" />
+            </button>
+        </div>
+        <div class="right-controls">
+                <a href="/workspace">📝 Workspace</a>
+                <a href="/workspace/mobile">📱 Mobile View</a>
+                <a href="/settings">⚙️ Settings</a>
+            <button id="hamburgerBtn" class="hamburger-btn" aria-label="Menu">&#9776;</button>
+        </div>
+    </div>
+    <div id="mobileMenu" class="mobile-menu">
+            <a href="/workspace">📝 Workspace</a>
+            <a href="/workspace/mobile">📱 Mobile View</a>
+            <a href="/settings">⚙️ Settings</a>
+        <hr class="mobile-menu-separator">
+        <a href="#" class="end-session-link" onclick="exitApp();return false;" title="Exit">🚪 Exit</a>
+    </div>
+    <div class="archive-container">
+        <h2>Archived Sessions</h2>
+        <div class="archive-controls">
+            <button id="deleteSelectedBtn" class="danger-button">Delete Selected</button>
+            <label><input type="checkbox" id="selectAllBox"> Select All</label>
+        </div>
+        <div id="archive-list"></div>
+    </div>
+    <script src="/static/SessionManager.js"></script>
+    <script src="/static/app.js"></script>
+    <!-- Orchestrator should precede archive.js so restore flows delegate to Patient.switchTo -->
+    <script src="/static/patient_switch.js"></script>
+        <script src="/static/archive.js"></script>
+        <script src="/static/popups.js"></script>
+        <script src="/static/omar_history_popup.js"></script>
+</body>
+</html>

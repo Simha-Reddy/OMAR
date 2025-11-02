@@ -390,7 +390,7 @@
               <h3>Phase 4a — ModelRegistry rollout (user‑selectable)</h3>
               <h4>Scope</h4>
               <ul>
-                <li>Implement <b>ModelRegistry</b> with model manifests (id, name, capabilities, limits) and validation. Models live in <span class="kbd">app/query/query_models/*</span>.</li>
+                <li>Implement <b>ModelRegistry</b> with provider manifests (id, name, capabilities, limits) and validation. Providers live in <span class="kbd">app/query/providers/*</span>.</li>
                 <li>Add <b>ModelProvider</b> contract methods (answer, retrieve) with timeouts and safe fallbacks. Scribe is separate.</li>
                 <li>Minimal UI: settings dropdown for provider selection; provider badge in responses.</li>
                 <li>Telemetry: tag metrics and audit with <span class="kbd">provider_id</span>; feature flags and allowlist for providers.</li>
@@ -404,7 +404,7 @@
               </ul>
               <h4>Prompts to run</h4>
               <ul>
-                <li>"Create ModelRegistry and a sample DefaultModel in <code>app/query/query_models/default</code> plus a template model folder with README instructions."</li>
+                <li>"Create ModelRegistry and a sample DefaultProvider in <code>app/query/providers/default</code> plus a template provider folder with README instructions."</li>
                 <li>"Add a settings UI dropdown to select provider; store in session; display a provider badge on responses."</li>
                 <li>"Instrument responses with provider_id; add tests for timeouts and fallback to default provider."</li>
               </ul>
@@ -494,98 +494,6 @@
           <ul>
             <li>"Instrument routes and gateways with metrics/tracing; add dashboards and alerts; write runbooks and synthetic checks."</li>
           </ul>
-        </div>
-      </section>
-
-      <section class="page-break-before">
-        <h2>Frontend refactor plan — workspace & tabs</h2>
-        <div class="cards">
-          <div class="col-left">
-            <div class="card">
-              <h3>Scope & principles</h3>
-              <ul>
-                <li><b>Keep UX feel</b> while simplifying. No legacy compatibility shims.</li>
-                <li><b>HTML‑first + light JS</b>: server shapes data; client enhances interactivity.</li>
-                <li><b>No pagination</b>: infinite scroll with IntersectionObserver; server paging tokens.</li>
-                <li><b>Safety</b>: strict patient isolation; abort in‑flight on switch; PHI never cached cross‑patient.</li>
-                <li><b>Remove</b>: <i>modules</i> sandbox, <i>deep search</i> demo, <i>demo PHI masking</i>, legacy Explore page.</li>
-              </ul>
-            </div>
-            <div class="card">
-              <h3>Pages and tabs</h3>
-              <p><b>Pages (4)</b>: <span class="pill">landing</span>, <span class="pill">workspace</span>, <span class="pill">archive</span>, <span class="pill">settings</span></p>
-              <p><b>Workspace tabs</b> (initial set):</p>
-              <ul>
-                <li><b>note</b> (scribe composer)</li>
-                <li><b>heyomar</b> (Q&A)</li>
-                <li><b>after_visit_summary</b></li>
-                <li><b>outside_records</b></li>
-                <li><b>todo</b></li>
-                <li><b>documents</b></li>
-                <li><b>radiology</b></li>
-                <li><b>snapshot</b></li>
-                <li><b>labs</b></li>
-                <li><b>template_example</b> (developer sample)</li>
-              </ul>
-            </div>
-            <div class="card">
-              <h3>Data contracts (server‑shaped)</h3>
-              <ul>
-                <li><b>List envelope</b>: <span class="kbd">{ items: T[], next: string|null, total?: number }</span></li>
-                <li><b>Search envelope</b>: <span class="kbd">{ query: Q, items: T[], next: string|null, partial: boolean }</span></li>
-                <li><b>Document item</b> (example): <span class="kbd">{ id, date, title, class, type, author, encounter?, preview?, text?: string }</span></li>
-                <li><b>Paging</b>: opaque <span class="kbd">next</span> token; server sorts/filters; stateless requests within patient scope.</li>
-              </ul>
-            </div>
-            <div class="card">
-              <h3>Infinite scroll & viewer</h3>
-              <ul>
-                <li>IntersectionObserver on a sentinel → fetch next page → append → auto‑enqueue for indexing.</li>
-                <li>Sticky column headers; server‑mode table for sort/filter; minimal JS state.</li>
-                <li>Document overlay panel (keyboard nav, esc to close); prefetch next/prev text.</li>
-              </ul>
-            </div>
-          </div>
-          <div class="col-right">
-            <div class="card">
-              <h3>Patient isolation & safety</h3>
-              <ul>
-                <li>Every request carries a <span class="kbd">patient_id</span> and <span class="kbd">generation</span> header; server rejects mismatches.</li>
-                <li>On patient switch: abort xhr/fetch, clear in‑memory caches, reset scroll/tables.</li>
-                <li>Server caches and indices are <b>keyed by (user, patient)</b>; content hashing for idempotency.</li>
-              </ul>
-            </div>
-            <div class="card">
-              <h3>Search & indexing (automatic)</h3>
-              <ul>
-                <li>No manual "index visible". Append/view/search → enqueue index with priority (viewer &gt; viewport &gt; backlog).</li>
-                <li>As‑you‑type search: 150–250ms debounce → server returns <span class="kbd">partial=true</span> until full‑text ready.</li>
-                <li>FTS store (SQLite FTS5 or Redis module) scoped per user+patient; eviction by LRU and patient switch.</li>
-              </ul>
-            </div>
-            <div class="card">
-              <h3>Persistence</h3>
-              <ul>
-                <li>Server‑side storage for layout, preferences, dot‑phrases/prompts, and archives (by user).</li>
-                <li>Endpoints: <span class="kbd">GET/PUT /api/user/layout</span>, <span class="kbd">/api/user/prefs</span>, <span class="kbd">/api/user/prompts</span>, <span class="kbd">/api/user/archives</span>.</li>
-                <li>Client loads state on page init; writes are debounced and acknowledged.</li>
-              </ul>
-            </div>
-            <div class="card">
-              <h3>Implementation sequencing</h3>
-              <ol>
-                <li><b>FE‑0 Skeleton</b>: Four pages, workspace shell, base template, shared CSS/JS; wire patient guard banners.</li>
-                <li><b>FE‑1 Contracts</b>: Standard list/search envelopes; <span class="kbd">/documents</span>, <span class="kbd">/radiology</span>, <span class="kbd">/labs</span> read APIs with paging tokens.</li>
-                <li><b>FE‑2 Documents tab</b>: Server‑mode table + infinite scroll + overlay viewer; remove legacy Explore load; parity keyboard nav.</li>
-                <li><b>FE‑3 Search</b>: Debounced server search; show <span class="kbd">partial</span> indicator; highlight hits in preview; cache results per query.</li>
-                <li><b>FE‑4 Auto‑index</b>: Background queue + idempotent content hashing; enqueue on append/view/search; priority handling.</li>
-                <li><b>FE‑5 Scribe & HeyOmar</b>: Port scribe autosave/poll; add ModelRegistry selector; consistent headers and panels.</li>
-                <li><b>FE‑6 Persistence</b>: Layout/prefs/prompts endpoints; server‑first state restore; multi‑device verification.</li>
-                <li><b>FE‑7 Cleanup</b>: Remove legacy modules/deep search/PHI mask; a11y and performance pass.</li>
-              </ol>
-              <p class="small"><b>Acceptance (per step)</b>: renders without console errors; patient switch guard works; scroll never leaks across patients; API returns correct envelopes; no cross‑patient results; Lighthouse a11y ≥ 90 on workspace.</p>
-            </div>
-          </div>
         </div>
       </section>
 

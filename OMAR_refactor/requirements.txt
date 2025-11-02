@@ -7,4 +7,3 @@ fakeredis
 waitress
 openai
 numpy
-pytest

@@ -115,6 +115,7 @@ def create_app():
     # Blueprints
     from .blueprints.general import bp as general_bp
     from .blueprints.patient import bp as patient_bp
+    from .blueprints.patient_search import bp as patient_search_bp
     # Query API (optional if module not available)
     try:
         from .query.blueprints.query_api import bp as query_bp
@@ -130,8 +131,15 @@ def create_app():
         from .blueprints.scribe_api import bp as scribe_bp
     except Exception:
         scribe_bp = None
+    # CPRS sync API (optional until implemented)
+    try:
+        from .blueprints.cprs_api import bp as cprs_bp
+    except Exception:
+        cprs_bp = None
 
     app.register_blueprint(general_bp)
+    # Legacy-compatible endpoints at root for existing frontend JS (patient search/default list)
+    app.register_blueprint(patient_search_bp)
     app.register_blueprint(patient_bp, url_prefix='/api/patient')
     if query_bp is not None:
         app.register_blueprint(query_bp, url_prefix='/api/query')
@@ -139,5 +147,7 @@ def create_app():
         app.register_blueprint(rag_bp, url_prefix='/api/rag')
     if scribe_bp is not None:
         app.register_blueprint(scribe_bp, url_prefix='/api/scribe')
+    if cprs_bp is not None:
+        app.register_blueprint(cprs_bp, url_prefix='/api/cprs')
 
     return app
