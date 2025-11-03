@@ -1,15 +1,27 @@
 // Load the list of archived sessions
 async function loadArchiveList() {
-    // Auto-delete if enabled
+    // Auto-delete old local archives if enabled
     try {
         const autoDel = localStorage.getItem('ssva:autoDeleteArchives10d');
         if (autoDel === '1') {
-            await fetch('/delete_old_sessions?days=10', { method: 'GET', cache: 'no-store', credentials: 'same-origin', referrerPolicy: 'no-referrer' });
+            const cutoff = Date.now() - (10 * 24 * 60 * 60 * 1000);
+            const toDelete = [];
+            for (let i = 0; i < localStorage.length; i++) {
+                const k = localStorage.key(i);
+                if (k && k.startsWith('session:archive:')) {
+                    try {
+                        const obj = JSON.parse(localStorage.getItem(k) || '{}');
+                        if (obj && obj.ts && Number(obj.ts) < cutoff) toDelete.push(k);
+                    } catch(_e) {}
+                }
+            }
+            toDelete.forEach(k => { try { localStorage.removeItem(k); } catch(_e){} });
         }
     } catch(_e) {}
 
-    const resp = await fetch('/list_sessions', { cache: 'no-store', credentials: 'same-origin', referrerPolicy: 'no-referrer' });
-    const sessions = await resp.json();
+    // List local archives via SessionManager
+    let sessions = [];
+    try { sessions = await (window.SessionManager && SessionManager.listSessions ? SessionManager.listSessions() : []); } catch(_e) { sessions = []; }
     const container = document.getElementById('archive-list');
     container.innerHTML = '';
     if (sessions.length === 0) {
@@ -51,18 +63,17 @@ async function restoreArchivedSession(filename) {
             localStorage.setItem('ssva:currentArchiveName', base);
         } catch(_e){}
 
-        // 1) Clear the current session on the backend
-        await fetch('/clear_session', { method: 'POST', headers: { 'X-CSRF-Token': csrf() }, cache: 'no-store', credentials: 'same-origin', referrerPolicy: 'no-referrer' });
-
-        // 2) Load the archived session data
-        const resp = await fetch(`/transcripts/${filename}`, { cache: 'no-store', credentials: 'same-origin', referrerPolicy: 'no-referrer' });
-        if (!resp.ok) return alert("Failed to load session.");
-        const data = await resp.json();
-        if (!data) return alert("Empty archive.");
+        // 1) Load the archived session data from local storage
+        const key = `session:archive:${filename}`;
+        const raw = localStorage.getItem(key);
+        if (!raw) { alert('Failed to load session.'); return; }
+        const obj = JSON.parse(raw);
+        const data = obj && obj.data ? obj.data : null;
+        if (!data) { alert('Empty archive.'); return; }
 
         const hasPatient = !!(data.patient_meta && data.patient_meta.dfn);
         if (hasPatient) {
-            // 3a) Switch to patient via centralized orchestrator (skip archive setup to preserve current archive name)
+            // 2a) Switch to patient via centralized orchestrator (skip archive setup to preserve current archive name)
             try {
                 const dfn = String(data.patient_meta.dfn);
                 const displayName = (data.patient_meta && data.patient_meta.name) || '';
@@ -95,16 +106,11 @@ async function restoreArchivedSession(filename) {
             }
         }
 
-        // 3b) Restore scribe/explore UI and persist to session
+        // 2b) Restore scribe/explore UI and persist locally
         try { SessionManager._allowScribeDraftRestore = true; } catch(_e){}
         await SessionManager.restoreData(data);
         try { SessionManager.lastLoadedData = data; } catch(_e){}
-        await fetch('/save_session', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json', 'X-CSRF-Token': csrf() },
-            body: JSON.stringify({ scribe: data.scribe || {}, explore: data.explore || {} }),
-            cache: 'no-store', credentials: 'same-origin', referrerPolicy: 'no-referrer'
-        });
+        try { await SessionManager.saveToSession(); } catch(_e){}
 
         // 4) Redirect to workspace
         window.location.href = '/workspace';
@@ -116,9 +122,16 @@ async function restoreArchivedSession(filename) {
 
 // Delete a specific archived session
 async function deleteArchivedSession(filename) {
-    const resp = await fetch(`/delete_session/${filename}`, { method: 'DELETE', headers: { 'X-CSRF-Token': csrf() }, cache: 'no-store', credentials: 'same-origin', referrerPolicy: 'no-referrer' });
-    if (resp.ok) loadArchiveList();
-    else alert("Failed to delete session.");
+    try {
+        if (window.SessionManager && SessionManager.deleteSession) {
+            await SessionManager.deleteSession(filename);
+            loadArchiveList();
+        } else {
+            alert('SessionManager unavailable.');
+        }
+    } catch(_e) {
+        alert('Failed to delete session.');
+    }
 }
 
 // Initialize the Archive page

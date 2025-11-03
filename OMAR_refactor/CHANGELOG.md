@@ -5,6 +5,26 @@ All notable changes to this refactor scaffold will be documented in this file.
 Format inspired by Keep a Changelog. Dates are in YYYY-MM-DD. For each change, prefer grouping under Added / Changed / Fixed / Removed / Security.
 
 ## [Unreleased]
+
+### Added
+- Lightweight ScribeRuntime event bus (`static/js/scribe_runtime.js`) to publish/consume transcript and recording status:
+  - `ScribeRuntime.setStatus(active)` and `ScribeRuntime.onStatus(listener)`
+  - `ScribeRuntime.setTranscript(text)` and `ScribeRuntime.onTranscript(listener)`
+  - `ScribeRuntime.getStatus()` and `ScribeRuntime.getTranscript()` helpers
+
+### Changed
+- Centralized transcript access through `SessionManager.getTranscript()`; removed all fetches to `GET /scribe/live_transcript`.
+- Centralized recording status through `SessionManager.getRecordingStatus()`; removed calls to `GET /scribe/recording_status`.
+- Updated `static/js/app.js` to broadcast recording state via the ScribeRuntime event bus.
+- `static/js/workspace/modules/note.js` and `static/js/workspace/modules/after_visit_summary.js` now rely solely on `SessionManager`/DOM for transcript (no legacy network fallbacks).
+ - Workspace gating adjusted: Snapshot tab now renders even when no patient is selected; other tabs still require a patient.
+ - Introduced frontend feature flags via `window.FEATURES` to disable deprecated endpoints (`sessionApi`, `layoutApi`, `getPatientApi`). When disabled, the client no longer calls `/load_session`, `/save_session`, `/workspace/layout`, or `/get_patient`.
+ - Note module prompts loading is resilient: tries `/get_prompts`, falls back to `/static/prompts/default_prompts.json`, then a built-in default.
+
+### Removed
+- Deprecated usage of legacy endpoints: `live_transcript`, `set_live_transcript`, `clear_live_transcript`.
+- Unused `static/js/scribe.js` (no longer referenced; superseded by Workspace modules). If needed for historical reference, retrieve from version control.
+ - Removed deprecated `StaticChecks.js` and `SandboxRunner.js` includes from `templates/workspace.html` to eliminate 404s.
 - Planned:
   - Port domain mappers (demographics, meds, labs, vitals, notes, radiology) from legacy code into `app/services/transforms.py`.
   - Add patient-context guard and audit writer for all PHI routes.

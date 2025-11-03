@@ -4,6 +4,34 @@ from ..gateways.vista_api_x_gateway import VistaApiXGateway
 
 bp = Blueprint('cprs_api', __name__)
 
+def _unwrap_vax_raw(raw_val):
+    try:
+        if isinstance(raw_val, (bytes, bytearray)):
+            try:
+                raw_val = raw_val.decode('utf-8', errors='ignore')
+            except Exception:
+                return str(raw_val)
+        if isinstance(raw_val, str):
+            s = raw_val.strip()
+            if s.startswith('{') and ('"payload"' in s or "'payload'" in s):
+                import json as _json
+                try:
+                    obj = _json.loads(s)
+                    pl = obj.get('payload')
+                    if isinstance(pl, str):
+                        return pl
+                    if isinstance(pl, list):
+                        return '\n'.join(str(x) for x in pl)
+                    return str(pl)
+                except Exception:
+                    return s
+        return str(raw_val)
+    except Exception:
+        try:
+            return str(raw_val)
+        except Exception:
+            return ''
+
 @bp.get('/sync')
 def cprs_sync_top():
     """Return the current CPRS-selected patient, if any.
@@ -13,7 +41,7 @@ def cprs_sync_top():
     try:
         gw = VistaApiXGateway()
         raw = gw.call_rpc(context='OR CPRS GUI CHART', rpc='ORWPT TOP', parameters=[], json_result=False, timeout=30)
-        text = (raw or '').strip()
+        text = _unwrap_vax_raw(raw).strip()
         dfn = ''
         name = ''
         if text:

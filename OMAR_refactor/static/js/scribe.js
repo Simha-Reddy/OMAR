@@ -1,5 +1,12 @@
+/*
+    Deprecated: scribe.js
+    This file is no longer referenced by any template (scribe.html removed).
+    Functionality has been migrated to Workspace modules, SessionManager, and ScribeRuntime.
+    Keeping as a no-op stub for backward compatibility if accidentally loaded.
+*/
+
 document.addEventListener("DOMContentLoaded", async () => {
-    console.log("Initializing Scribe page...");
+        console.warn("[scribe.js] Deprecated: this bundle is no longer used. Consider removing the script include.");
 
     // Restore session data
     if (typeof SessionManager !== "undefined") {
@@ -72,58 +79,7 @@ document.addEventListener("DOMContentLoaded", async () => {
         };
     }
 
-    // --- Poll Scribe Status + periodic autosave: orchestrator-aware ---
-    // Replace raw intervals with controllable start/stop and abort in-flight on switch
-    (function(){
-        let statusIntervalId = null;
-        let autosaveIntervalId = null;
-        let lastStatusAbort = null;
-
-        function stopStatus(reason){
-            try { if (statusIntervalId) { clearInterval(statusIntervalId); statusIntervalId = null; } } catch(_e){}
-            try { if (lastStatusAbort && typeof lastStatusAbort.abort === 'function') lastStatusAbort.abort(); } catch(_e){}
-            lastStatusAbort = null;
-        }
-        function startStatus(){
-            if (statusIntervalId) return; // already running
-            // Delay first poll slightly to avoid transient 404
-            setTimeout(pollScribeStatus, 500);
-            statusIntervalId = setInterval(pollScribeStatus, 3000);
-        }
-        function stopAutosave(){
-            try { if (autosaveIntervalId) { clearInterval(autosaveIntervalId); autosaveIntervalId = null; } } catch(_e){}
-        }
-        function startAutosave(){
-            if (autosaveIntervalId) return;
-            autosaveIntervalId = setInterval(async () => {
-                try {
-                    if (typeof SessionManager !== "undefined" && SessionManager.saveToSession) {
-                        await SessionManager.saveToSession();
-                    }
-                } catch(_e){}
-            }, 10000);
-        }
-        // Expose minimal controls (optional)
-        try { window.ScribePollers = { startStatus, stopStatus, startAutosave, stopAutosave }; } catch(_e){}
-
-        // Wire to orchestrator lifecycle
-        window.addEventListener('PATIENT_SWITCH_START', () => { stopStatus('switch'); stopAutosave(); });
-        window.addEventListener('PATIENT_SWITCH_DONE',  () => { startStatus(); startAutosave(); });
-
-        // Kick off now
-        startStatus();
-        startAutosave();
-
-        // Wrap poller to create an AbortController per cycle and register it
-        const _origPoll = window.pollScribeStatus;
-        window.pollScribeStatus = function(){
-            // Create abort controller and register with orchestrator
-            const ctrl = (typeof AbortController !== 'undefined') ? new AbortController() : null;
-            lastStatusAbort = ctrl;
-            try { if (window.Patient && typeof window.Patient.registerAbortable === 'function' && ctrl) window.Patient.registerAbortable(ctrl); } catch(_e){}
-            try { return _origPoll.call(this, ctrl); } finally { /* controller cleared in original poll when done */ }
-        };
-    })();
+    // Deprecated pollers removed – rely on SessionManager/ScribeRuntime
 
     // --- Prompt Selector ---
     loadPrompts();
@@ -154,44 +110,7 @@ document.addEventListener("DOMContentLoaded", async () => {
 });
 
 // --- Poll Scribe Status ---
-function pollScribeStatus(ctrl) {
-    const transcriptEl = document.getElementById("rawTranscript");
-    if (!transcriptEl) return;
-
-    fetch('/scribe/live_transcript', { signal: ctrl && ctrl.signal })
-        .then(res => {
-            if (!res.ok) throw new Error('live_transcript HTTP ' + res.status);
-            return res.text();
-        })
-        .then(text => {
-            transcriptEl.value = text;
-            transcriptEl.scrollTop = transcriptEl.scrollHeight;
-        })
-        .catch(err => {
-            if (err && (err.name === 'AbortError' || String(err).includes('AbortError'))) return;
-            console.error('Error polling live transcript:', err);
-        });
-
-    // (Optional) Keep status indicator logic if you want
-    fetch('/scribe/status', { signal: ctrl && ctrl.signal })
-        .then(r => r.json())
-        .then(data => {
-            const statusEl = document.getElementById('statusIndicator');
-            if (statusEl) {
-                if (data.is_recording) {
-                    statusEl.textContent = 'Recording...';
-                } else if (data.pending_chunks > 0) {
-                    statusEl.textContent = 'Transcribing...';
-                } else {
-                    statusEl.textContent = '';
-                }
-            }
-        })
-        .catch(err => {
-            if (err && (err.name === 'AbortError' || String(err).includes('AbortError'))) return;
-            console.error('Error polling status:', err);
-        });
-}
+function pollScribeStatus(){ /* no-op (deprecated) */ }
 
 // --- Create Note & chat feedback ---
 async function createNote() {

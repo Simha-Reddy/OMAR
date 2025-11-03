@@ -594,109 +594,63 @@ window.WorkspaceModules['Note'] = {
         this.stopStatusPolling();
     },
 
-    // Recording functionality
-    async toggleRecording() {
+    // Recording control is handled globally via app.js and ScribeRuntime.
+    // This module only listens to status events to reflect state locally.
+    startStatusPolling() {
+        this.stopStatusPolling();
         try {
-            if (this.isRecording) {
-                await fetch('/scribe/stop_recording', {
-                    method: 'POST',
-                    headers: { 'X-CSRF-Token': window.getCsrfToken ? window.getCsrfToken() : '' }
-                });
-            } else {
-                await fetch('/scribe/start_recording', {
-                    method: 'POST',
-                    headers: { 'X-CSRF-Token': window.getCsrfToken ? window.getCsrfToken() : '' }
+            if (window.ScribeRuntime && typeof window.ScribeRuntime.onStatus === 'function') {
+                this._statusUnsub = window.ScribeRuntime.onStatus((st) => {
+                    try { this.isRecording = !!(st && st.active); } catch(_e){}
                 });
             }
-        } catch (error) {
-            console.error('Error toggling recording:', error);
-        }
-    },
-
-    // Status polling
-    startStatusPolling() {
-        // Poll less frequently and only when tab is visible
-        this.stopStatusPolling();
-        const poll = () => { if (document.visibilityState === 'visible') this.pollStatus(); };
-        this.statusPollInterval = setInterval(poll, 10000);
-        setTimeout(poll, 800);
+        } catch(_e){}
+        // Prime initial state from runtime if available
+        try {
+            if (window.ScribeRuntime && typeof window.ScribeRuntime.getStatus === 'function') {
+                window.ScribeRuntime.getStatus().then((st)=>{ try { this.isRecording = !!(st && st.active); } catch(_e){} });
+            }
+        } catch(_e){}
     },
 
     stopStatusPolling() {
-        if (this.statusPollInterval) {
-            clearInterval(this.statusPollInterval);
-            this.statusPollInterval = null;
-        }
-        // Abort any in-flight status request
+        try { if (this._statusUnsub) { this._statusUnsub(); this._statusUnsub = null; } } catch(_e){}
+        // Abort any in-flight status request (legacy cleanup)
         try { if (this._statusAbortController) this._statusAbortController.abort(); } catch(_e){}
         try { if (this._statusAbortCleanup) this._statusAbortCleanup(); } catch(_e){}
         this._statusAbortController = null;
         this._statusAbortCleanup = null;
     },
 
-    async pollStatus() {
-        // Cancel previous in-flight request, if any
-        try { if (this._statusAbortController) this._statusAbortController.abort(); } catch(_e){}
-        try { if (this._statusAbortCleanup) this._statusAbortCleanup(); } catch(_e){}
-        this._statusAbortController = null; this._statusAbortCleanup = null;
-        const ctrl = (typeof AbortController !== 'undefined') ? new AbortController() : null;
-        this._statusAbortController = ctrl;
-        try { if (window.Patient && Patient.registerAbortable && ctrl) { this._statusAbortCleanup = Patient.registerAbortable(ctrl); } } catch(_e){}
-        try {
-            // Only poll recording state; skip transcript fetch here
-            const response = await fetch('/scribe/status', { signal: ctrl ? ctrl.signal : undefined });
-            const data = await response.json();
-            
-            this.isRecording = data.is_recording;
-            
-            // Update recording button
-            const recordBtn = document.getElementById('recordBtn');
-            const recordBtnImg = document.getElementById('recordBtnImg');
-            
-            if (recordBtn && recordBtnImg) {
-                if (this.isRecording) {
-                    recordBtnImg.src = '/static/images/stop_Recording_circle_button.png';
-                    recordBtnImg.alt = 'Stop Recording';
-                    recordBtn.title = 'Stop Recording';
-                } else {
-                    recordBtnImg.src = '/static/images/start_Recording_circle_button.png';
-                    recordBtnImg.alt = 'Start Recording';
-                    recordBtn.title = 'Start Recording';
-                }
-            }
-        } catch (error) {
-            if (!(error && error.name === 'AbortError')) {
-                console.error('Error polling status:', error);
-            }
-        } finally {
-            try { if (this._statusAbortCleanup) this._statusAbortCleanup(); } catch(_e){}
-            this._statusAbortCleanup = null;
-            this._statusAbortController = null;
-        }
-    },
-
     // Prompt loading functionality
     async loadPrompts() {
+        const selector = document.getElementById('promptSelector');
+        if (!selector) return;
         try {
-            const response = await fetch('/get_prompts');
-            const data = await response.json();
-            
-            this.promptData = data;
-            
-            const selector = document.getElementById('promptSelector');
-            if (!selector) return;
-            
-            // Clear existing options
-            selector.innerHTML = '';
+            let data = null;
+            // Load bundled defaults; no legacy server prompt endpoint
+            try {
+                const r2 = await fetch('/static/prompts/default_prompts.json', { cache: 'no-store' });
+                if (r2.ok) data = await r2.json();
+            } catch(_e) {}
+            if (!data || typeof data !== 'object' || !Object.keys(data).length) {
+                // Final fallback: a single simple prompt
+                data = {
+                    'Primary Care Progress Note': 'Summarize the visit into a concise SOAP-style note with pertinent positives/negatives and assessment/plan.'
+                };
+            }
 
-            // Populate options
+            this.promptData = data;
+
+            // Clear and populate
+            selector.innerHTML = '';
             for (let name in data) {
                 const option = document.createElement('option');
                 option.value = name;
                 option.text = name;
                 selector.appendChild(option);
             }
-            
+
             // Determine initial selection
             const stored = localStorage.getItem('lastPrompt');
             let initialName = null;
@@ -718,7 +672,6 @@ window.WorkspaceModules['Note'] = {
                 }
                 localStorage.setItem('lastPrompt', initialName);
             }
-            
         } catch (error) {
             console.error('Error loading prompts:', error);
         }
@@ -911,9 +864,11 @@ window.WorkspaceModules['Note'] = {
             document.body.appendChild(modal);
             this._transcriptModalEl = modal;
 
+            let _unsubTranscript = null;
             const close = () => {
                 try { if (this._transcriptModalEl && this._transcriptModalEl.parentNode) this._transcriptModalEl.parentNode.removeChild(this._transcriptModalEl); } catch(_){}
                 this._transcriptModalEl = null;
+                try { if (typeof _unsubTranscript === 'function') _unsubTranscript(); } catch(__){}
             };
             modal.addEventListener('click', (e) => { if (e.target === modal) close(); });
             const closeBtn = modalContent.querySelector('#noteTranscriptClose');
@@ -927,9 +882,7 @@ window.WorkspaceModules['Note'] = {
             if (!txt) {
                 try { if (typeof SessionManager !== 'undefined' && SessionManager.getTranscript) { txt = await SessionManager.getTranscript(0); } } catch(_e){}
             }
-            if (!txt) {
-                try { const r = await fetch('/scribe/live_transcript', { cache: 'no-store' }); if (r && r.ok) { txt = await r.text(); } } catch(_e){}
-            }
+            // No legacy network fallback; rely on SessionManager/Workspace caches only
             txt = (typeof txt === 'string') ? txt.trim() : '';
             if (!txt) {
                 content.textContent = 'No live transcript available.';
@@ -940,6 +893,21 @@ window.WorkspaceModules['Note'] = {
                     try { meta.textContent = `${txt.split(/\s+/).filter(Boolean).length} words`; } catch(_e){}
                 }
             }
+
+            // Live updates while modal is open
+            try {
+                if (window.ScribeRuntime && typeof window.ScribeRuntime.onTranscript === 'function'){
+                    _unsubTranscript = window.ScribeRuntime.onTranscript((ev) => {
+                        try{
+                            const t = (ev && (ev.text||ev.delta||'')) || '';
+                            const s = String(t).trim();
+                            content.textContent = s || 'No live transcript available.';
+                            const meta = modalContent.querySelector('#noteTranscriptMeta');
+                            if (meta && s) meta.textContent = `${s.split(/\s+/).filter(Boolean).length} words`;
+                        }catch(__){}
+                    });
+                }
+            } catch(__){}
         } catch(_e) {
             try { alert('Could not load transcript.'); } catch(__){}
         }

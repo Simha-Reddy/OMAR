@@ -10,6 +10,11 @@
     <link rel="stylesheet" href="/static/styles/workspace.css">
     <!-- CSRF token for client-side fetches -->
     <meta name="csrf-token" content="{{ csrf_token }}">
+    <script>
+        // Force WAV for Azure REST compatibility and increase chunk size slightly for better accuracy
+        window.FORCE_WAV_RECORDING = true;        // Use PCM16 WAV instead of WebM/OGG Opus
+        window.SCRIBE_CHUNK_MS = 4000;            // 4s chunks tend to produce more stable text from short-audio REST
+    </script>
     <!-- Tabulator CSS (optional) -->
     <!-- <link href="/static/lib/tabulator.min.css" rel="stylesheet"> -->
     
@@ -1721,6 +1726,11 @@
         </script>
         <!-- Load dependencies in correct order -->
     <script src="/static/js/SessionManager.js"></script>
+    <!-- Lightweight Scribe runtime + event bus -->
+    <script src="/static/js/scribe_runtime.js"></script>
+    <!-- NoteRecorder (audio capture + /api/scribe streaming) and provider wiring -->
+    <script src="/static/js/note.js"></script>
+    <script src="/static/js/scribe_provider_note_recorder.js"></script>
         <script src="/static/lib/luxon.min.js"></script>
     <!-- Tabulator JS (optional if available under /static/lib/) -->
     <!-- <script src="/static/lib/tabulator.min.js"></script> -->
@@ -1735,8 +1745,7 @@
     <script src="/static/js/selectpatient.js"></script>
     <script src="/static/js/patient_switch.js"></script>
         
-        <script src="/static/agent/StaticChecks.js?v=1"></script>
-        <script src="/static/agent/SandboxRunner.js?v=3"></script>
+        <!-- Note: Deprecated agent scripts removed to prevent 404s; frontend no longer calls legacy endpoints. -->
         <!-- Read SAFE_MODULES flag from body data attribute to avoid template braces in JS -->
         <script>(function(){
             var v = (document.body && document.body.dataset ? document.body.dataset.safeModulesEnabled : 'false');

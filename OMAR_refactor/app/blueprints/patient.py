@@ -238,30 +238,63 @@ def _envelope_list(items: list[dict] | list) -> dict:
 def sensitive_check(dfn: str):
     """Best-effort sensitive-record check using a VistA RPC.
     Attempts DG SENSITIVE RECORD ACCESS. If response indicates sensitivity,
-    return allowed=False and a message; otherwise allowed=True.
-    Response shape mirrors the legacy frontend expectation: { allowed: bool, message: str }.
+    return allowed=False and include the full warning text from VistA; otherwise allowed=True.
+    Response: { allowed: bool, message: str, raw: str }
     """
+    # Local helper to unwrap possible vista-api-x wrapper
+    def _unwrap_vax_raw(raw_val):
+        try:
+            if isinstance(raw_val, (bytes, bytearray)):
+                try:
+                    raw_val = raw_val.decode('utf-8', errors='ignore')
+                except Exception:
+                    return str(raw_val)
+            if isinstance(raw_val, str):
+                s = raw_val.strip()
+                if s.startswith('{') and ('"payload"' in s or "'payload'" in s):
+                    import json as _json
+                    try:
+                        obj = _json.loads(s)
+                        pl = obj.get('payload')
+                        if isinstance(pl, str):
+                            return pl
+                        if isinstance(pl, list):
+                            return '\n'.join(str(x) for x in pl)
+                        return str(pl)
+                    except Exception:
+                        return s
+            return str(raw_val)
+        except Exception:
+            try:
+                return str(raw_val)
+            except Exception:
+                return ''
+
     try:
-        # Use gateway directly to avoid type ambiguity on service facade
         gw = VistaApiXGateway()
         context = 'OR CPRS GUI CHART'
-        # Many sites use 'DG SENSITIVE RECORD ACCESS' with DFN
         raw = gw.call_rpc(context=context, rpc='DG SENSITIVE RECORD ACCESS', parameters=[{'string': str(dfn)}], json_result=False, timeout=30)  # type: ignore[attr-defined]
-        text = str(raw or '').strip()
-        low = text.lower()
-        # Heuristics: treat any affirmative indicator as sensitive
+        text = _unwrap_vax_raw(raw).strip()
+        # Determine sensitivity and extract human message
         is_sensitive = False
-        if low:
-            if any(token in low for token in ('1', 'yes', 'sensitive', 'requires break', 'restricted')):
-                # But ignore lone '1' if accompanied by explicit 'not'
-                if 'not sensitive' in low:
-                    is_sensitive = False
-                else:
+        message = ''
+        if text:
+            lines = text.splitlines()
+            if lines and lines[0].strip().isdigit() and len(lines) == 1:
+                is_sensitive = (lines[0].strip() != '0')
+            else:
+                if lines and lines[0].strip().isdigit():
+                    status_code = lines[0].strip()
+                    is_sensitive = (status_code != '0')
+                    lines = lines[1:]
+                low_all = '\n'.join(lines).lower()
+                if ('restricted' in low_all or 'warning' in low_all or 'privacy act' in low_all or 'sensitive' in low_all):
                     is_sensitive = True
-        msg = 'This patient record is sensitive.' if is_sensitive else ''
-        return jsonify({ 'allowed': (not is_sensitive), 'message': msg, 'raw': text })
+                message = '\n'.join([ln.rstrip() for ln in lines if ln is not None]).strip()
+        if is_sensitive and not message:
+            message = 'This patient record is sensitive.'
+        return jsonify({ 'allowed': (not is_sensitive), 'message': message, 'raw': text })
     except Exception as e:
-        # On failure, do not block; allow with a warning message
         return jsonify({ 'allowed': True, 'message': '', 'error': str(e) })
 
 
@@ -641,7 +674,6 @@ def labs_list_envelope(dfn: str):
         params = _collect_params('start','stop','max','id','uid','category','nowrap')
         vpr = svc.get_vpr_raw(dfn, 'labs', params=params)
         quick = svc.get_labs_quick(dfn)
-        # For alignment and includeRaw if requested
         include_raw = request.args.get('includeRaw','0').lower() in ('1','true','yes','on')
         raw_items = []
         try:
@@ -658,7 +690,6 @@ def labs_list_envelope(dfn: str):
         return jsonify(_envelope_list(items))
     except Exception as e:
         return jsonify({'error': str(e)}), 500
-
 @bp.get('/<dfn>/list/radiology')
 def radiology_list_envelope(dfn: str):
     """Paginated list envelope for radiology (quick shape), with optional filters converted to FileMan.

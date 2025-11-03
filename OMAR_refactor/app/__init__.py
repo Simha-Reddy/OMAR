@@ -59,6 +59,18 @@ def create_app():
     from flask import request, session as flask_session, jsonify
     import secrets
 
+    # Distinctive debug coloring so it's obvious this is the refactor server
+    _USE_COLOR_BANNER = str(os.getenv('OMAR_REFACTOR_DEBUG_COLOR', '1')).strip().lower() in ('1','true','yes','on')
+    _CLR_MAGENTA = "\033[95m"
+    _CLR_CYAN = "\033[96m"
+    _CLR_RESET = "\033[0m"
+    try:
+        if _USE_COLOR_BANNER:
+            print(f"{_CLR_MAGENTA}[OMAR_refactor] Flask app initializing (refactor) {_CLR_RESET}")
+            app.logger.info(f"{_CLR_CYAN}[OMAR_refactor] create_app ready{_CLR_RESET}")
+    except Exception:
+        pass
+
     @app.context_processor
     def _inject_csrf_token():
         return {'csrf_token': flask_session.get('csrf_token', '')}
@@ -103,11 +115,31 @@ def create_app():
                 "connect-src 'self'",
                 "frame-ancestors 'none'",
             ])
+            # Tag responses so the client/network tab can verify the refactor server
+            resp.headers['X-OMAR-Server'] = 'OMAR_refactor'
             # Set/update CSRF cookie
             tok = flask_session.get('csrf_token')
             if tok:
                 resp.set_cookie('csrf_token', tok, secure=app.config.get('SESSION_COOKIE_SECURE', False),
                                 httponly=False, samesite=app.config.get('SESSION_COOKIE_SAMESITE','Strict'), path='/')
+        except Exception:
+            pass
+        return resp
+
+    # Minimal per-request colored trace so you can visually confirm the server in logs
+    @app.before_request
+    def _refactor_trace_before():
+        try:
+            if _USE_COLOR_BANNER and not request.path.startswith('/static'):
+                print(f"{_CLR_MAGENTA}→ [OMAR_refactor] {request.method} {request.path}{_CLR_RESET}")
+        except Exception:
+            pass
+
+    @app.after_request
+    def _refactor_trace_after(resp):
+        try:
+            if _USE_COLOR_BANNER and not request.path.startswith('/static'):
+                app.logger.info(f"{_CLR_CYAN}✓ [OMAR_refactor] {request.method} {request.path} {resp.status_code}{_CLR_RESET}")
         except Exception:
             pass
         return resp

@@ -10,6 +10,39 @@ from ..gateways.vista_api_x_gateway import VistaApiXGateway
 bp = Blueprint('patient_search', __name__)
 
 
+def _unwrap_vax_raw(raw_val):
+    """Vista-api-x sometimes returns a JSON object with a 'payload' string.
+    This helper extracts that payload so downstream parsing sees caret/newline text.
+    Accepts bytes/str; returns str.
+    """
+    try:
+        if isinstance(raw_val, (bytes, bytearray)):
+            try:
+                raw_val = raw_val.decode('utf-8', errors='ignore')
+            except Exception:
+                return str(raw_val)
+        if isinstance(raw_val, str):
+            s = raw_val.strip()
+            if s.startswith('{') and ('"payload"' in s or "'payload'" in s):
+                import json as _json
+                try:
+                    obj = _json.loads(s)
+                    pl = obj.get('payload')
+                    if isinstance(pl, str):
+                        return pl
+                    if isinstance(pl, list):
+                        return '\n'.join(str(x) for x in pl)
+                    return str(pl)
+                except Exception:
+                    return s
+        return str(raw_val)
+    except Exception:
+        try:
+            return str(raw_val)
+        except Exception:
+            return ''
+
+
 def _get_vista_gateway() -> VistaApiXGateway:
     """Construct VistaApiXGateway using station/duz from session or defaults.
     Allows optional query overrides (?station=...&duz=...).
@@ -32,53 +65,63 @@ def vista_default_patient_list():
     Response shape mirrors original OMAR: { patients: [...], context, count, timestamp, user: {duz,name,division} }
     """
     gw = _get_vista_gateway()
-    context = 'OR CPRS GUI CHART'
+    # Try multiple contexts for broader compatibility as in legacy implementation
+    context_candidates = ['OR CPRS GUI CHART', 'JLV WEB SERVICES']
     try:
-        raw = gw.call_rpc(context=context, rpc='ORQPT DEFAULT PATIENT LIST', parameters=[], json_result=False, timeout=40)
-        lines = [ln for ln in str(raw).split('\n') if ln.strip()]
-        patients = []
-        for line in lines:
-            parts = line.split('^')
-            if len(parts) >= 2 and parts[0].strip() and parts[1].strip():
-                dfn = parts[0].strip()
-                name = parts[1].strip()
-                item = {'dfn': dfn, 'name': name, 'raw': line}
-                if len(parts) > 2 and parts[2].strip():
-                    item['clinic'] = parts[2].strip()
-                if len(parts) > 3 and parts[3].strip():
-                    item['date'] = parts[3].strip()
-                patients.append(item)
-        # Minimal user info
-        user_duz = None
-        user_name = None
-        user_division = None
-        try:
-            uraw = gw.call_rpc(context=context, rpc='ORWU USERINFO', parameters=[], json_result=False, timeout=30)
-            first = (str(uraw).split('\n')[0] if uraw else '')
-            p = first.split('^') if first else []
-            if len(p) >= 1 and p[0].strip():
-                user_duz = p[0].strip()
-            if len(p) >= 2 and p[1].strip():
-                user_name = p[1].strip()
+        last_err: Exception | None = None
+        for ctx in context_candidates:
             try:
-                if p:
-                    last = p[-1]
-                    if ';' in last:
-                        user_division = last.split(';')[-1].strip()
-                    else:
-                        user_division = last.strip()
-            except Exception:
+                raw = gw.call_rpc(context=ctx, rpc='ORQPT DEFAULT PATIENT LIST', parameters=[], json_result=False, timeout=40)
+                raw_text = _unwrap_vax_raw(raw)
+                lines = [ln for ln in str(raw_text).split('\n') if ln.strip()]
+                patients = []
+                for line in lines:
+                    parts = line.split('^')
+                    if len(parts) >= 2 and parts[0].strip() and parts[1].strip():
+                        dfn = parts[0].strip()
+                        name = parts[1].strip()
+                        item = {'dfn': dfn, 'name': name, 'raw': line}
+                        if len(parts) > 2 and parts[2].strip():
+                            item['clinic'] = parts[2].strip()
+                        if len(parts) > 3 and parts[3].strip():
+                            item['date'] = parts[3].strip()
+                        patients.append(item)
+                # Minimal user info using same working context
+                user_duz = None
+                user_name = None
                 user_division = None
-        except Exception:
-            pass
-        payload = {
-            'patients': patients,
-            'context': context,
-            'count': len(patients),
-            'timestamp': time.time(),
-            'user': { 'duz': user_duz, 'name': user_name, 'division': user_division }
-        }
-        return jsonify(payload)
+                try:
+                    uraw = gw.call_rpc(context=ctx, rpc='ORWU USERINFO', parameters=[], json_result=False, timeout=30)
+                    utext = _unwrap_vax_raw(uraw)
+                    first = (str(utext).split('\n')[0] if utext else '')
+                    p = first.split('^') if first else []
+                    if len(p) >= 1 and p[0].strip():
+                        user_duz = p[0].strip()
+                    if len(p) >= 2 and p[1].strip():
+                        user_name = p[1].strip()
+                    try:
+                        if p:
+                            last = p[-1]
+                            if ';' in last:
+                                user_division = last.split(';')[-1].strip()
+                            else:
+                                user_division = last.strip()
+                    except Exception:
+                        user_division = None
+                except Exception:
+                    pass
+                payload = {
+                    'patients': patients,
+                    'context': ctx,
+                    'count': len(patients),
+                    'timestamp': time.time(),
+                    'user': { 'duz': user_duz, 'name': user_name, 'division': user_division }
+                }
+                return jsonify(payload)
+            except Exception as e:
+                last_err = e
+                continue
+        return jsonify({'error': 'ORQPT DEFAULT PATIENT LIST failed for all contexts', 'contexts_tried': context_candidates, 'detail': str(last_err)}), 500
     except Exception as e:
         return jsonify({'error': str(e), 'rpc': 'ORQPT DEFAULT PATIENT LIST'}), 500
 
@@ -91,7 +134,8 @@ def vista_patient_search():
     Returns: { matches: [{dfn,name,raw}], context, rpc, hasMore, nextCursor }
     """
     gw = _get_vista_gateway()
-    context = 'OR CPRS GUI CHART'
+    # Try multiple common ORWPT contexts for broader compatibility
+    context_candidates = ['OR CPRS GUI CHART', 'JLV WEB SERVICES']
     data = request.get_json(silent=True) or {}
     raw_q = str(data.get('query') or '')
     # Normalize: remove exactly one space right after the first comma
@@ -131,9 +175,17 @@ def vista_patient_search():
         # LAST5
         if (len(search_str) == 5) and search_str[0].isalpha() and search_str[1:].isdigit():
             rpc = 'ORWPT LAST5'
-            raw = gw.call_rpc(context=context, rpc=rpc, parameters=[{'string': search_str}], json_result=False, timeout=40)
-            matches = _parse_lines(raw)
-            return jsonify({'matches': matches, 'context': context, 'rpc': rpc, 'hasMore': False, 'nextCursor': None})
+            last_err: Exception | None = None
+            for ctx in context_candidates:
+                try:
+                    raw = gw.call_rpc(context=ctx, rpc=rpc, parameters=[{'string': search_str}], json_result=False, timeout=40)
+                    raw_text = _unwrap_vax_raw(raw)
+                    matches = _parse_lines(raw_text)
+                    return jsonify({'matches': matches, 'context': ctx, 'rpc': rpc, 'hasMore': False, 'nextCursor': None})
+                except Exception as e:
+                    last_err = e
+                    continue
+            return jsonify({'error': f"{rpc} failed for all contexts", 'contexts_tried': context_candidates, 'detail': str(last_err)}), 500
 
         # LIST ALL name prefix
         if search_str:
@@ -149,11 +201,19 @@ def vista_patient_search():
             search_mod = '~'
         from_param = (cursor_name + '~') if cursor_name else search_mod
         rpc = 'ORWPT LIST ALL'
-        raw = gw.call_rpc(context=context, rpc=rpc, parameters=[{'string': from_param}, {'string': '1'}], json_result=False, timeout=60)
-        all_results = _parse_lines(raw)
-        filtered = [r for r in all_results if r['name'].upper().startswith(search_str)]
-        page_matches = filtered[:page_size]
-        next_cursor = page_matches[-1]['name'] if len(filtered) > page_size else None
-        return jsonify({'matches': page_matches, 'context': context, 'rpc': rpc, 'hasMore': bool(next_cursor), 'nextCursor': next_cursor})
+        last_err: Exception | None = None
+        for ctx in context_candidates:
+            try:
+                raw = gw.call_rpc(context=ctx, rpc=rpc, parameters=[{'string': from_param}, {'string': '1'}], json_result=False, timeout=60)
+                raw_text = _unwrap_vax_raw(raw)
+                all_results = _parse_lines(raw_text)
+                filtered = [r for r in all_results if r['name'].upper().startswith(search_str)]
+                page_matches = filtered[:page_size]
+                next_cursor = page_matches[-1]['name'] if len(filtered) > page_size else None
+                return jsonify({'matches': page_matches, 'context': ctx, 'rpc': rpc, 'hasMore': bool(next_cursor), 'nextCursor': next_cursor})
+            except Exception as e:
+                last_err = e
+                continue
+        return jsonify({'error': f"{rpc} failed for all contexts", 'contexts_tried': context_candidates, 'detail': str(last_err)}), 500
     except Exception as e:
         return jsonify({'error': str(e)}), 500

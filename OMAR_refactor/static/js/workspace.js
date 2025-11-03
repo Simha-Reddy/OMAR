@@ -75,7 +75,7 @@
     }
 })();
 
-// PatientContext: single source of truth for /get_patient with memoization and single-flight
+// PatientContext: single source of truth for patient meta using client-held DFN (no server bootstrap)
 (function(){
     if (window.PatientContext) return;
     const state = { dfn: '', value: null, inflight: null, ts: 0 };
@@ -83,11 +83,9 @@
     function sameDfn(){ return (state.dfn && state.dfn === currentDfn()); }
     function clear(){ state.value=null; state.inflight=null; state.ts=0; state.dfn=currentDfn(); }
     async function fetchMeta(){
-        try {
-            const r = await fetch('/get_patient', { headers:{ 'Accept':'application/json', 'X-Workspace':'1', 'X-Caller':'PatientContext' }, cache:'no-store', credentials:'same-origin' });
-            if (!r.ok) throw new Error('HTTP '+r.status);
-            return await r.json();
-        } catch(e) { throw e; }
+        // Do not call legacy /get_patient; rely on client DFN presence
+        const dfn = currentDfn();
+        return dfn ? { dfn } : null;
     }
     async function get(){
         const dfn = currentDfn();
@@ -146,8 +144,8 @@ async function loadModule(moduleName) {
     }
     try {
         // Load the module script
-        const script = document.createElement('script');
-        script.src = `/static/workspace/modules/${fileName}`;
+    const script = document.createElement('script');
+    script.src = `/static/js/workspace/modules/${fileName}`;
         script.async = true;
         console.debug('[Workspace] Loading module script', { moduleName, src: script.src });
         const loadPromise = new Promise((resolve, reject) => {
@@ -434,6 +432,7 @@ async function refreshTab(tab){
         console.debug('[Workspace] Hard render path; clearing body', { moduleKey, tabId });
         body.innerHTML = `<div class="module-loading"><h3>${tab.dataset.tabName}</h3><p>Loading ${tab.dataset.tabName} module...</p>`;
         try { delete content.dataset.moduleLoaded; } catch(_e){ content.removeAttribute('data-module-loaded'); }
+        // Require a patient for all modules except After Visit Summary
         if(!_isPatientSelected() && moduleKey !== 'After Visit Summary'){
             body.innerHTML = `<div class="module-loading"><h3>${tab.dataset.tabName}</h3><p>Select a patient to load this tab.</p>`;
             return;
@@ -628,20 +627,9 @@ try { window.loadFullChartForPatient = undefined; } catch(_e) {}
     // Throttling policy: fetch server layout once per session; persist locally during session;
     // post to server only on session end (beforeunload) or explicit reset.
     let __serverLayoutFetched = false;
-    async function _mirrorLayoutToServer(state, { reason, keepalive } = {}){
-        try{
-            if (reason !== 'finalize') return; // only write on finalize/reset
-            const csrf = document.querySelector('meta[name="csrf-token"]')?.getAttribute('content') || '';
-            const userKey = buildUserKey();
-            await fetch(`/workspace/layout`, {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json', 'X-CSRF-Token': csrf },
-                credentials: 'same-origin',
-                cache: 'no-store',
-                keepalive: !!keepalive,
-                body: JSON.stringify({ layout: state, userKey })
-            }).catch(()=>{});
-        }catch(_e){}
+    async function _mirrorLayoutToServer(_state, _opts = {}){
+        // Deprecated: no server layout mirroring; local-only persistence
+        return;
     }
 
     function saveLayout(){
@@ -758,17 +746,7 @@ try { window.loadFullChartForPatient = undefined; } catch(_e) {}
     }
 
     async function _fetchServerLayout(){
-        try{
-            const userKey = buildUserKey();
-            let params = new URLSearchParams();
-            if (userKey) params.set('userKey', userKey);
-            let url = '/workspace/layout' + (params.toString() ? ('?' + params.toString()) : '');
-            let r = await fetch(url, { method: 'GET', credentials:'same-origin', cache:'no-store' });
-            if(r.ok){
-                const j = await r.json().catch(()=>({}));
-                if(j && j.found && j.layout && (j.layout.left || j.layout.right)) return j.layout;
-            }
-        }catch(_e){}
+        // Deprecated: never fetch layout from server; rely on localStorage only
         return null;
     }
 
@@ -855,14 +833,7 @@ try { window.loadFullChartForPatient = undefined; } catch(_e) {}
         try{
             // Clear local
             try { localStorage.removeItem(buildLayoutStorageKey()); } catch(_e){}
-            // Clear server mirror
-            const csrf = document.querySelector('meta[name="csrf-token"]')?.getAttribute('content') || '';
-            const userKey = buildUserKey();
-            try{
-                const params = new URLSearchParams();
-                if (userKey) params.set('userKey', userKey);
-                await fetch('/workspace/layout?' + params.toString(), { method:'DELETE', headers:{ 'X-CSRF-Token': csrf }, credentials:'same-origin' });
-            }catch(_e){}
+            // No server mirror to clear
             // Reinitialize default tabs
             clearAllTabs();
             initializeTabs();
@@ -1048,7 +1019,7 @@ try { window.loadFullChartForPatient = undefined; } catch(_e) {}
                                 <h3>${displayName}</h3>
                                 <p>Content for ${displayName} module will be loaded here...</p>
                                 <div class="module-placeholder">
-                                    <p>Module file: <code>/static/workspace/modules/${moduleConfig[moduleKey] || 'unknown.js'}</code></p>
+                                    <p>Module file: <code>/static/js/workspace/modules/${moduleConfig[moduleKey] || 'unknown.js'}</code></p>
                                     <p>Expected interface:</p>
                                     <pre>window.WorkspaceModules = window.WorkspaceModules || {};
 window.WorkspaceModules['${moduleKey}'] = {

@@ -25,15 +25,19 @@
 
   // Patient metadata helpers
   async function getPatientMeta(){
-    // Prefer PatientContext if available
+    // Use PatientContext only; avoid legacy /get_patient
     try{
       if (g.PatientContext && typeof g.PatientContext.get === 'function'){
         const meta = await g.PatientContext.get();
         if (meta && meta.dfn) return meta;
       }
     }catch(_e){}
-    const j = await getJson('/get_patient');
-    return j || {};
+    // Fallback to in-memory/session DFN only (no network)
+    try{
+      const dfn = (g.CURRENT_PATIENT_DFN || (g.sessionStorage && g.sessionStorage.getItem && g.sessionStorage.getItem('CURRENT_PATIENT_DFN')) || '').toString();
+      if (dfn) return { dfn };
+    }catch(_e){}
+    return {};
   }
 
   // Formatting

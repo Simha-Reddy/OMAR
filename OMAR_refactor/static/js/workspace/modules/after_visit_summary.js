@@ -69,7 +69,6 @@ window.WorkspaceModules = window.WorkspaceModules || {};
     try{ if (typeof SessionManager!=='undefined' && SessionManager.peekTranscriptFromSession){ const t = SessionManager.peekTranscriptFromSession(); if(t) return t; } }catch(_e){}
     try{ if (typeof SessionManager!=='undefined' && SessionManager.getTranscript){ const t = await SessionManager.getTranscript(10000); if(t) return t; } }catch(_e){}
     try{ const el = document.getElementById('rawTranscript'); if(el && el.value) return el.value; }catch(_e){}
-    try{ const r = await fetch('/scribe/live_transcript', { cache:'no-store' }); if(r && r.ok){ return await r.text(); } }catch(_e){}
     return '';
   }
 

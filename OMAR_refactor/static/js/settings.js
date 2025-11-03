@@ -17,7 +17,21 @@ document.addEventListener("DOMContentLoaded", async () => {
         if (autoDelBox) autoDelBox.addEventListener('change', async () => {
             localStorage.setItem(autoDeleteKey, autoDelBox.checked ? '1' : '0');
             if (autoDelBox.checked) {
-                try { await fetch('/delete_old_sessions?days=10', { method: 'GET' }); } catch(_e){}
+                // Perform a one-time local cleanup of archives older than 10 days
+                try {
+                    const cutoff = Date.now() - (10 * 24 * 60 * 60 * 1000);
+                    const toDelete = [];
+                    for (let i = 0; i < localStorage.length; i++) {
+                        const k = localStorage.key(i);
+                        if (k && k.startsWith('session:archive:')) {
+                            try {
+                                const obj = JSON.parse(localStorage.getItem(k) || '{}');
+                                if (obj && obj.ts && Number(obj.ts) < cutoff) toDelete.push(k);
+                            } catch(_e){}
+                        }
+                    }
+                    toDelete.forEach(k => { try { localStorage.removeItem(k); } catch(_e){} });
+                } catch(_e){}
             }
         });
     } catch(e) { console.warn('Archive toggle init failed', e); }

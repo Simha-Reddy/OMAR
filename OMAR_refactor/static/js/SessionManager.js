@@ -39,22 +39,49 @@ const SessionManager = {
       if ((now - (this._transcriptCacheTs || 0)) < minFreshMs && typeof this._transcriptCacheText === 'string') {
         return this._transcriptCacheText;
       }
+      // Strategy:
+      // 1) Use last restored session data if present
       let txt = '';
       try {
-        const r = await fetch('/scribe/live_transcript', { cache: 'no-store' });
-        if (r && r.ok) txt = await r.text();
+        if (this.lastLoadedData && this.lastLoadedData.scribe && typeof this.lastLoadedData.scribe.transcript === 'string') {
+          txt = this.lastLoadedData.scribe.transcript;
+        }
       } catch(_e) {}
+      // 2) Fall back to any live DOM element on Scribe page
       if (!txt) {
-        // Fallback to DOM text area if present
         try {
           const el = document.getElementById('rawTranscript');
           if (el && el.value) txt = el.value;
+        } catch(_e) {}
+      }
+      // 3) Optionally, allow an app-provided provider (no hardcoded endpoints here)
+      if (!txt) {
+        try {
+          if (window.ScribeRuntime && typeof window.ScribeRuntime.getTranscript === 'function') {
+            txt = await window.ScribeRuntime.getTranscript();
+          }
         } catch(_e) {}
       }
       this._transcriptCacheText = (typeof txt === 'string') ? txt : '';
       this._transcriptCacheTs = Date.now();
       return this._transcriptCacheText;
     } catch(_e) { return ''; }
+  },
+
+  async getRecordingStatus() {
+    // Single place for scripts to ask if recording is active
+    try {
+      // Prefer an app-provided runtime
+      if (window.ScribeRuntime && typeof window.ScribeRuntime.getStatus === 'function') {
+        const st = await window.ScribeRuntime.getStatus();
+        // Accept booleans or objects like { status: 'active'|'stopped' }
+        if (typeof st === 'boolean') return st;
+        if (st && typeof st.status === 'string') return st.status === 'active';
+      }
+    } catch(_e) {}
+    // Fallback to UI-managed global from app.js
+    try { if (typeof window.currentRecordingState !== 'undefined') return !!window.currentRecordingState; } catch(_e) {}
+    return false;
   },
 
   async saveToSession() {
@@ -85,47 +112,27 @@ const SessionManager = {
     }
 
     const newData = await this.collectData();
-    let mergedData = {};
-
-    // Try to load existing session data first
+    // Persist locally only (no server calls)
     try {
-      const response = await fetch('/load_session');
-      if (response.ok) {
-        const existingData = await response.json();
-        mergedData = deepMerge(existingData, newData);
-      } else {
-        mergedData = newData;
-      }
+      const key = 'session:last';
+      const raw = localStorage.getItem(key);
+      const existing = raw ? JSON.parse(raw) : {};
+      const mergedData = deepMerge(existing, newData);
+      localStorage.setItem(key, JSON.stringify(mergedData));
+      this.lastLoadedData = mergedData;
+      console.log('Session saved to local storage.');
     } catch (err) {
-      console.warn("Could not load existing session, saving only current page data.");
-      mergedData = newData;
-    }    // Save merged data
-    try {
-      const response = await fetch('/save_session', {
-        method: 'POST',
-        headers: { 
-          'Content-Type': 'application/json',
-          'X-CSRF-Token': window.getCsrfToken ? window.getCsrfToken() : ''
-        },
-        body: JSON.stringify(mergedData),
-      });
-      if (response.ok) {
-        console.log('Session saved to server.');
-        this.lastLoadedData = mergedData; // <-- Add this line
-      } else {
-        console.error('Failed to save session to server.');
-      }
-    } catch (err) {
-      console.error('Error saving session to server:', err);
+      console.error('Error saving session to local storage:', err);
     }
   },
 
   async loadFromSession() {
     try {
-      const response = await fetch('/load_session');
-      if (response.ok) {
-        const data = await response.json();
-        this.lastLoadedData = data; // <-- Store for later
+      // Load from local storage only
+      const raw = localStorage.getItem('session:last');
+      if (raw) {
+        const data = JSON.parse(raw);
+        this.lastLoadedData = data;
 
         // Determine if a patient is currently active; only then allow restoring draft note
         let activeDfn = null;
@@ -133,18 +140,12 @@ const SessionManager = {
           if (window.PatientContext && typeof window.PatientContext.get === 'function') {
             const meta = await window.PatientContext.get();
             activeDfn = meta && (meta.dfn || meta.patient_dfn || meta.patientDFN);
-          } else {
-            const pm = await fetch('/get_patient', { cache: 'no-store' });
-            if (pm.ok) {
-              const meta = await pm.json();
-              activeDfn = meta && (meta.dfn || meta.patient_dfn || meta.patientDFN);
-            }
           }
         } catch(_e) {}
         this._allowScribeDraftRestore = !!(activeDfn) || !!(data && data.patient_record);
 
         this.restoreData(data);
-        console.log('Session loaded from server:', data);
+        console.log('Session loaded from local storage:', data);
 
         // Call displayPatientInfo to update patient name and record
         if (typeof displayPatientInfo === "function") {
@@ -155,93 +156,69 @@ const SessionManager = {
         if (!this._allowScribeDraftRestore) {
           try { const el = document.getElementById('feedbackReply'); if (el) el.innerText = ''; } catch(_e) {}
         }
-      } else {
-        console.error('Failed to load session from server.');
       }
     } catch (err) {
-      console.error('Error loading session from server:', err);
+      console.error('Error loading session from local storage:', err);
     }
   },
 
   async clearSession() {
     try {
-      const token = window.getCsrfToken ? window.getCsrfToken() : '';
-      const response = await fetch('/clear_session', { method: 'POST', headers: { 'X-CSRF-Token': token } });
-      if (response.ok) {
-        console.log('Session cleared on server.');
-        window.exploreQAHistory = [];
-        // Also clear any cached local copy and prevent restoring drafts until a patient is selected
-        try { this.lastLoadedData = {}; } catch(_e) {}
-        this._allowScribeDraftRestore = false;
-      } else {
-        console.error('Failed to clear session on server.');
-      }
+      localStorage.removeItem('session:last');
+      window.exploreQAHistory = [];
+      this.lastLoadedData = {};
+      this._allowScribeDraftRestore = false;
+      console.log('Session cleared (local storage).');
     } catch (err) {
-      console.error('Error clearing session from server:', err);
+      console.error('Error clearing session from local storage:', err);
     }
   },
   async saveFullSession(name) {
     const data = await this.collectData();
     try {
-      const token = window.getCsrfToken ? window.getCsrfToken() : '';
-      const response = await fetch('/save_full_session', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json', 'X-CSRF-Token': token },
-        body: JSON.stringify({ name, ...data }),
-      });
-      if (response.ok) {
-        const result = await response.json();
-        console.log('Full session saved to server:', result);
-      } else {
-        console.error('Failed to save full session to server.');
-      }
+      const key = `session:archive:${name}`;
+      localStorage.setItem(key, JSON.stringify({ name, ts: Date.now(), data }));
+      console.log('Full session saved (local storage):', key);
     } catch (err) {
-      console.error('Error saving full session to server:', err);
+      console.error('Error saving full session to local storage:', err);
     }
   },
 
   async loadSavedSession(filename) {
     try {
-      const response = await fetch(`/load_saved_session/${filename}`);
-      if (response.ok) {
-        const data = await response.json();
-        this.restoreData(data.data);
-        console.log('Saved session loaded from server:', data);
-      } else {
-        console.error('Failed to load saved session from server.');
-      }
+      const key = `session:archive:${filename}`;
+      const raw = localStorage.getItem(key);
+      if (!raw) { console.warn('No saved session found:', filename); return; }
+      const obj = JSON.parse(raw);
+      this.restoreData(obj.data);
+      console.log('Saved session loaded (local storage):', filename);
     } catch (err) {
-      console.error('Error loading saved session from server:', err);
+      console.error('Error loading saved session from local storage:', err);
     }
   },
 
   async listSessions() {
     try {
-      const response = await fetch('/list_sessions');
-      if (response.ok) {
-        const sessions = await response.json();
-        console.log('Available sessions:', sessions);
-        return sessions;
-      } else {
-        console.error('Failed to list sessions from server.');
-        return [];
+      // List keys saved under session:archive:*
+      const out = [];
+      for (let i = 0; i < localStorage.length; i++) {
+        const k = localStorage.key(i);
+        if (k && k.startsWith('session:archive:')) out.push(k.replace('session:archive:', ''));
       }
+      console.log('Available sessions (local storage):', out);
+      return out;
     } catch (err) {
-      console.error('Error listing sessions from server:', err);
+      console.error('Error listing sessions from local storage:', err);
       return [];
     }
   },
 
   async deleteSession(filename) {
     try {
-      const response = await fetch(`/delete_session/${filename}`, { method: 'DELETE' });
-      if (response.ok) {
-        console.log(`Session ${filename} deleted from server.`);
-      } else {
-        console.error(`Failed to delete session ${filename} from server.`);
-      }
+      localStorage.removeItem(`session:archive:${filename}`);
+      console.log(`Session ${filename} deleted (local storage).`);
     } catch (err) {
-      console.error(`Error deleting session ${filename} from server:`, err);
+      console.error(`Error deleting session ${filename} from local storage:`, err);
     }
   },
 
@@ -251,35 +228,20 @@ const SessionManager = {
     try {
       // Collect full session data first
       const fullData = await this.collectData();      // Save the session to the server
-      const saveResponse = await fetch('/save_full_session', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json', 'X-CSRF-Token': window.getCsrfToken ? window.getCsrfToken() : '' },
-        body: JSON.stringify({ name: sessionName, ...fullData }),
-      });
-
-      if (!saveResponse.ok) {
-        console.error("❌ Failed to save session to server.");
-        alert("Failed to save session. Please try again.");
+      try {
+        const key = `session:archive:${sessionName}`;
+        localStorage.setItem(key, JSON.stringify({ name: sessionName, ts: Date.now(), data: fullData }));
+        console.log('✅ Session saved (local storage):', key);
+      } catch(err){
+        console.error('❌ Failed to save session locally', err);
+        alert('Failed to save session locally.');
         return;
       }
 
-      const saveResult = await saveResponse.json();
-      console.log("✅ Session saved to server:", saveResult);
-
-      // Clear the session from the server
-      const clearResponse = await fetch('/clear_session', { method: 'POST', headers: { 'X-CSRF-Token': window.getCsrfToken ? window.getCsrfToken() : '' } });
-
-      if (!clearResponse.ok) {
-        console.error("❌ Failed to clear session on server.");
-        alert("Failed to clear session. Please try again.");
-        return;
-      }
-
-      // Only clear live_transcript.txt after save and clear session are both successful
-      await fetch('/scribe/clear_live_transcript', { method: 'POST', headers: { 'X-CSRF-Token': window.getCsrfToken ? window.getCsrfToken() : '' } });
-
-      console.log("✅ Session cleared on server.");
-      alert(`Session "${sessionName}" has been saved and cleared.`);
+      // Clear local current-session snapshot
+      try { localStorage.removeItem('session:last'); } catch(_e){}
+      console.log("✅ Session cleared (local storage).");
+      alert(`Session "${sessionName}" has been saved.`);
     } catch (err) {
       console.error("❌ Error ending session:", err);
       alert("An error occurred while ending the session. Please try again.");
@@ -404,16 +366,7 @@ const SessionManager = {
         if (data.scribe.checklist && window.WorkspaceModules && window.WorkspaceModules['To Do'] && window.WorkspaceModules['To Do'].setChecklistData) {
           window.WorkspaceModules['To Do'].setChecklistData(data.scribe.checklist);
         }
-        if (data.scribe && data.scribe.transcript) {
-          await fetch('/scribe/set_live_transcript', {
-            method: 'POST',
-            headers: { 
-              'Content-Type': 'application/json',
-              'X-CSRF-Token': window.getCsrfToken ? window.getCsrfToken() : ''
-            },
-            body: JSON.stringify({ text: data.scribe.transcript })
-          });
-        }
+        // Removed: pushing transcript to legacy live_transcript endpoint
 
         // If restored content includes any meaningful text, enable autosave
         try {

@@ -46,13 +46,7 @@ async function ensureArchiveNameInitialized() {
         const existing = localStorage.getItem('ssva:currentArchiveName');
         if (existing && existing.trim().length) return existing;
         let patientName = '';
-        try {
-            const r = await fetch('/get_patient', { cache: 'no-store', credentials: 'same-origin' });
-            if (r && r.ok) {
-                const j = await r.json();
-                patientName = (j && (j.name || j.patient_name || j.display_name)) || '';
-            }
-        } catch(_e) {}
+        // Do not call legacy /get_patient; name will be set by header updates later
         let base = '';
         try {
             if (typeof buildArchiveBaseName === 'function') {
@@ -350,9 +344,15 @@ if (endBtn) {
 const recordingChannel = new BroadcastChannel('recording_channel');
 
 async function getRecordingStatus() {
-    const res = await fetch('/scribe/recording_status');
-    const data = await res.json();
-    return data.is_recording;
+    // Prefer a centralized provider (SessionManager) or fall back to local UI state
+    try {
+        if (typeof SessionManager !== 'undefined' && typeof SessionManager.getRecordingStatus === 'function') {
+            const v = await SessionManager.getRecordingStatus();
+            return !!v;
+        }
+    } catch(_e) {}
+    // Fallback: trust current UI state
+    return !!currentRecordingState;
 }
 
 function _csrf(){ 
@@ -416,6 +416,8 @@ async function setRecordBtnState(isRecording) {
         requestWakeLock();
         // Swap favicon to red recording indicator
         updateFaviconForRecording(true);
+        // Publish status via runtime bus
+        try { if (window.ScribeRuntime && typeof window.ScribeRuntime.setStatus === 'function') window.ScribeRuntime.setStatus(true); } catch(_e){}
         // NEW: ensure auto-archive is active when recording starts (Workspace requirement)
         try {
             await ensureArchiveNameInitialized();
@@ -427,19 +429,30 @@ async function setRecordBtnState(isRecording) {
         releaseWakeLock();
         // Restore original favicon
         updateFaviconForRecording(false);
+        // Publish status via runtime bus
+        try { if (window.ScribeRuntime && typeof window.ScribeRuntime.setStatus === 'function') window.ScribeRuntime.setStatus(false); } catch(_e){}
     }
 }
 
 async function toggleRecording() {
     const isRecording = await getRecordingStatus();
-    if (isRecording) {
-        await fetch('/scribe/stop_recording', { method: 'POST', headers: { 'X-CSRF-Token': _csrf() }, credentials: 'same-origin', cache: 'no-store', referrerPolicy: 'no-referrer' });
-        recordingChannel.postMessage({ isRecording: false });
-        await setRecordBtnState(false);
-    } else {
-        await fetch('/scribe/start_recording', { method: 'POST', headers: { 'X-CSRF-Token': _csrf() }, credentials: 'same-origin', cache: 'no-store', referrerPolicy: 'no-referrer' });
-        recordingChannel.postMessage({ isRecording: true });
-        await setRecordBtnState(true);
+    try {
+        if (isRecording) {
+            if (window.ScribeRuntime && typeof window.ScribeRuntime.stop === 'function') {
+                await window.ScribeRuntime.stop();
+            }
+            recordingChannel.postMessage({ isRecording: false });
+            await setRecordBtnState(false);
+        } else {
+            if (window.ScribeRuntime && typeof window.ScribeRuntime.start === 'function') {
+                await window.ScribeRuntime.start();
+            }
+            recordingChannel.postMessage({ isRecording: true });
+            await setRecordBtnState(true);
+        }
+    } catch (e) {
+        console.warn('Recording toggle failed:', e);
+        try { alert(e && e.message ? e.message : 'Recording action failed'); } catch(_e){}
     }
 }
 
@@ -535,9 +548,6 @@ document.addEventListener('DOMContentLoaded', async () => {
         try {
             if (window.PatientContext && typeof window.PatientContext.get === 'function') {
                 meta = await window.PatientContext.get();
-            } else {
-                const resp = await fetch('/get_patient', { headers: { 'Accept': 'application/json' }, credentials: 'same-origin', cache: 'no-store' });
-                if (resp.ok) meta = await resp.json();
             }
         } catch(_e){}
         if (meta) {
@@ -593,10 +603,9 @@ async function exitApp() {
         try {
             const isRec = await getRecordingStatus();
             if (isRec) {
-                // Use existing global _csrf() helper
-                await fetch('/scribe/stop_recording', { method: 'POST', headers: { 'X-CSRF-Token': _csrf() }, credentials: 'same-origin', cache: 'no-store', referrerPolicy: 'no-referrer' });
-                recordingChannel && recordingChannel.postMessage({ isRecording: false });
-                await setRecordBtnState(false);
+                try { if (window.ScribeRuntime && typeof window.ScribeRuntime.stop === 'function') await window.ScribeRuntime.stop(); } catch(_e){}
+                try { recordingChannel && recordingChannel.postMessage({ isRecording: false }); } catch(_e){}
+                try { await setRecordBtnState(false); } catch(_e){}
             }
         } catch (e) { console.warn('Stop recording warning:', e); }
 

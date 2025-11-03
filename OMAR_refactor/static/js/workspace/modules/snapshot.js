@@ -586,29 +586,25 @@
     
     left.appendChild(leftMount); right.appendChild(rightMount); layout.appendChild(left); layout.appendChild(right); container.appendChild(layout);
 
-    // Ensure patient selected
+    // Ensure patient selected (no legacy /get_patient)
     let patientMeta = null;
-    try{
+    try {
       if (window.PatientContext && typeof window.PatientContext.get === 'function') {
         patientMeta = await window.PatientContext.get();
-      } else {
-        const r = await fetch('/get_patient', { headers:{'Accept':'application/json','X-Caller':'Snapshot'}, credentials:'same-origin' });
-        if(r.ok) patientMeta = await r.json();
       }
-    }catch(_e){}
+    } catch(_e){}
     if(!patientMeta || !patientMeta.dfn){ leftMount.innerHTML='<div class="vital-empty">Select a patient to view snapshot.</div>'; rightMount.innerHTML=''; try { if (container && container.dataset) delete container.dataset.loading; } catch(_e){} return; }
 
     // Load left + right in parallel
     try{
       const tFetchStart = (perfOn && performance && performance.now) ? performance.now() : 0;
+      // Use refactor Api client with DFN-aware endpoints
       const [vRes, lRes, aRes, mRes, pRes] = await Promise.all([
-        jget('/quick/patient/vitals').catch(()=>null),
-        // Smaller initial labs pull for faster fishbone; server dedupes
-        jget('/quick/patient/labs?days=365&maxPanels=60').catch(()=>({ labs: [] })),
-        jget('/quick/patient/allergies').catch(()=>({ allergies: [] })),
-        jget('/quick/patient/medications?status=ACTIVE+PENDING&days=365').catch(()=>({ medications: [] })),
-        // Request detailed problems so click popover includes comments and full metadata
-        jget('/quick/patient/problems?detail=1').catch(()=>({ problems: [] }))
+        window.Api && Api.quick ? Api.quick('demographics').then(() => Api.quick('vitals')).catch(()=>null) : Promise.resolve(null),
+        (window.Api && Api.quick ? Api.quick('labs', { days: 365, maxPanels: 60 }) : Promise.resolve({ labs: [] })).catch(()=>({ labs: [] })),
+        (window.Api && Api.quick ? Api.quick('allergies') : Promise.resolve({ allergies: [] })).catch(()=>({ allergies: [] })),
+        (window.Api && Api.quick ? Api.quick('meds', { status: 'ACTIVE+PENDING', days: 365 }) : Promise.resolve({ medications: [] })).catch(()=>({ medications: [] })),
+        (window.Api && Api.quick ? Api.quick('problems', { detail: 1 }) : Promise.resolve({ problems: [] })).catch(()=>({ problems: [] }))
       ]);
       if (perfOn && performance && performance.now) {
         try { console.log(`SNAPSHOT:fetch-all took ${(performance.now()-tFetchStart).toFixed(0)}ms`); } catch(_e){}
