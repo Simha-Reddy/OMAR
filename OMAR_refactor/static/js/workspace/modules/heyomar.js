@@ -171,9 +171,9 @@
       }
   // Allow Summary to raise recall via overrideTopK
   const overrideTopK = (()=>{ try{ const st=ensureState(container); return st && st.overrideTopK ? st.overrideTopK : null; }catch(_e){ return null; } })();
-  const baseBody = { query: replaced, top_k: (overrideTopK || 8), demo_mode: demoMode };
+  const baseBody = { query: replaced, top_k: (overrideTopK || 8) };
       if (doc_ids && doc_ids.length) baseBody.doc_ids = doc_ids;
-      if (deepToggle) baseBody.deep_answer = !!deepToggle.checked;
+    // deep_answer deprecated; do not send
 
       // CLIENT-ASSISTED structured sections
       // If Summary precomputed bundle exists, prefer it; else try planner-only expansion
@@ -204,41 +204,23 @@
         clientStructuredRepls = Array.isArray(st.preExpandedReplacements) ? st.preExpandedReplacements : null;
       } else {
         try{
-          const planRes = await fetch('/explore/notes_qa', { method:'POST', headers:{ 'Content-Type':'application/json', 'X-CSRF-Token': document.querySelector('meta[name="csrf-token"]')?.getAttribute('content') || '' }, body: JSON.stringify({ query: text, plan_only: true, deep_answer: !!st.deepAnswer }) });
-          const planData = await planRes.json().catch(()=>({}));
-          const dps = Array.isArray(planData.dotphrases) ? planData.dotphrases : [];
-          if (dps.length && window.DotPhrases && DotPhrases.expand){
-            const joined = dps.join('\n');
-            const { replacements } = await DotPhrases.expand(joined);
-            if (Array.isArray(replacements) && replacements.length){
-              // Merge with any seeded replacements
-              const seed = Array.isArray(clientStructuredRepls) ? clientStructuredRepls : [];
-              const merged = seed.concat(replacements);
-              const seen = new Set();
-              clientStructuredRepls = merged.filter(r=>{ const key=(r&&r.raw)?String(r.raw):JSON.stringify(r); if(seen.has(key)) return false; seen.add(key); return true; });
-              const parts = clientStructuredRepls.map(({raw,value})=>{
-                const title = `Requested: ${raw}`;
-                const underline = '='.repeat(title.length);
-                const body = (value && typeof value==='object' && value.markdown) ? String(value.markdown||'') : String(value||'');
-                return `${title}\n${underline}\n${body}`;
-              });
-              structuredSections = parts.join('\n\n');
-              if (structuredSections.length > 16000) structuredSections = structuredSections.slice(0,16000) + '\n... (truncated)';
-            }
-          }
+          // Legacy planner call removed; rely on local DotPhrases expansion for now.
+          // If a server-side planner is added, integrate here.
         }catch(_e){}
       }
 
-      const body = { ...baseBody };
+  const body = { ...baseBody };
       if (structuredSections) body.structured_sections = structuredSections;
-      if (typeof st.deepAnswer === 'boolean') body.deep_answer = !!st.deepAnswer;
+  // deep_answer deprecated; do not send
 
-      const res = await fetch('/explore/notes_qa', {
-        method:'POST', headers:{ 'Content-Type':'application/json', 'X-CSRF-Token': document.querySelector('meta[name="csrf-token"]')?.getAttribute('content') || '' },
-        body: JSON.stringify(body), signal: ctrl.signal
-      });
-      const data = await res.json().catch(()=>({}));
-      if (!res.ok || data.error) throw new Error(data.error || `HTTP ${res.status}`);
+      // Ask via unified /api/query/ask endpoint (prefer Api.ask helper when available)
+      const Api = window.Api || {};
+      const data = await (Api.ask ? Api.ask(replaced, body) : (async ()=>{
+        const res = await fetch('/api/query/ask', { method:'POST', headers:{ 'Content-Type':'application/json', 'X-CSRF-Token': document.querySelector('meta[name="csrf-token"]').getAttribute('content') || '' }, body: JSON.stringify({ query: replaced, ...body }), signal: ctrl.signal });
+        const j = await res.json().catch(()=>({}));
+        if (!res.ok || j.error) throw new Error(j.error || `HTTP ${res.status}`);
+        return j;
+      })());
 
       if (!isLive(container)) return; // guard after await
   renderAnswer(container, data, { append: !!(hadImmediate || (dotReplacements && dotReplacements.length)) });
@@ -356,7 +338,20 @@
     const st = ensureState(container);
     const append = !!opts.append;
     const box = container.querySelector('.hey-answer-box'); if(!box) return;
-    st.lastMatches = Array.isArray(payload.matches) ? payload.matches : [];
+    // Normalize: prefer matches; otherwise map citations -> matches-like
+    let norm = Array.isArray(payload.matches) ? payload.matches : [];
+    if ((!norm || !norm.length) && Array.isArray(payload.citations)){
+      norm = payload.citations.map((c, i) => ({
+        doc_id: c.doc_id || c.id || c.uid || '',
+        docId: c.doc_id || c.id || c.uid || '',
+        note_id: c.doc_id || c.id || c.uid || '',
+        date: c.date || '',
+        section: c.title || c.section || '',
+        text: c.preview || c.text || '',
+        page: (typeof c.excerpt === 'number') ? c.excerpt : (i + 1)
+      }));
+    }
+    st.lastMatches = Array.isArray(norm) ? norm : [];
 
     const matches = st.lastMatches;
     const ansHtmlRaw = mdToHtml(payload.answer || '');
@@ -451,19 +446,51 @@
     const doRender = (fullText)=>{ if(!isLive(container)) return; renderModalDocument(container, fullText, (excerptText||'').trim()); };
     const doFallback = async ()=>{
       try{
-        const r = await fetch(`/last_primary_care_progress_note?doc_id=${encodeURIComponent(docId)}`, { method:'GET', headers:{ 'Accept':'application/json' }, credentials:'same-origin', cache:'no-store', referrerPolicy:'no-referrer', signal: ctrl.signal });
-        const j = await r.json().catch(()=>({})); const text = (Array.isArray(j.text) ? j.text.join('\n') : (j.text || '')); doRender(text);
+        // Try VPR single-item fetch by id
+        const dfn = (window.Api && typeof window.Api.requireDFN==='function') ? window.Api.requireDFN() : null;
+        if (!dfn) throw new Error('No DFN');
+        const url = `/api/patient/${encodeURIComponent(dfn)}/vpr/document/item?id=${encodeURIComponent(docId)}`;
+        const r = await fetch(url, { method:'GET', headers:{ 'Accept':'application/json' }, credentials:'same-origin', cache:'no-store', referrerPolicy:'no-referrer', signal: ctrl.signal });
+        const j = await r.json().catch(()=>({}));
+        const raw = (j && j.data) ? j.data : j;
+        let text = '';
+        try{
+          const items = raw?.data?.items || raw?.items;
+          const item = Array.isArray(items) && items.length ? items[0] : raw;
+          const arr = Array.isArray(item?.text) ? item.text : (item?.text ? [item.text] : []);
+          if (arr.length){
+            const parts = [];
+            for (const b of arr){
+              if (b && typeof b==='object' && (b.content || b.text || b.summary)) parts.push(String(b.content||b.text||b.summary));
+              else if (typeof b==='string') parts.push(b);
+            }
+            text = parts.join('\n');
+          }
+          if (!text){
+            const rpt = item?.report || item?.impression; if (typeof rpt==='string') text = rpt;
+          }
+          if (!text){
+            for (const k of ['body','content','documentText','noteText','clinicalText','details']){
+              const v = item?.[k]; if (typeof v==='string' && v.trim()){ text = v; break; }
+            }
+          }
+        }catch(_ee){}
+        doRender(text || '');
       }catch(_e){ const ce = modal.querySelector('.omar-modal-content'); if(ce) ce.textContent='Failed to load document.'; }
     };
 
     (async ()=>{
       try{
-        const resp = await fetch('/documents_text_batch', { method:'POST', headers:{ 'Content-Type':'application/json','Accept':'application/json','X-CSRF-Token': document.querySelector('meta[name="csrf-token"]')?.getAttribute('content') || '' }, credentials:'same-origin', cache:'no-store', referrerPolicy:'no-referrer', body: JSON.stringify({ doc_ids: [String(docId)] }), signal: ctrl.signal });
-        if (resp.status === 403) { console.warn('[Hey OMAR] 403 fetching note text; falling back'); return doFallback(); }
-        if (!resp.ok) return doFallback();
-        const data = await resp.json().catch(()=>({})); const notes = Array.isArray(data.notes) ? data.notes : []; const hit = notes.find(n => String(n.doc_id) === String(docId));
-        if (hit && hit.text){ const text = Array.isArray(hit.text) ? hit.text.join('\n') : String(hit.text || ''); return doRender(text); }
-        return doFallback();
+        const Api = window.Api || {};
+        if (Api.documentsTextBatch){
+          const data = await Api.documentsTextBatch([String(docId)]).catch(()=>({}));
+          const notes = Array.isArray(data.notes) ? data.notes : [];
+          const hit = notes.find(n => String(n.doc_id) === String(docId));
+          if (hit && hit.text){ const text = Array.isArray(hit.text) ? hit.text.join('\n') : String(hit.text || ''); return doRender(text); }
+          return doFallback();
+        } else {
+          return doFallback();
+        }
       }catch(_e){ return doFallback(); }
     })();
   }

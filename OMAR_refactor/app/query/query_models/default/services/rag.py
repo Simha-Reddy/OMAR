@@ -6,7 +6,7 @@ from datetime import datetime, timezone
 
 import numpy as np
 
-from ...ai_tools import embeddings as emb_api
+from app.ai_tools import embeddings as emb_api
 
 # --- Core text utils and chunking ---
 

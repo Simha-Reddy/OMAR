@@ -1,20 +1,24 @@
 from __future__ import annotations
 from typing import Protocol, Dict, Any
 
-class ModelProvider(Protocol):
-    """Provider contract for Hey OMAR query models.
+class QueryModel(Protocol):
+    """Query model contract for Hey OMAR.
 
     Required attributes:
-      - provider_id: str (unique)
+      - model_id: str (unique)
       - name: str (display)
     Required methods:
       - answer(payload: Dict[str, Any]) -> Dict[str, Any]
-        Expects at least { "prompt": str, "patient": Optional[Dict], ... }
-        Returns { "answer": str, "citations": list[Dict], "provider_id": str }
+        Expects at least { "query": str, "patient": Optional[Dict], ... }
+        Returns { "answer": str, "citations": list[Dict], "model_id": str }
     """
 
-    provider_id: str
+    model_id: str
     name: str
 
     def answer(self, payload: Dict[str, Any]) -> Dict[str, Any]:
         ...
+
+# Backward-compatibility alias for older "provider" naming.
+# New code should import QueryModel instead.
+ModelProvider = QueryModel

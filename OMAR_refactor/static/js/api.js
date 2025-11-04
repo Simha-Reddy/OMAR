@@ -76,8 +76,8 @@ async function vpr(domain, params) {
   return res.json();
 }
 
-async function ask(prompt, extra = {}) {
-  const body = { prompt, ...extra };
+async function ask(query, extra = {}) {
+  const body = { query, ...extra };
   try { body.patient = Object.assign({}, body.patient || {}, { DFN: requireDFN() }); } catch {}
   const res = await csrfFetch('/api/query/ask', { method: 'POST', body: JSON.stringify(body) });
   return res.json();
@@ -100,6 +100,16 @@ async function documentsTextBatch(ids) {
   return res.json();
 }
 
+// RAG: embed a specific list of documents for the current patient
+async function embedDocuments(ids) {
+  const dfn = requireDFN();
+  const body = { dfn, ids: Array.isArray(ids) ? ids.map(String) : [] };
+  if (!body.ids.length) return { status: 'no-op' };
+  // RAG endpoints are under /api/rag
+  const res = await csrfFetch(`/api/rag/index/embed-docs`, { method: 'POST', body: JSON.stringify(body) });
+  try { return await res.json(); } catch { return { status: 'error' }; }
+}
+
 const Api = {
   getDFN: readDFN,
   setDFN: writeDFN,
@@ -111,6 +121,7 @@ const Api = {
   csrfFetch,
   documentsSearch,
   documentsTextBatch,
+  embedDocuments,
 };
 
 try { window.Api = Api; } catch {}

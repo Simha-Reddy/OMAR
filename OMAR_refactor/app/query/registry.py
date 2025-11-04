@@ -3,48 +3,63 @@ from typing import Dict
 import importlib
 import pkgutil
 
-from .contracts import ModelProvider
+from .contracts import QueryModel
 
-# Simple registry that auto-discovers providers under app.query.providers.*
+# Registry that auto-discovers query models under app.query.query_models.*
 
-class ModelRegistry:
+class QueryModelRegistry:
     def __init__(self):
-        self._providers: Dict[str, ModelProvider] = {}
+        self._models: Dict[str, QueryModel] = {}
         self._discover()
 
     def _discover(self):
-        pkg = 'app.query.providers'
-        for _, modname, ispkg in pkgutil.iter_modules(importlib.import_module(pkg).__path__):  # type: ignore
+        base_pkg = 'app.query.query_models'
+        try:
+            base = importlib.import_module(base_pkg)
+            pkg_paths = base.__path__  # type: ignore[attr-defined]
+        except Exception:
+            pkg_paths = []
+        for _, modname, ispkg in pkgutil.iter_modules(pkg_paths):  # type: ignore[arg-type]
             if not ispkg:
                 continue
-            try:
-                module = importlib.import_module(f"{pkg}.{modname}.provider")
-                # Expect a symbol named `provider` that implements ModelProvider
-                candidate = getattr(module, 'provider', None)
-                if candidate is None:
-                    continue
-                pid = getattr(candidate, 'provider_id', None)
-                if not pid:
-                    continue
-                self._providers[pid] = candidate
-            except Exception:
+            # Try provider.py then query_model.py, expect symbol `model`
+            loaded = None
+            for entry in ('provider', 'query_model'):
+                try:
+                    module = importlib.import_module(f"{base_pkg}.{modname}.{entry}")
+                    loaded = getattr(module, 'model', None)
+                    if loaded is not None:
+                        break
+                except Exception:
+                    loaded = None
+            if loaded is None:
                 continue
-        # Ensure there is a default
-        if 'default' not in self._providers:
-            try:
-                module = importlib.import_module(f"{pkg}.default.provider")
-                candidate = getattr(module, 'provider', None)
-                if candidate is not None:
-                    self._providers[candidate.provider_id] = candidate
-            except Exception:
-                pass
+            mid = getattr(loaded, 'model_id', None) or getattr(loaded, 'provider_id', None)
+            if not mid:
+                continue
+            self._models[str(mid)] = loaded
+        # Ensure default exists if present on disk
+        if 'default' not in self._models:
+            for entry in ('provider', 'query_model'):
+                try:
+                    module = importlib.import_module(f"{base_pkg}.default.{entry}")
+                    loaded = getattr(module, 'model', None)
+                    if loaded is not None:
+                        mid = getattr(loaded, 'model_id', None) or 'default'
+                        self._models[str(mid)] = loaded
+                        break
+                except Exception:
+                    continue
 
-    def get(self, provider_id: str) -> ModelProvider:
-        pid = provider_id or 'default'
-        if pid not in self._providers:
-            pid = 'default'
-        return self._providers[pid]
+    def get(self, model_id: str) -> QueryModel:
+        mid = model_id or 'default'
+        if mid not in self._models:
+            mid = 'default'
+        return self._models[mid]
 
     @property
-    def providers(self):
-        return self._providers
+    def models(self):
+        return self._models
+
+# Backward-compatible alias
+ModelRegistry = QueryModelRegistry

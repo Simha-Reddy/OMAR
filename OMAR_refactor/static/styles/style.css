@@ -1309,6 +1309,7 @@ table tbody tr:nth-child(even) {
     border-top: none;
     border-top-left-radius: 0;
     border-top-right-radius: 0;
+  font-size: 0.95em; /* moved from inline */
 }
 .doc-viewer-copy {
     position: absolute;
@@ -1795,6 +1796,36 @@ select {
 .documents-grid .doc-tabs .doc-tab { border-bottom: 1px solid var(--paper-border); }
 /* Keep the current (middle) tab connected to the viewer with no bottom border */
 .documents-grid .doc-tabs .doc-tab.current { border-bottom: none; }
+
+/* --- Document viewer: remove inner box around the text --- */
+#docViewText {
+  border: none !important;
+  background: transparent !important;
+  box-shadow: none !important;
+}
+
+/* --- Inactive (prev/next) doc tabs: italic, not bold --- */
+#docTabLeft, #docTabRight {
+  font-style: italic;
+  font-weight: 400;
+}
+
+/* --- Workspace tabs: connect active tab to content (no dividing line) --- */
+.workspace-pane .tab-bar .tab.active {
+  border-bottom: none !important;
+}
+.workspace-pane .tab-content.active {
+  border-top: none !important;
+}
+
+/* Viewer status placement and look */
+.doc-viewer-status {
+  position: absolute;
+  bottom: 8px;
+  left: 8px;
+  font-size: 0.85em;
+  color: #555;
+}
 
 /* Mobile tweaks for headers inside compartments */
 @media (max-width: 480px) {

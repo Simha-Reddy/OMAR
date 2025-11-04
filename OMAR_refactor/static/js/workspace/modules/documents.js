@@ -39,17 +39,17 @@
         <div style="margin-top:6px; display:flex; gap:8px; justify-content:flex-end;">
           <button id="docsLoadMoreBtn" style="display:none;">Load more</button>
         </div>
-        <div id="docViewerOverlay" class="doc-viewer-overlay" style="display:none; position:absolute; left:8px; right:8px; top:8px; bottom:8px; background:#ffffff; border:1px solid #cbd5e1; box-shadow:0 2px 10px rgba(0,0,0,0.15); z-index:10; padding:8px; overflow:hidden; max-width:100%; max-height:100%; color:#0f172a;">
-          <div id="docTabsBar" style="display:flex; align-items:stretch; gap:6px; margin-bottom:0; border-bottom:0;">
-            <button id="docTabLeft" class="doc-tab" title="Previous" style="max-width:33%; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; padding:8px 12px; border:1px solid #94a3b8; border-bottom:0; background:#e9eef5; color:#0f172a; border-radius:8px 8px 0 0;">Prev</button>
-            <button id="docTabCurrent" class="doc-tab active" title="Current" style="flex:1; max-width:34%; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; padding:8px 12px; border:1px solid #94a3b8; border-bottom:0; background:#ffffff; color:#111827; border-radius:8px 8px 0 0; font-weight:700;">Current</button>
-            <button id="docTabRight" class="doc-tab" title="Next" style="max-width:33%; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; padding:8px 12px; border:1px solid #94a3b8; border-bottom:0; background:#e9eef5; color:#0f172a; border-radius:8px 8px 0 0;">Next</button>
-            <button id="docTabClose" title="Close" style="margin-left:auto; padding:6px 10px; border:1px solid #94a3b8; background:#f1f5f9; color:#0f172a; border-radius:6px;">×</button>
+        <div id="docViewerOverlay" class="doc-viewer-overlay" style="display:none;">
+          <div id="docTabsBar" class="doc-tabs">
+            <button id="docTabLeft" class="doc-tab" title="Previous">Prev</button>
+            <button id="docTabCurrent" class="doc-tab current" title="Current">Current</button>
+            <button id="docTabRight" class="doc-tab" title="Next">Next</button>
+            <button id="docTabClose" class="doc-tab-close" title="Close">×</button>
           </div>
-          <div style="position:absolute; top:56px; bottom:8px; left:8px; right:8px; display:flex;">
-            <pre id="docViewText" style="white-space:pre-wrap; word-wrap:break-word; font-size:0.95em; flex:1; overflow:auto; background:#ffffff; color:#0f172a; padding:12px; border:1px solid #94a3b8; border-top:0; border-radius:0 8px 8px 8px;"></pre>
+          <div class="doc-viewer-wrap">
+            <pre id="docViewText" class="doc-viewer"></pre>
           </div>
-          <div id="docViewStatus" style="position:absolute; bottom:8px; left:8px; font-size:0.85em; color:#555;"></div>
+          <div id="docViewStatus" class="doc-viewer-status"></div>
         </div>
       </div>
     `;
@@ -117,6 +117,27 @@
     }catch(e){ return ''; }
   }
 
+  function escapeRegExp(s){ return s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'); }
+
+  function highlightHtml(text, query){
+    try{
+      if(!text || !query) return escapeHtml(text||'');
+      const raw = String(text);
+      const escaped = escapeHtml(raw);
+      // Build tokens from query (ignore short < 3)
+      const terms = Array.from(new Set(String(query).toLowerCase().match(/[A-Za-z0-9']+/g) || []))
+        .filter(t => t && t.length >= 3);
+      if(!terms.length) return escaped;
+      let out = escaped;
+      // Replace tokens as word-prefix matches; do phrases later if needed
+      for(const t of terms){
+        const re = new RegExp(`\\b(${escapeRegExp(t)}[A-Za-z0-9']*)`, 'gi');
+        out = out.replace(re, '<mark class="doc-keyword-highlight">$1</mark>');
+      }
+      return out;
+    }catch(_e){ return escapeHtml(text||''); }
+  }
+
   function installViewerKeys(overlay, getNav, onClose){
     const handler = (e)=>{
       if (overlay.style.display === 'none') return;
@@ -141,6 +162,7 @@
     _idOrder: [], // ordered docIds for nav
     _currentIndex: -1,
     _unbindKeys: null,
+  _lastQuery: '',
     async render(container){
       this._container = container;
       renderSkeleton(container);
@@ -185,12 +207,21 @@
         setStatus('');
         setSize(this._items.length, res ? res.total : null);
         loadMore.style.display = this._next ? 'inline-block' : 'none';
+
+        // Hint the backend to embed the top 50 in the current view (policy: recent/sorted/search results)
+        try{
+          const top50 = this._idOrder.slice(0, 50);
+          if (top50.length && window.Api && typeof window.Api.embedDocuments === 'function'){
+            window.Api.embedDocuments(top50).catch(()=>{});
+          }
+        }catch(_e){}
       };
 
       const loadList = async (append)=>{
         this._append = !!append;
         setStatus('Loading...');
         try{
+          this._lastQuery = '';
           const params = { sort: this._sort };
           if (append && this._next) params.offset = this._next;
           const res = await fetchList(params);
@@ -202,6 +233,7 @@
         if (!q || !q.trim()){ await loadList(false); return; }
         setStatus('Searching...');
         try{
+          this._lastQuery = q.trim();
           const params = { q: q.trim(), limit: 50 };
           if (append && this._next) params.offset = this._next;
           const res = await fetchSearch(params);
@@ -245,27 +277,15 @@
         const itCur = getItemByIndex(this._currentIndex);
         const itPrev = getItemByIndex(this._currentIndex-1);
         const itNext = getItemByIndex(this._currentIndex+1);
-        if (tabC) {
-          tabC.textContent = getTitle(itCur);
-          tabC.style.background = '#ffffff';
-          tabC.style.color = '#111827';
-          tabC.style.fontWeight = '700';
-          tabC.style.borderColor = '#94a3b8';
-        }
+        if (tabC) { tabC.textContent = getTitle(itCur); }
         if (tabL) {
           tabL.textContent = itPrev ? getTitle(itPrev) : '';
           tabL.disabled = !itPrev;
-          tabL.style.background = itPrev ? '#e9eef5' : '#f1f5f9';
-          tabL.style.color = '#0f172a';
-          tabL.style.borderColor = '#94a3b8';
           tabL.style.opacity = itPrev ? '1' : '0.6';
         }
         if (tabR) {
           tabR.textContent = itNext ? getTitle(itNext) : '';
           tabR.disabled = !itNext;
-          tabR.style.background = itNext ? '#e9eef5' : '#f1f5f9';
-          tabR.style.color = '#0f172a';
-          tabR.style.borderColor = '#94a3b8';
           tabR.style.opacity = itNext ? '1' : '0.6';
         }
       };
@@ -291,7 +311,13 @@
       // Fetch text via text-batch
       try{
         const txt = await fetchNoteText(docId);
-        if (pre) pre.textContent = txt || '(No document text available)';
+        if (pre){
+          if (this._mode === 'search' && this._lastQuery){
+            pre.innerHTML = highlightHtml(txt || '', this._lastQuery);
+          } else {
+            pre.textContent = txt || '(No document text available)';
+          }
+        }
       }catch(_e){ if(pre) pre.textContent = '(Failed to load document text)'; }
       if (status) status.textContent = '';
     },

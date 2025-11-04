@@ -4,6 +4,7 @@ from flask import Blueprint, jsonify, current_app, request
 from ..services.patient_service import PatientService
 from ..gateways.vista_api_x_gateway import VistaApiXGateway
 from ..services import transforms as T
+from app.query.query_models.default.services.rag_store import store as rag_store
 try:
     # Prefer absolute-style import first to satisfy some analyzers
     from app.services.document_search_service import get_or_build_index_for_dfn  # type: ignore
@@ -491,8 +492,21 @@ def documents_quick(dfn: str):
     svc = _get_patient_service()
     try:
         # Fetch raw and quick lists
-        vpr = svc.get_vpr_raw(dfn, 'document')
+        # Request text to enable RAG chunking immediately
+        vpr = svc.get_vpr_raw(dfn, 'document', params={'text': '1'})
         quick_list = svc.get_documents_quick(dfn)
+
+        # Proactively build indices used by Query default model and Documents search
+        try:
+            # Build chunk BM25 for RAG
+            rag_store.ensure_index(str(dfn), vpr)
+        except Exception:
+            pass
+        try:
+            # Build keyword index if not present (lazy in search too)
+            _ = get_or_build_index_for_dfn(str(dfn))
+        except Exception:
+            pass
 
         include_raw = request.args.get('includeRaw','0').lower() in ('1','true','yes','on')
         include_text = request.args.get('includeText','0').lower() in ('1','true','yes','on')
@@ -563,6 +577,12 @@ def documents_quick(dfn: str):
                 if enc:
                     obj['encounter'] = enc
             out.append(obj)
+
+        # Kick off selective embeddings per policy (non-blocking best-effort)
+        try:
+            rag_store.embed_docs_policy(str(dfn), vpr)
+        except Exception:
+            pass
 
         return jsonify(out if (include_raw or include_text or include_enc or class_filters or type_filters) else quick_list)
     except Exception as e:
@@ -666,6 +686,18 @@ def documents_list_envelope(dfn: str):
                 items.sort(key=lambda o: (o.get('date') or ''), reverse=True)
             except Exception:
                 pass
+
+        # Proactively build indices and kick off embeddings, using the canonical 'document' domain for RAG
+        try:
+            vpr_docs = svc.get_vpr_raw(dfn, 'document', params={'text': '1'})
+            rag_store.ensure_index(str(dfn), vpr_docs)
+            rag_store.embed_docs_policy(str(dfn), vpr_docs)
+        except Exception:
+            pass
+        try:
+            _ = get_or_build_index_for_dfn(str(dfn))
+        except Exception:
+            pass
 
         return jsonify(_envelope_list(items))
     except Exception as e:

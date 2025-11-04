@@ -25,3 +25,7 @@
 # Ignore bundled/portable Python runtime inside OMAR_refactor
 /OMAR_refactor/python
 /OMAR_refactor/python/**
+
+# Ignore tests folder inside OMAR_refactor (local test files and CI artifacts)
+/OMAR_refactor/tests/
+/OMAR_refactor/tests/**
