@@ -1,43 +1,45 @@
-// Load the list of archived sessions
-async function loadArchiveList() {
-    // Auto-delete old local archives if enabled
-    try {
-        const autoDel = localStorage.getItem('ssva:autoDeleteArchives10d');
-        if (autoDel === '1') {
-            const cutoff = Date.now() - (10 * 24 * 60 * 60 * 1000);
-            const toDelete = [];
-            for (let i = 0; i < localStorage.length; i++) {
-                const k = localStorage.key(i);
-                if (k && k.startsWith('session:archive:')) {
-                    try {
-                        const obj = JSON.parse(localStorage.getItem(k) || '{}');
-                        if (obj && obj.ts && Number(obj.ts) < cutoff) toDelete.push(k);
-                    } catch(_e) {}
-                }
-            }
-            toDelete.forEach(k => { try { localStorage.removeItem(k); } catch(_e){} });
-        }
-    } catch(_e) {}
+// Resolve current patient id
+function _getPatientId(){
+    try { if (window.Api && typeof window.Api.getDFN === 'function') { const v = window.Api.getDFN(); if (v) return String(v); } } catch(_e){}
+    try { const v = sessionStorage.getItem('CURRENT_PATIENT_DFN'); if (v) return String(v); } catch(_e){}
+    try { if (window.CURRENT_PATIENT_DFN) return String(window.CURRENT_PATIENT_DFN); } catch(_e){}
+    return '';
+}
 
-    // List local archives via SessionManager
-    let sessions = [];
-    try { sessions = await (window.SessionManager && SessionManager.listSessions ? SessionManager.listSessions() : []); } catch(_e) { sessions = []; }
+// Load the list of archived sessions (server-backed)
+async function loadArchiveList() {
     const container = document.getElementById('archive-list');
     container.innerHTML = '';
-    if (sessions.length === 0) {
-        container.innerHTML = '<p>No archived sessions found.</p>';
+    const patient_id = _getPatientId();
+    if (!patient_id) {
+        container.innerHTML = '<p>Select a patient to view their archives.</p>';
         return;
     }
-    sessions.forEach(filename => {
-        const div = document.createElement('div');
-        div.className = "transcript-block";
-        div.innerHTML = `
-            <button class="restore-btn" onclick="restoreArchivedSession('${filename}')">Restore</button>
-            <input type="checkbox" class="archive-checkbox" value="${filename}">
-            <span class="archive-filename">${filename.replace('.json', '')}</span>
-        `;
-        container.appendChild(div);
-    });
+    try {
+        const r = await fetch(`/api/archive/list?patient_id=${encodeURIComponent(patient_id)}`, { credentials: 'same-origin', cache: 'no-store' });
+        if (!r.ok) throw new Error('HTTP ' + r.status);
+        const j = await r.json().catch(()=>({}));
+        const items = (j && Array.isArray(j.items)) ? j.items : [];
+        if (!items.length) { container.innerHTML = '<p>No archived sessions found.</p>'; return; }
+                items.forEach((it) => {
+            const div = document.createElement('div');
+            div.className = 'transcript-block';
+            const when = (function(){ try{ const d = new Date((it.updated_at||it.created_at)*1000 || it.updated_at || it.created_at); return isNaN(d) ? '' : d.toLocaleString(); }catch(_e){ return ''; }})();
+            const label = `Archive ${it.archive_id.slice(0,8)}… ${when?`(${when})`:''}`;
+            div.innerHTML = `
+                <button class="restore-btn" data-arch="${it.archive_id}">Restore</button>
+                        <input type="checkbox" class="archive-checkbox" value="${it.archive_id}"> 
+                <span class="archive-filename">${label}</span>
+            `;
+            const btn = div.querySelector('button.restore-btn');
+            btn.addEventListener('click', async () => {
+                await restoreArchivedSession(it.archive_id);
+            });
+            container.appendChild(div);
+        });
+    } catch(e){
+        container.innerHTML = '<p>Failed to load archives.</p>';
+    }
 }
 
 // Utility function to get CSRF token (fallback if app.js not loaded yet)
@@ -54,21 +56,14 @@ function csrf(){
     } catch(_e) { return ''; } 
 }
 
-// Restore a specific archived session
-async function restoreArchivedSession(filename) {
+// Restore a specific archived session (server-backed)
+async function restoreArchivedSession(archiveId) {
     try {
-        // Continue saving to this archive going forward
-        try {
-            const base = String(filename).replace(/\.json$/i,''); 
-            localStorage.setItem('ssva:currentArchiveName', base);
-        } catch(_e){}
-
-        // 1) Load the archived session data from local storage
-        const key = `session:archive:${filename}`;
-        const raw = localStorage.getItem(key);
-        if (!raw) { alert('Failed to load session.'); return; }
-        const obj = JSON.parse(raw);
-        const data = obj && obj.data ? obj.data : null;
+        // 1) Load the archived session data from server
+        const r = await fetch(`/api/archive/load?id=${encodeURIComponent(archiveId)}`, { credentials:'same-origin', cache:'no-store' });
+        if (!r.ok) { alert('Failed to load session.'); return; }
+        const j = await r.json().catch(()=>({}));
+        const data = j && j.archive && j.archive.state;
         if (!data) { alert('Empty archive.'); return; }
 
         const hasPatient = !!(data.patient_meta && data.patient_meta.dfn);
@@ -93,7 +88,7 @@ async function restoreArchivedSession(filename) {
                 if (window.Patient && typeof window.Patient.switchTo === 'function') {
                     const ok = await window.Patient.switchTo(dfn, { displayName, skipArchiveSetup: true });
                     if (ok) {
-                        // Start auto-save loop now that patient is active (keep existing archive target)
+                        // Start auto-archive loop now that patient is active
                         try { if (window.startAutoArchiveForCurrentPatient) await window.startAutoArchiveForCurrentPatient(); } catch(_e){}
                     } else {
                         console.warn('Patient restore via orchestrator failed; proceeding without patient.');
@@ -106,7 +101,7 @@ async function restoreArchivedSession(filename) {
             }
         }
 
-        // 2b) Restore scribe/explore UI and persist locally
+        // 2b) Restore scribe/workspace UI and persist to server ephemeral state
         try { SessionManager._allowScribeDraftRestore = true; } catch(_e){}
         await SessionManager.restoreData(data);
         try { SessionManager.lastLoadedData = data; } catch(_e){}
@@ -120,17 +115,20 @@ async function restoreArchivedSession(filename) {
     }
 }
 
-// Delete a specific archived session
-async function deleteArchivedSession(filename) {
+// Delete a specific archived session (server-backed)
+async function deleteArchivedSession(archiveId) {
     try {
-        if (window.SessionManager && SessionManager.deleteSession) {
-            await SessionManager.deleteSession(filename);
-            loadArchiveList();
-        } else {
-            alert('SessionManager unavailable.');
-        }
-    } catch(_e) {
-        alert('Failed to delete session.');
+        const r = await fetch(`/api/archive/delete?id=${encodeURIComponent(archiveId)}`, {
+            method: 'DELETE',
+            headers: { 'X-CSRF-Token': csrf() },
+            credentials: 'same-origin'
+        });
+        if (!r.ok) throw new Error('HTTP ' + r.status);
+        return true;
+    } catch(e){
+        console.warn('Delete failed:', e);
+        alert('Failed to delete archive.');
+        return false;
     }
 }
 
@@ -139,23 +137,31 @@ document.addEventListener('DOMContentLoaded', function() {
     // Load the archive list on page load
     loadArchiveList();
 
-    // Delete selected sessions
-    document.getElementById('deleteSelectedBtn').onclick = async function() {
-        const checked = document.querySelectorAll('.archive-checkbox:checked');
-        if (checked.length === 0) {
-            alert("No sessions selected.");
-            return;
-        }
-        if (!confirm(`Delete ${checked.length} selected session(s)?`)) return;
-        for (const cb of checked) {
-            await deleteArchivedSession(cb.value);
-        }
-        loadArchiveList();
-    };
+    // Delete selected sessions (disabled until server supports delete)
+    const delBtn = document.getElementById('deleteSelectedBtn');
+    if (delBtn) {
+            delBtn.disabled = false;
+            delBtn.title = '';
+            delBtn.onclick = async function(){
+                const checked = document.querySelectorAll('.archive-checkbox:checked');
+                if (!checked.length) { alert('No sessions selected.'); return; }
+                if (!confirm(`Delete ${checked.length} selected session(s)?`)) return;
+                for (const cb of checked) {
+                    const id = cb.value;
+                    await deleteArchivedSession(id);
+                }
+                await loadArchiveList();
+            };
+    }
 
-    // Select or deselect all sessions
-    document.getElementById('selectAllBox').onclick = function() {
-        const boxes = document.querySelectorAll('.archive-checkbox');
-        boxes.forEach(cb => cb.checked = this.checked);
-    };
+    // Select all is disabled since delete is disabled
+    const selAll = document.getElementById('selectAllBox');
+    if (selAll) {
+            selAll.disabled = false;
+            selAll.title = '';
+            selAll.onclick = function(){
+                const boxes = document.querySelectorAll('.archive-checkbox');
+                boxes.forEach(cb => cb.checked = selAll.checked);
+            };
+    }
 });

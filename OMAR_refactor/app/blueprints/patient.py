@@ -4,6 +4,11 @@ from flask import Blueprint, jsonify, current_app, request
 from ..services.patient_service import PatientService
 from ..gateways.vista_api_x_gateway import VistaApiXGateway
 from ..services import transforms as T
+try:
+    # Prefer absolute-style import first to satisfy some analyzers
+    from app.services.document_search_service import get_or_build_index_for_dfn  # type: ignore
+except Exception:
+    from ..services.document_search_service import get_or_build_index_for_dfn  # type: ignore
 
 bp = Blueprint('patient_api', __name__)
 
@@ -575,7 +580,7 @@ def documents_list_envelope(dfn: str):
     """
     svc = _get_patient_service()
     try:
-        # Reuse the quick + filters logic to get the full filtered list, then paginate
+        # Reuse the quick + filters logic to get the full filtered list, then paginate and sort
         vpr = svc.get_vpr_raw(dfn, 'notes')  # alias -> documents
         quick_list = svc.get_documents_quick(dfn)
 
@@ -621,9 +626,122 @@ def documents_list_envelope(dfn: str):
                 vals = [str(name).lower(), str(rname).lower(), str(rcode).lower()]
                 if not any(v in type_filters for v in vals if v):
                     continue
+            # Attach minimal identifiers to support viewer/text-batch on the client
+            try:
+                if isinstance(r, dict):
+                    rid = r.get('id') or r.get('localId') or None
+                    if rid is not None:
+                        q = dict(q)
+                        q['docId'] = str(rid)
+                    uid = r.get('uid') or None
+                    if uid is not None:
+                        if isinstance(q, dict):
+                            q = dict(q)
+                        q['uid'] = str(uid)
+            except Exception:
+                pass
             items.append(q)
 
+        # Sorting support: sort=field:dir where field in [date,title,author,type,encounter]
+        sort_param = (request.args.get('sort') or '').strip().lower()
+        if sort_param:
+            try:
+                field, direction = (sort_param.split(':', 1) + ['asc'])[:2]
+                direction = 'desc' if direction.strip() == 'desc' else 'asc'
+                key_map = {
+                    'date': lambda o: (o.get('date') or ''),
+                    'title': lambda o: (o.get('title') or ''),
+                    'author': lambda o: (o.get('author') or ''),
+                    'type': lambda o: (o.get('documentType') or ''),
+                    'encounter': lambda o: (o.get('encounterName') or ''),
+                }
+                key_fn = key_map.get(field)
+                if key_fn:
+                    items.sort(key=lambda o: (key_fn(o) or '').lower(), reverse=(direction=='desc'))
+            except Exception:
+                pass
+        else:
+            # Default: date desc
+            try:
+                items.sort(key=lambda o: (o.get('date') or ''), reverse=True)
+            except Exception:
+                pass
+
         return jsonify(_envelope_list(items))
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+@bp.post('/<dfn>/documents/text-batch')
+def documents_text_batch_api(dfn: str):
+    """Return full text for a batch of document ids.
+    Body: { ids: ["123","456", ...] }
+    Response: { notes: [{ doc_id: "123", text: [lines] }, ...] }
+    """
+    svc = _get_patient_service()
+    try:
+        data = request.get_json(force=True, silent=True) or {}
+        ids = data.get('ids') or data.get('doc_ids') or []
+        if not isinstance(ids, list) or not ids:
+            return jsonify({'notes': []})
+        ids = [str(x) for x in ids if x is not None]
+        # Prefer fetching raw by id in small batches; extract text
+        notes_out = []
+        # Build params: VPR supports id filter; batch to be safe
+        chunk_size = 25
+        for i in range(0, len(ids), chunk_size):
+            part = ids[i:i+chunk_size]
+            try:
+                params = { 'id': ','.join(part) }
+                vpr = svc.get_vpr_raw(dfn, 'document', params=params)
+                raw_items = T._get_nested_items(vpr)  # type: ignore
+                # Map back by id (string compare on id or uid tail)
+                by_id = {}
+                for it in raw_items:
+                    if not isinstance(it, dict):
+                        continue
+                    rid = str(it.get('id') or it.get('localId') or it.get('uid') or '')
+                    if rid:
+                        by_id[rid] = it
+                for want in part:
+                    cand = by_id.get(want)
+                    # If not found directly, try matching tail of uid
+                    if not cand:
+                        for k,v in by_id.items():
+                            if k.endswith(f"-{want}"):
+                                cand = v; break
+                    if not cand:
+                        continue
+                    txt = _extract_full_text(cand) or ''
+                    lines = txt.split('\n') if txt else []
+                    notes_out.append({ 'doc_id': want, 'text': lines })
+            except Exception:
+                continue
+        return jsonify({ 'notes': notes_out })
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+@bp.get('/<dfn>/documents/search')
+def documents_search(dfn: str):
+    """Keyword search across a patient's documents (full text + metadata).
+    Query: q, fields (comma list from full,title,author,type,class), limit, offset
+    Returns: { items: [{ doc_id, score, snippet?, fields_hits? }], next, total }
+    """
+    try:
+        q = (request.args.get('q') or '').strip()
+        fields = (request.args.get('fields') or 'full,title,author,type').strip()
+        limit = _parse_limit(default=50, max_limit=200)
+        offset = _parse_offset()
+        if not q:
+            return jsonify({'items': [], 'next': None, 'total': 0})
+        field_set = set([s.strip().lower() for s in fields.split(',') if s.strip()])
+        index = get_or_build_index_for_dfn(dfn)
+        results = index.search(q, fields=field_set)
+        total = len(results)
+        start = min(offset, total)
+        end = min(start + limit, total)
+        page = results[start:end]
+        next_token = str(end) if end < total else None
+        return jsonify({ 'items': page, 'next': next_token, 'total': total })
     except Exception as e:
         return jsonify({'error': str(e)}), 500
 

@@ -168,9 +168,11 @@
       // Enforce serum/plasma-only for BMP (chemistry); CBC components unaffected
       const isChem = (key==='na'||key==='k'||key==='cl'||key==='hco3'||key==='bun'||key==='cr'||key==='glu');
       if (isChem && !isSerumLike(r)) return;
-      const val=toNum(r.result); if(val==null) return;
-      const date=r.resulted||r.collected;
-      series[key].push({ value: val, unit: r.unit, date, raw: r });
+      // Support both raw VPR labs and quick labs shapes
+      const val=toNum(r.result != null ? r.result : r.value); if(val==null) return;
+      const unit = (r.unit != null ? r.unit : (r.units != null ? r.units : undefined));
+      const date=(r.resulted||r.collected||r.observedDate||r.observed||r.date);
+      series[key].push({ value: val, unit, date, raw: r });
     });
     for(const k of Object.keys(series)){
       const arr = series[k];
@@ -219,9 +221,12 @@
         const byLoinc = l && lc.includes(l);
         const byName = pats.some(p=>p.test(n));
         if (!byLoinc && !byName) return;
-        const d = new Date(r.resulted||r.collected||0);
-        if (!r.result || isNaN(d)) return;
-        out.push({ v: String(r.result), u: r.unit || '', d, raw: r });
+        const dRaw = r.resulted||r.collected||r.observedDate||r.observed||r.date;
+        const d = new Date(dRaw||0);
+        const res = (r.result != null ? r.result : r.value);
+        const u = (r.unit != null ? r.unit : (r.units != null ? r.units : ''));
+        if (res == null || res === '' || isNaN(d)) return;
+        out.push({ v: String(res), u: u || '', d, raw: r });
       }catch(_e){}
     });
     out.sort((a,b)=> a.d-b.d);
@@ -277,7 +282,7 @@
 
   // Right side helpers (from explore/right_sidebar.js)
   function titleCase(str){ if(!str||typeof str!=='string') return str; return str.toLowerCase().replace(/\b([a-z])(\w*)/g,(m,a,b)=>a.toUpperCase()+b); }
-  function renderAllergies(listEl, allergies){ if(!allergies||!allergies.length){ listEl.innerHTML='<li class="vital-empty">No allergies on file</li>'; return; } for(const a of allergies){ const li=document.createElement('li'); li.style.cursor='pointer'; const name=titleCase(a.substance||'Allergy'); const crit=a.criticality? ` (${titleCase(String(a.criticality))})` : ''; li.textContent = name + crit; li.addEventListener('click', (e)=>{ e.stopPropagation(); const rows=[]; if(a.recordedDate) rows.push(`Recorded: ${fmtDateOnly(a.recordedDate)}`); if(a.onsetDateTime) rows.push(`Onset: ${fmtDateOnly(a.onsetDateTime)}`); if(a.lastOccurrence) rows.push(`Last Occurrence: ${fmtDate(a.lastOccurrence)}`); if(a.clinicalStatus) rows.push(`Status: ${a.clinicalStatus}`); if(a.verificationStatus) rows.push(`Verification: ${a.verificationStatus}`); const cats=((a.category||[]).join(', ')); if(cats) rows.push(`Category: ${cats}`); const rx=(a.reactions||[]).flatMap(r=> (r.manifestations||[])); if(rx&&rx.length){ rows.push('Reactions: '+rx.join('; ')); } togglePopover(li, name, rows); }); listEl.appendChild(li); } }
+  function renderAllergies(listEl, allergies){ if(!allergies||!allergies.length){ listEl.innerHTML='<li class="vital-empty">No allergies on file</li>'; return; } for(const a of allergies){ const li=document.createElement('li'); li.style.cursor='pointer'; const name=titleCase(a.substance||'Allergy'); const crit=a.criticality? ` (${titleCase(String(a.criticality))})` : ''; li.textContent = name + crit; li.addEventListener('click', (e)=>{ e.stopPropagation(); const rows=[]; const recorded = a.recordedDate || a.enteredDate; if(recorded) rows.push(`Recorded: ${fmtDateOnly(recorded)}`); if(a.onsetDateTime||a.onset) rows.push(`Onset: ${fmtDateOnly(a.onsetDateTime||a.onset)}`); if(a.lastOccurrence) rows.push(`Last Occurrence: ${fmtDate(a.lastOccurrence)}`); if(a.clinicalStatus||a.status) rows.push(`Status: ${a.clinicalStatus||a.status}`); if(a.verificationStatus) rows.push(`Verification: ${a.verificationStatus}`); const cats=((a.category||[]).join(', ')); if(cats) rows.push(`Category: ${cats}`); const rx=(a.reactions||[]).flatMap(r=> (r.manifestations||[])); if(Array.isArray(a.reactions) && a.reactions.length && (!rx||!rx.length)){ rows.push('Reactions: '+a.reactions.join('; ')); } else if(rx&&rx.length){ rows.push('Reactions: '+rx.join('; ')); } togglePopover(li, name, rows); }); listEl.appendChild(li); } }
   function medStatusBucket(m){ const s=(m.status||'').toLowerCase(); if(s.includes('discont')||s.includes('stopp')) return 'discontinued'; const now=new Date(); if(s.includes('expired')) return 'expired'; if(m.endDate){ const ed=new Date(m.endDate); if(ed && ed<now) return 'expired'; } if(s.includes('active')) return 'active'; if(s.includes('pending')) return 'pending'; return 'other'; }
   function medDetailRows(m){ const rows=[]; if(m.medClass) rows.push(`Class: ${m.medClass}`); if(m.status) rows.push(`Status: ${titleCase(m.status)}`); if(m.dose) rows.push(`Dose: ${m.dose}`); if(m.route) rows.push(`Route: ${m.route}`); if(m.frequency) rows.push(`Frequency: ${m.frequency}`); if(m.sig) rows.push(`Sig: ${m.sig}`); if(m.startDate) rows.push(`Start: ${fmtDateOnly(m.startDate)}`); if(m.lastFilled) rows.push(`Last Filled: ${fmtDateOnly(m.lastFilled)}`); if(m.endDate) rows.push(`End: ${fmtDateOnly(m.endDate)}`); return rows; }
   function renderMeds(listEl, meds, opts){ opts=opts||{}; const activeOnly=!!opts.activeOnly; if(!Array.isArray(meds)){ listEl.innerHTML='<li class="vital-empty">No recent medications</li>'; return { count:0 }; } const cutoff=new Date(); cutoff.setDate(cutoff.getDate()-90); let recent=meds.filter(m=>{ const sdt=m.startDate||m.lastFilled||(m.source||{}).updated||m.endDate; const d = sdt? new Date(sdt) : null; const s=(m.status||'').toLowerCase(); const act=s==='active' || s.includes('active'); const pend=s==='pending' || s.includes('pending'); return (d && d>=cutoff) || act || pend; }); if(activeOnly) recent=recent.filter(m => { const s=(m.status||'').toLowerCase(); return s.includes('active') || s.includes('pending'); }); if(!recent.length){ listEl.innerHTML='<li class="vital-empty">No medications in the current view</li>'; return { count:0 }; }
@@ -286,27 +291,33 @@
     appendGroup(groups.active,'med-active'); appendGroup(groups.pending,'med-pending'); if(!activeOnly){ appendGroup(groups.expired,'med-expired'); appendGroup(groups.discontinued,'med-discontinued'); appendGroup(groups.other,''); }
     return { count: recent.length };
   }
-  function isDiabetesProblem(p){ return /diabetes/i.test(p.name||''); }
+  function isDiabetesProblem(p){ return /diabetes/i.test((p.name||p.problem||'').toString()); }
   async function renderProblems(listEl, problems, meds){
     if(!problems||!problems.length){
       listEl.innerHTML='<li class="vital-empty">No problems listed</li>';
       return { count:0 };
     }
     const active=[], inactive=[];
-    for(const p of problems){ (p.active? active:inactive).push(p); }
+    for(const p of problems){
+      const s=(p.status||'').toString().toLowerCase();
+      const isActive = s.includes('active') && !s.includes('inactive') && !s.includes('resolved');
+      (isActive? active:inactive).push(p);
+    }
     const ordered=active.concat(inactive);
     for(const p of ordered){
       const li=document.createElement('li');
       li.style.cursor='pointer';
-      const name=titleCase(p.name||'Problem');
-      const status=p.active? '':' (Inactive)';
+      const name=titleCase((p.name||p.problem||'Problem'));
+      const sTxt=(p.status||'').toString().toLowerCase();
+      const isAct = sTxt.includes('active') && !sTxt.includes('inactive') && !sTxt.includes('resolved');
+      const status=isAct? '':' (Inactive)';
       li.textContent = name + status;
       li.addEventListener('click', async (e)=>{
         e.stopPropagation();
         const rows=[];
-        if(p.clinicalStatus) rows.push(`Status: ${p.clinicalStatus}`);
+        if(p.clinicalStatus||p.status) rows.push(`Status: ${p.clinicalStatus||p.status}`);
         if(p.severity) rows.push(`Severity: ${p.severity}`);
-        if(p.onsetDateTime) rows.push(`Onset: ${fmtDateOnly(p.onsetDateTime)}`);
+        if(p.onsetDateTime||p.onsetDate) rows.push(`Onset: ${fmtDateOnly(p.onsetDateTime||p.onsetDate)}`);
         if(p.recordedDate) rows.push(`Recorded: ${fmtDateOnly(p.recordedDate)}`);
         if(Array.isArray(p.comments) && p.comments.length){
           rows.push('Comments:');
@@ -320,9 +331,9 @@
         if(isDiabetesProblem(p)){
           try{
             // Reuse already-fetched labs from state to avoid refetch
-            const labs = (state && state.labs && Array.isArray(state.labs.labs)) ? state.labs.labs : [];
-            const a1c = labs.filter(r=>{ const n=_norm(r.test||r.localName); const l=_norm(r.loinc); return (l&&l==='4548-4') || /\b(hb)?a1c\b/i.test(n) || /hemoglobin a1c/i.test(n) || /glyco.?hemoglobin/i.test(n); })
-              .map(r=>({ v: toNum(r.result), u:r.unit, d: new Date(r.resulted||r.collected||0) })).filter(x=>x.v!=null && !isNaN(x.d)).sort((a,b)=>a.d-b.d);
+            const labs = Array.isArray(state && state.labs) ? state.labs : ((state && state.labs && Array.isArray(state.labs.labs)) ? state.labs.labs : []);
+            const a1c = labs.filter(r=>{ const n=_norm(r.test||r.localName||r.name); const l=_norm(r.loinc); return (l&&l==='4548-4') || /\b(hb)?a1c\b/i.test(n) || /hemoglobin a1c/i.test(n) || /glyco.?hemoglobin/i.test(n); })
+              .map(r=>({ v: toNum(r.result!=null? r.result : r.value), u:(r.unit||r.units), d: new Date(r.resulted||r.collected||r.observedDate||0) })).filter(x=>x.v!=null && !isNaN(x.d)).sort((a,b)=>a.d-b.d);
             rows.push('—'); rows.push('A1c (last 3):');
             a1c.slice(-3).reverse().forEach(x=> rows.push(`  ${x.v}${x.u?(' '+x.u):'%'} — ${fmtDateOnly(x.d)}`));
           }catch(_e){}
@@ -334,8 +345,43 @@
     return { count: ordered.length };
   }
 
+  // Normalize quick vitals list -> grouped shape used by UI
+  function normalizeVitalsQuick(list){
+    const vitals = { bloodPressure: [], heartRate: [], respiratoryRate: [], oxygenSaturation: [], temperature: [], weight: [] };
+    const norm = (s)=> (s||'').toString().trim().toLowerCase();
+    (Array.isArray(list)? list : []).forEach(it=>{
+      try{
+        const t = norm(it.type||it.name||'');
+        const v = it.value != null ? it.value : it.result;
+        const u = it.units || it.unit || '';
+        const dt = it.takenDate || it.observed || it.dateTime || it.taken || null;
+        if (t.includes('bp') || t.includes('blood pressure')){
+          // Expect formats like "120/80" or separate systolic/diastolic; parse if string
+          let s = null, d = null;
+          if (typeof v === 'string' && v.includes('/')){
+            const parts = v.split('/');
+            s = toNum(parts[0]); d = toNum(parts[1]);
+          }
+          vitals.bloodPressure.push({ systolic: s, diastolic: d, unit: u || 'mmHg', effectiveDateTime: dt });
+        } else if (t.includes('pulse') || t.includes('heart')){
+          vitals.heartRate.push({ value: toNum(v), unit: u || 'bpm', effectiveDateTime: dt });
+        } else if (t.includes('resp')){
+          vitals.respiratoryRate.push({ value: toNum(v), unit: u || '/min', effectiveDateTime: dt });
+        } else if (t.includes('sp') || t.includes('o2') || t.includes('oxygen')){
+          vitals.oxygenSaturation.push({ value: toNum(v), unit: u || '%', effectiveDateTime: dt });
+        } else if (t.includes('temp')){
+          vitals.temperature.push({ value: toNum(v), unit: u || 'F', effectiveDateTime: dt });
+        } else if (t.includes('weight')){
+          vitals.weight.push({ value: toNum(v), unit: u || 'lbs', effectiveDateTime: dt });
+        }
+      }catch(_e){}
+    });
+    return vitals;
+  }
+
   function renderVitalsAndLabs(mount){
-    const vitals = (state.data && state.data.vitals) || {};
+    const vitalsList = (state.data && Array.isArray(state.data.vitals)) ? state.data.vitals : [];
+    const vitals = Array.isArray(vitalsList) ? normalizeVitalsQuick(vitalsList) : ((state.data && state.data.vitals) || {});
     const bpArr = vitals.bloodPressure||[]; const hrArr=vitals.heartRate||[]; const rrArr=vitals.respiratoryRate||[]; const spArr=vitals.oxygenSaturation||[]; const tArr=vitals.temperature||[]; const wArr=vitals.weight||[];
     const bp=latest(bpArr), hr=latest(hrArr), rr=latest(rrArr), spo2=latest(spArr), temp=latest(tArr), weight=latest(wArr);    const grid=document.createElement('div'); grid.className='vitals-grid'; grid.setAttribute('role','group'); grid.setAttribute('aria-label','Recent vitals');
     // ...existing vitals grid uses full container width by default; no inline width cap
@@ -382,7 +428,7 @@
     mount.appendChild(grid);
 
     // Labs fishbones (deferred)
-    const labs = state.labs && Array.isArray(state.labs.labs)? state.labs.labs : [];
+  const labs = Array.isArray(state.labs) ? state.labs : (state.labs && Array.isArray(state.labs.labs)? state.labs.labs : []);
     if(labs && labs.length){
       const placeholder = document.createElement('div');
       placeholder.className='labs-fishbone';
@@ -552,9 +598,9 @@
       return { det, ul, sum };
     }
 
-  const probs = makeSection('Active Problems'); probs.det.open=true; const pr = (data&&data.problems)||[]; renderProblems(probs.ul, pr, (data&&data.medications)||[]).then(res=>{ probs.sum.textContent = `Active Problems (${(pr||[]).filter(p=>p.active).length})`; }); wrap.appendChild(probs.det);
+  const probs = makeSection('Active Problems'); probs.det.open=true; const pr = Array.isArray(data&&data.problems)? data.problems : []; renderProblems(probs.ul, pr, (data&&data.medications)||[]).then(res=>{ try{ const activeCount = (pr||[]).filter(p=>{ const s=(p.status||'').toString().toLowerCase(); return s.includes('active') && !s.includes('inactive') && !s.includes('resolved'); }).length; probs.sum.textContent = `Active Problems (${activeCount})`; }catch(_e){ probs.sum.textContent = `Active Problems`; } }); wrap.appendChild(probs.det);
 
-  const algs = makeSection('Allergies'); algs.det.open=true; renderAllergies(algs.ul, (data&&data.allergies)||[]); algs.sum.textContent = `Allergies (${((data&&data.allergies)||[]).length})`; wrap.appendChild(algs.det);
+  const algs = makeSection('Allergies'); algs.det.open=true; const algList = Array.isArray(data&&data.allergies)? data.allergies : []; renderAllergies(algs.ul, algList); algs.sum.textContent = `Allergies (${algList.length})`; wrap.appendChild(algs.det);
 
   const meds = makeSection('Medications'); meds.det.open=true; const medRes = renderMeds(meds.ul, (data&&data.medications)||[], { activeOnly: false }); meds.sum.textContent = `Medications (${medRes.count})`; wrap.appendChild(meds.det);
 
@@ -600,18 +646,18 @@
       const tFetchStart = (perfOn && performance && performance.now) ? performance.now() : 0;
       // Use refactor Api client with DFN-aware endpoints
       const [vRes, lRes, aRes, mRes, pRes] = await Promise.all([
-        window.Api && Api.quick ? Api.quick('demographics').then(() => Api.quick('vitals')).catch(()=>null) : Promise.resolve(null),
-        (window.Api && Api.quick ? Api.quick('labs', { days: 365, maxPanels: 60 }) : Promise.resolve({ labs: [] })).catch(()=>({ labs: [] })),
-        (window.Api && Api.quick ? Api.quick('allergies') : Promise.resolve({ allergies: [] })).catch(()=>({ allergies: [] })),
-        (window.Api && Api.quick ? Api.quick('meds', { status: 'ACTIVE+PENDING', days: 365 }) : Promise.resolve({ medications: [] })).catch(()=>({ medications: [] })),
-        (window.Api && Api.quick ? Api.quick('problems', { detail: 1 }) : Promise.resolve({ problems: [] })).catch(()=>({ problems: [] }))
+        window.Api && Api.quick ? Api.quick('demographics').then(() => Api.quick('vitals')).catch(()=>[]) : Promise.resolve([]),
+        (window.Api && Api.quick ? Api.quick('labs', { last: '1y' }) : Promise.resolve([])).catch(()=>[]),
+        (window.Api && Api.quick ? Api.quick('allergies') : Promise.resolve([])).catch(()=>[]),
+        (window.Api && Api.quick ? Api.quick('meds', { last: '1y' }) : Promise.resolve([])).catch(()=>[]),
+        (window.Api && Api.quick ? Api.quick('problems') : Promise.resolve([])).catch(()=>[])
       ]);
       if (perfOn && performance && performance.now) {
         try { console.log(`SNAPSHOT:fetch-all took ${(performance.now()-tFetchStart).toFixed(0)}ms`); } catch(_e){}
       }
-      state.data = vRes || { vitals: {} };
-      state.labs = lRes || { labs: [] };
-      state.right = { allergies: (aRes&&aRes.allergies)||[], medications: (mRes&&mRes.medications)||[], problems: (pRes&&pRes.problems)||[] };
+  state.data = { vitals: Array.isArray(vRes) ? vRes : [] };
+  state.labs = Array.isArray(lRes) ? lRes : ((lRes && lRes.labs) ? lRes.labs : []);
+  state.right = { allergies: Array.isArray(aRes)? aRes : ((aRes&&aRes.allergies)||[]), medications: Array.isArray(mRes)? mRes : ((mRes&&mRes.medications)||[]), problems: Array.isArray(pRes)? pRes : ((pRes&&pRes.problems)||[]) };
       const t0 = (perfOn && performance && performance.now)? performance.now() : 0;
       leftMount.innerHTML=''; renderVitalsAndLabs(leftMount);
       rightMount.innerHTML=''; renderRightColumn(rightMount, state.right);

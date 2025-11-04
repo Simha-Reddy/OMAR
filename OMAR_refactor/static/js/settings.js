@@ -1,18 +1,43 @@
 document.addEventListener("DOMContentLoaded", async () => {
     console.log("Initializing Settings page...");
 
-    // Initialize Archive toggles from localStorage (defaults: auto-save ON, auto-delete ON)
+    // Initialize Archive toggles (server-backed auto-archive ON/OFF, local auto-delete ON)
     try {
-        const autoSaveKey = 'ssva:autoSaveArchives';
+        const autoSaveKey = 'ssva:autoSaveArchives'; // legacy local fallback only
         const autoDeleteKey = 'ssva:autoDeleteArchives10d';
         if (localStorage.getItem(autoSaveKey) === null) localStorage.setItem(autoSaveKey, '1');
         if (localStorage.getItem(autoDeleteKey) === null) localStorage.setItem(autoDeleteKey, '1');
         const autoSaveBox = document.getElementById('toggleAutoSaveArchives');
         const autoDelBox = document.getElementById('toggleAutoDeleteArchives10d');
-        if (autoSaveBox) autoSaveBox.checked = localStorage.getItem(autoSaveKey) === '1';
+        // Fetch server auto-archive status; fallback to local if unavailable
+        if (autoSaveBox) {
+            try {
+                const r = await fetch('/api/archive/auto-archive/status', { credentials: 'same-origin', cache: 'no-store' });
+                if (r.ok) {
+                    const j = await r.json();
+                    autoSaveBox.checked = !!(j && j.enabled);
+                    // Keep local mirror for legacy checks
+                    localStorage.setItem(autoSaveKey, autoSaveBox.checked ? '1' : '0');
+                } else {
+                    autoSaveBox.checked = localStorage.getItem(autoSaveKey) === '1';
+                }
+            } catch(_e) {
+                autoSaveBox.checked = localStorage.getItem(autoSaveKey) === '1';
+            }
+        }
         if (autoDelBox) autoDelBox.checked = localStorage.getItem(autoDeleteKey) === '1';
-        if (autoSaveBox) autoSaveBox.addEventListener('change', () => {
-            localStorage.setItem(autoSaveKey, autoSaveBox.checked ? '1' : '0');
+        if (autoSaveBox) autoSaveBox.addEventListener('change', async () => {
+            const enabled = !!autoSaveBox.checked;
+            // Persist to server; fallback to local mirror
+            try {
+                await fetch('/api/archive/auto-archive/toggle', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json', 'X-CSRF-Token': (window.getCsrfToken? window.getCsrfToken(): '') },
+                    credentials: 'same-origin',
+                    body: JSON.stringify({ enabled })
+                });
+            } catch(_e){}
+            try { localStorage.setItem(autoSaveKey, enabled ? '1' : '0'); } catch(_e){}
         });
         if (autoDelBox) autoDelBox.addEventListener('change', async () => {
             localStorage.setItem(autoDeleteKey, autoDelBox.checked ? '1' : '0');

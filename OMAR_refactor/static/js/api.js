@@ -83,6 +83,23 @@ async function ask(prompt, extra = {}) {
   return res.json();
 }
 
+// Documents helpers
+async function documentsSearch(params) {
+  const dfn = requireDFN();
+  const q = toQuery(params);
+  const res = await fetch(`/api/patient/${encodeURIComponent(dfn)}/documents/search${q}`, { credentials: 'same-origin' });
+  if (!res.ok) throw new Error(`HTTP ${res.status}`);
+  return res.json();
+}
+
+async function documentsTextBatch(ids) {
+  const dfn = requireDFN();
+  const body = { ids: Array.isArray(ids) ? ids : [] };
+  const res = await csrfFetch(`/api/patient/${encodeURIComponent(dfn)}/documents/text-batch`, { method: 'POST', body: JSON.stringify(body) });
+  if (!res.ok) throw new Error(`HTTP ${res.status}`);
+  return res.json();
+}
+
 const Api = {
   getDFN: readDFN,
   setDFN: writeDFN,
@@ -92,6 +109,8 @@ const Api = {
   vpr,
   ask,
   csrfFetch,
+  documentsSearch,
+  documentsTextBatch,
 };
 
 try { window.Api = Api; } catch {}

@@ -945,9 +945,9 @@ window.createNote = async function() {
             transcript = SessionManager.peekTranscriptFromSession();
         }
 
-        // 2) Cached live transcript via SessionManager getter (throttled)
+        // 2) Fetch fresh transcript from server (server is SoT for privacy/consistency)
         if (!transcript && typeof SessionManager !== 'undefined' && SessionManager.getTranscript) {
-            try { transcript = await SessionManager.getTranscript(10000); } catch(_e) {}
+            try { transcript = await SessionManager.getTranscript(0); } catch(_e) {}
         }
         
         // 3) Final fallback to module cache if any

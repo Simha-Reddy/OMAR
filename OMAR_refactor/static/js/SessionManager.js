@@ -19,17 +19,33 @@ function deepMerge(target, source) {
 
 const SessionManager = {
   scribeRestored: false, // Flag to indicate if Scribe data has been restored
-  exploreRestored: false, // Flag to indicate if Explore data has been restored
+  exploreRestored: false, // Deprecated (Explore paths removed in Phase 2)
   autosaveStarted: false, // begin saving only after transcript or visit notes has content
 
   _transcriptCacheTs: 0,
   _transcriptCacheText: '',
   _allowScribeDraftRestore: false, // Only allow restoring feedbackReply when a patient is active
   isRestoring: false, // Guard to pause autosave during restoration to avoid partial saves mid-restore
+  lastLoadedDataDfn: '', // Tracks which patient DFN lastLoadedData corresponds to
+
+  // Helper to read DFN/patient_id
+  _getPatientId() {
+    try {
+      if (window.Api && typeof window.Api.getDFN === 'function') {
+        const v = window.Api.getDFN(); if (v) return v;
+      }
+    } catch(_e){}
+    try {
+      const v = (sessionStorage && sessionStorage.getItem && sessionStorage.getItem('CURRENT_PATIENT_DFN')) || '';
+      if (v) return v;
+    } catch(_e){}
+    try { const v = (window.CURRENT_PATIENT_DFN || '').toString(); if (v) return v; } catch(_e){}
+    return '';
+  },
 
   peekTranscriptFromSession() {
     try {
-      return (this.lastLoadedData && this.lastLoadedData.scribe && this.lastLoadedData.scribe.transcript) ? this.lastLoadedData.scribe.transcript : '';
+      return (this.lastLoadedData && typeof this.lastLoadedData.transcript === 'string') ? this.lastLoadedData.transcript : '';
     } catch(_e) { return ''; }
   },
 
@@ -39,22 +55,36 @@ const SessionManager = {
       if ((now - (this._transcriptCacheTs || 0)) < minFreshMs && typeof this._transcriptCacheText === 'string') {
         return this._transcriptCacheText;
       }
-      // Strategy:
-      // 1) Use last restored session data if present
+      // Strategy (Server is source of truth):
+      // 1) Fetch from server scribe transcript endpoint for current patient
       let txt = '';
       try {
-        if (this.lastLoadedData && this.lastLoadedData.scribe && typeof this.lastLoadedData.scribe.transcript === 'string') {
-          txt = this.lastLoadedData.scribe.transcript;
+        const pid = this._getPatientId();
+        if (pid) {
+          const r = await fetch(`/api/scribe/transcript?patient_id=${encodeURIComponent(pid)}`, { credentials: 'same-origin', cache: 'no-store' });
+          if (r && r.ok) {
+            const j = await r.json().catch(()=>({}));
+            const t = j && j.transcript;
+            if (typeof t === 'string') { txt = t; }
+          }
         }
       } catch(_e) {}
-      // 2) Fall back to any live DOM element on Scribe page
+      // 2) If server returned nothing, try last restored session data
+      if (!txt) {
+        try {
+          const pid = this._getPatientId();
+          if (this.lastLoadedData && typeof this.lastLoadedData.transcript === 'string' && pid && pid === this.lastLoadedDataDfn) {
+            txt = this.lastLoadedData.transcript;
+          }
+        } catch(_e) {}
+      }
+      // 3) As a final fallback for immediate UX, try the live DOM or runtime
       if (!txt) {
         try {
           const el = document.getElementById('rawTranscript');
           if (el && el.value) txt = el.value;
         } catch(_e) {}
       }
-      // 3) Optionally, allow an app-provided provider (no hardcoded endpoints here)
       if (!txt) {
         try {
           if (window.ScribeRuntime && typeof window.ScribeRuntime.getTranscript === 'function') {
@@ -110,199 +140,137 @@ const SessionManager = {
       // If DOM isn't ready, skip save silently
       return;
     }
-
-    const newData = await this.collectData();
-    // Persist locally only (no server calls)
+    const statePatch = await this.collectData();
+    const patient_id = this._getPatientId();
+    if (!patient_id) return; // No patient context — don't persist
     try {
-      const key = 'session:last';
-      const raw = localStorage.getItem(key);
-      const existing = raw ? JSON.parse(raw) : {};
-      const mergedData = deepMerge(existing, newData);
-      localStorage.setItem(key, JSON.stringify(mergedData));
-      this.lastLoadedData = mergedData;
-      console.log('Session saved to local storage.');
+      const body = { patient_id, ...statePatch };
+      const res = await fetch('/api/session/state', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body),
+        credentials: 'same-origin'
+      });
+      if (!res.ok) throw new Error('HTTP ' + res.status);
+  const data = await res.json().catch(()=>({}));
+  if (data && data.state) { this.lastLoadedData = data.state; this.lastLoadedDataDfn = patient_id; }
+      try { console.debug('Session saved to server state'); } catch(_e){}
     } catch (err) {
-      console.error('Error saving session to local storage:', err);
+      console.warn('Error saving session to server state:', err);
     }
   },
 
   async loadFromSession() {
     try {
-      // Load from local storage only
-      const raw = localStorage.getItem('session:last');
-      if (raw) {
-        const data = JSON.parse(raw);
-        this.lastLoadedData = data;
+      const patient_id = this._getPatientId();
+      if (!patient_id) return;
+      const res = await fetch(`/api/session/state?patient_id=${encodeURIComponent(patient_id)}`, { credentials: 'same-origin', cache: 'no-store' });
+      if (!res.ok) { return; }
+      const json = await res.json().catch(()=>({}));
+      const state = (json && json.state) ? json.state : null;
+      if (!state) return;
+  this.lastLoadedData = state;
+  this.lastLoadedDataDfn = patient_id;
 
-        // Determine if a patient is currently active; only then allow restoring draft note
-        let activeDfn = null;
-        try {
-          if (window.PatientContext && typeof window.PatientContext.get === 'function') {
-            const meta = await window.PatientContext.get();
-            activeDfn = meta && (meta.dfn || meta.patient_dfn || meta.patientDFN);
-          }
-        } catch(_e) {}
-        this._allowScribeDraftRestore = !!(activeDfn) || !!(data && data.patient_record);
-
-        this.restoreData(data);
-        console.log('Session loaded from local storage:', data);
-
-        // Call displayPatientInfo to update patient name and record
-        if (typeof displayPatientInfo === "function") {
-          displayPatientInfo(data.patient_record);
+      // Determine if a patient is currently active; only then allow restoring draft note
+      let activeDfn = null;
+      try {
+        if (window.PatientContext && typeof window.PatientContext.get === 'function') {
+          const meta = await window.PatientContext.get();
+          activeDfn = meta && (meta.dfn || meta.patient_dfn || meta.patientDFN);
         }
+      } catch(_e) {}
+      this._allowScribeDraftRestore = !!activeDfn;
 
-        // If no active patient, ensure any stale draft note is blank in the UI
-        if (!this._allowScribeDraftRestore) {
-          try { const el = document.getElementById('feedbackReply'); if (el) el.innerText = ''; } catch(_e) {}
-        }
+      await this.restoreData(state);
+      try { console.debug('Session loaded from server state'); } catch(_e){}
+
+      // If no active patient, ensure any stale draft note is blank in the UI
+      if (!this._allowScribeDraftRestore) {
+        try { const el = document.getElementById('feedbackReply'); if (el) el.innerText = ''; } catch(_e) {}
       }
     } catch (err) {
-      console.error('Error loading session from local storage:', err);
+      console.warn('Error loading session from server state:', err);
     }
   },
 
   async clearSession() {
     try {
-      localStorage.removeItem('session:last');
-      window.exploreQAHistory = [];
+      const patient_id = this._getPatientId();
+      if (!patient_id) return;
+      await fetch('/api/session/purge', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ patient_id }), credentials: 'same-origin' });
       this.lastLoadedData = {};
+  this.lastLoadedDataDfn = '';
       this._allowScribeDraftRestore = false;
-      console.log('Session cleared (local storage).');
+      try { console.debug('Session cleared (server state).'); } catch(_e){}
     } catch (err) {
-      console.error('Error clearing session from local storage:', err);
+      console.warn('Error clearing session from server state:', err);
     }
   },
   async saveFullSession(name) {
-    const data = await this.collectData();
-    try {
-      const key = `session:archive:${name}`;
-      localStorage.setItem(key, JSON.stringify({ name, ts: Date.now(), data }));
-      console.log('Full session saved (local storage):', key);
-    } catch (err) {
-      console.error('Error saving full session to local storage:', err);
-    }
+    // Phase 5: client-side archives removed; use server archive APIs instead
+    console.warn('saveFullSession is deprecated. Use server-backed auto-archive.');
   },
 
   async loadSavedSession(filename) {
-    try {
-      const key = `session:archive:${filename}`;
-      const raw = localStorage.getItem(key);
-      if (!raw) { console.warn('No saved session found:', filename); return; }
-      const obj = JSON.parse(raw);
-      this.restoreData(obj.data);
-      console.log('Saved session loaded (local storage):', filename);
-    } catch (err) {
-      console.error('Error loading saved session from local storage:', err);
-    }
+    console.warn('loadSavedSession is deprecated. Use /api/archive/load.');
   },
 
   async listSessions() {
-    try {
-      // List keys saved under session:archive:*
-      const out = [];
-      for (let i = 0; i < localStorage.length; i++) {
-        const k = localStorage.key(i);
-        if (k && k.startsWith('session:archive:')) out.push(k.replace('session:archive:', ''));
-      }
-      console.log('Available sessions (local storage):', out);
-      return out;
-    } catch (err) {
-      console.error('Error listing sessions from local storage:', err);
-      return [];
-    }
+    console.warn('listSessions is deprecated. Use /api/archive/list.');
+    return [];
   },
 
   async deleteSession(filename) {
-    try {
-      localStorage.removeItem(`session:archive:${filename}`);
-      console.log(`Session ${filename} deleted (local storage).`);
-    } catch (err) {
-      console.error(`Error deleting session ${filename} from local storage:`, err);
-    }
+    console.warn('deleteSession is deprecated. Server delete not yet available.');
   },
 
   async endSession(sessionName) {
-    // Use sessionName as provided (already sanitized in app.js)
-
-    try {
-      // Collect full session data first
-      const fullData = await this.collectData();      // Save the session to the server
-      try {
-        const key = `session:archive:${sessionName}`;
-        localStorage.setItem(key, JSON.stringify({ name: sessionName, ts: Date.now(), data: fullData }));
-        console.log('✅ Session saved (local storage):', key);
-      } catch(err){
-        console.error('❌ Failed to save session locally', err);
-        alert('Failed to save session locally.');
-        return;
-      }
-
-      // Clear local current-session snapshot
-      try { localStorage.removeItem('session:last'); } catch(_e){}
-      console.log("✅ Session cleared (local storage).");
-      alert(`Session "${sessionName}" has been saved.`);
-    } catch (err) {
-      console.error("❌ Error ending session:", err);
-      alert("An error occurred while ending the session. Please try again.");
-    }
+    console.warn('endSession is deprecated. Use server-backed archive save.');
   },
 
   collectData: async function() {
-    const data = {};
+    // Produce server-side state shape for Phase 2
+    const state = {};
 
-    // Scribe page data
-    // Fetch from cached getter, which falls back to DOM when needed
+    // Transcript
     let transcript = '';
     try {
       transcript = await this.getTranscript(10000);
     } catch (err) {
-      console.error("Failed to get transcript for session save:", err);
       try {
         const transcriptEl = document.getElementById('rawTranscript');
-        if (transcriptEl) transcript = transcriptEl.value;
+        if (transcriptEl) transcript = transcriptEl.value || '';
       } catch(_e) {}
     }
-    data.scribe = { transcript };
+    state.transcript = typeof transcript === 'string' ? transcript : '';
 
-    const visitNotesEl = document.getElementById('visitNotes');
-    if (visitNotesEl) data.scribe.visitNotes = visitNotesEl.value;
+    // Draft note (workspace markdown/editor content)
+    try {
+      const feedbackReplyEl = document.getElementById('feedbackReply');
+      state.draftNote = (feedbackReplyEl && typeof feedbackReplyEl.innerText === 'string') ? feedbackReplyEl.innerText : '';
+    } catch(_e) { state.draftNote = ''; }
 
-    const instructionsBox = document.getElementById('patientInstructionsBox');
-    if (instructionsBox) data.scribe.patientInstructions = instructionsBox.value;
+    // Patient instructions (AVS)
+    try {
+      const instructionsBox = document.getElementById('patientInstructionsBox');
+      state.patientInstructions = (instructionsBox && typeof instructionsBox.value === 'string') ? instructionsBox.value : '';
+    } catch(_e) { state.patientInstructions = ''; }
 
-    const promptSelectorEl = document.getElementById('promptSelector');
-    if (promptSelectorEl) data.scribe.promptTemplate = promptSelectorEl.value;
+    // To Do checklist
+    try {
+      if (window.WorkspaceModules && window.WorkspaceModules['To Do'] && window.WorkspaceModules['To Do'].getChecklistData) {
+        const items = window.WorkspaceModules['To Do'].getChecklistData();
+        state.to_dos = Array.isArray(items) ? items : [];
+      } else {
+        state.to_dos = [];
+      }
+    } catch(_e) { state.to_dos = []; }
 
-    const feedbackReplyEl = document.getElementById('feedbackReply');
-    if (feedbackReplyEl) data.scribe.feedbackReply = feedbackReplyEl.innerText;
+    // Hey OMAR queries (placeholder until module exposes history)
+    state.heyOmarQueries = [];
 
-    // Collect checklist data from workspace todo module
-    if (window.WorkspaceModules && window.WorkspaceModules['To Do'] && window.WorkspaceModules['To Do'].getChecklistData) {
-      data.scribe.checklist = window.WorkspaceModules['To Do'].getChecklistData();
-    }
-
-    // Explore page data
-    const chunkTextEl = document.getElementById('chunkText');
-    if (chunkTextEl) data.explore = { chunkText: chunkTextEl.value };
-
-    const exploreResultsEl = document.getElementById('exploreGptAnswer');
-    if (exploreResultsEl) data.explore.exploreResults = exploreResultsEl.innerHTML;
-    if (window.exploreQAHistory) data.explore = { ...data.explore, qaHistory: window.exploreQAHistory };
-
-    // Explore page module results
-    const moduleResults = {};
-    document.querySelectorAll('.panel').forEach(panel => {
-        const title = panel.querySelector('h2')?.textContent || "";
-        const output = panel.querySelector('.module-output')?.innerHTML || "";
-        if (title) moduleResults[title] = output;
-    });
-    if (Object.keys(moduleResults).length) {
-        data.explore = data.explore || {};
-        data.explore.moduleResults = moduleResults;
-    }
-
-    return data;
+    return state;
   },
 
   async restoreData(data) {
@@ -321,81 +289,55 @@ const SessionManager = {
         }
       } catch(_e) {}
 
-      // Restore Scribe data
-      if (data.scribe) {
-        const transcriptEl = document.getElementById('rawTranscript');
-        if (transcriptEl) transcriptEl.value = data.scribe.transcript || '';
+      // Restore fields (Phase 2 shape)
+      const transcriptEl = document.getElementById('rawTranscript');
+      if (transcriptEl) transcriptEl.value = data.transcript || '';
 
-        const visitNotesEl = document.getElementById('visitNotes');
-        if (visitNotesEl) visitNotesEl.value = data.scribe.visitNotes || '';
-
-        const instructionsBox = document.getElementById('patientInstructionsBox');
-        if (instructionsBox && data.scribe.patientInstructions !== undefined) {
-            instructionsBox.value = data.scribe.patientInstructions;
-        }
-        // Always regenerate preview from Markdown (deduped storage)
-        const previewDiv = document.getElementById('patientInstructionsPreview');
-        if (previewDiv && instructionsBox && typeof instructionsBox.value === 'string') {
-            try {
-              const md = instructionsBox.value;
-              let html = md;
-              const m = (typeof window !== 'undefined') ? window.marked : null;
-              if (m) {
-                if (typeof m.parse === 'function') html = m.parse(md);
-                else if (m.marked && typeof m.marked.parse === 'function') html = m.marked.parse(md);
-                else if (typeof m === 'function') html = m(md);
-                else if (m.marked && typeof m.marked === 'function') html = m.marked(md);
-              }
-              previewDiv.innerHTML = html;
-            } catch(_e){ previewDiv.textContent = instructionsBox.value; }
-        }
-
-        const promptSelectorEl = document.getElementById('promptSelector');
-        if (promptSelectorEl) promptSelectorEl.value = data.scribe.promptTemplate || '';
-
-        const feedbackReplyEl = document.getElementById('feedbackReply');
-        if (feedbackReplyEl) {
-          if (this._allowScribeDraftRestore) {
-            feedbackReplyEl.innerText = data.scribe.feedbackReply || '';
-          } else {
-            feedbackReplyEl.innerText = '';
-          }
-        }
-
-        // Restore checklist data to workspace todo module
-        if (data.scribe.checklist && window.WorkspaceModules && window.WorkspaceModules['To Do'] && window.WorkspaceModules['To Do'].setChecklistData) {
-          window.WorkspaceModules['To Do'].setChecklistData(data.scribe.checklist);
-        }
-        // Removed: pushing transcript to legacy live_transcript endpoint
-
-        // If restored content includes any meaningful text, enable autosave
+      const instructionsBox = document.getElementById('patientInstructionsBox');
+      if (instructionsBox && data.patientInstructions !== undefined) {
+        instructionsBox.value = data.patientInstructions || '';
+      }
+      // Always regenerate preview from Markdown (deduped storage)
+      const previewDiv = document.getElementById('patientInstructionsPreview');
+      if (previewDiv && instructionsBox && typeof instructionsBox.value === 'string') {
         try {
-          const hasT = !!(data.scribe.transcript && String(data.scribe.transcript).trim().length);
-          const hasV = !!(data.scribe.visitNotes && String(data.scribe.visitNotes).trim().length);
-          const hasD = !!(data.scribe.feedbackReply && String(data.scribe.feedbackReply).trim().length);
-          const hasA = !!(data.scribe.patientInstructions && String(data.scribe.patientInstructions).trim().length);
-          if (hasT || hasV || hasD || hasA) this.autosaveStarted = true;
-        } catch(_e) {}
-
-        // Mark that Scribe content was restored, so other logic can avoid overwriting it
-        SessionManager.scribeRestored = true;
+          const md = instructionsBox.value;
+          let html = md;
+          const m = (typeof window !== 'undefined') ? window.marked : null;
+          if (m) {
+            if (typeof m.parse === 'function') html = m.parse(md);
+            else if (m.marked && typeof m.marked.parse === 'function') html = m.marked.parse(md);
+            else if (typeof m === 'function') html = m(md);
+            else if (m.marked && typeof m.marked === 'function') html = m.marked(md);
+          }
+          previewDiv.innerHTML = html;
+        } catch(_e){ previewDiv.textContent = instructionsBox.value; }
       }
 
-      // Restore Explore data
-      if (data.explore) {
-        const chunkTextEl = document.getElementById('chunkText');
-        if (chunkTextEl) chunkTextEl.value = data.explore.chunkText || '';
-
-        const exploreResultsEl = document.getElementById('exploreGptAnswer');
-        if (exploreResultsEl) exploreResultsEl.innerHTML = data.explore.exploreResults || '';
-
-        if (data.explore.qaHistory) {
-          window.exploreQAHistory = data.explore.qaHistory;
-          if (typeof window.updateExploreQAHistory === "function") {
-            window.updateExploreQAHistory();
-          }
+      const feedbackReplyEl = document.getElementById('feedbackReply');
+      if (feedbackReplyEl) {
+        if (this._allowScribeDraftRestore) {
+          feedbackReplyEl.innerText = data.draftNote || '';
+        } else {
+          feedbackReplyEl.innerText = '';
         }
       }
+
+      // Restore checklist data to workspace todo module
+      if (data.to_dos && window.WorkspaceModules && window.WorkspaceModules['To Do'] && window.WorkspaceModules['To Do'].setChecklistData) {
+        window.WorkspaceModules['To Do'].setChecklistData(Array.isArray(data.to_dos) ? data.to_dos : []);
+      }
+
+      // If restored content includes any meaningful text, enable autosave
+      try {
+        const hasT = !!(data.transcript && String(data.transcript).trim().length);
+        const hasD = !!(data.draftNote && String(data.draftNote).trim().length);
+        const hasA = !!(data.patientInstructions && String(data.patientInstructions).trim().length);
+        if (hasT || hasD || hasA) this.autosaveStarted = true;
+      } catch(_e) {}
+
+      // Mark that Scribe content was restored, so other logic can avoid overwriting it
+      SessionManager.scribeRestored = true;
     } finally {
       // End restoration guard
       this.isRestoring = false;
@@ -422,11 +364,16 @@ try{
   window.addEventListener('PATIENT_SWITCH_START', () => {
     try { SessionManager._transcriptCacheText = ''; } catch(_e){}
     try { SessionManager._transcriptCacheTs = 0; } catch(_e){}
+    // Also reset autosave gating and any stale restored data so nothing gets saved for the new patient
+    try { SessionManager.autosaveStarted = false; } catch(_e){}
+    try { SessionManager.scribeRestored = false; } catch(_e){}
+    try { SessionManager.lastLoadedData = {}; } catch(_e){}
+    try { SessionManager.lastLoadedDataDfn = ''; } catch(_e){}
   });
 } catch(_e){}
 
 // Only register autosave with exit if we actually have meaningful content to save
-if (document.getElementById('rawTranscript') || document.getElementById('chunkText')) {
+if (document.getElementById('rawTranscript')) {
   window.addEventListener('beforeunload', async () => {
     try {
       const transcriptEl = document.getElementById('rawTranscript');

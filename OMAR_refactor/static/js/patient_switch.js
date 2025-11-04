@@ -82,6 +82,8 @@
 
   async function _updateHeaderAndModules(){
     try{
+      // Ensure global top bar patient info updates promptly in refactor
+      try { if (typeof window.updateHeaderFromDemographics === 'function') { await window.updateHeaderFromDemographics(); } } catch(_e) {}
       // Let front-end refresh off DFN using Api; rely on event listeners
       try{ if (typeof window.displayPatientInfo === 'function'){ window.displayPatientInfo(); } }catch(_e){}
       try{ if (typeof window.initPrimaryNoteUI === 'function'){ window.initPrimaryNoteUI({}); } }catch(_e){}
@@ -136,31 +138,62 @@
     try { if (window.SessionManager) window.SessionManager._allowScribeDraftRestore = false; } catch(_e){}
   }
 
-  async function _serverSaveAndClearBeforeSwitch(){
+  async function _serverSaveAndClearBeforeSwitch(prevDfn){
     try {
       try { if (window.stopAutoSaveLoop) window.stopAutoSaveLoop(); } catch(_e){}
       try { if (window.SessionManager && SessionManager.saveToSession) { await SessionManager.saveToSession(); } } catch(_e){}
 
-      try {
-        const prev = localStorage.getItem('ssva:currentArchiveName');
-        const hadScribeContent = (() => {
-          try {
-            const t = document.getElementById('rawTranscript')?.value || '';
-            const n = document.getElementById('visitNotes')?.value || '';
-            const w = document.getElementById('feedbackReply')?.innerText || '';
-            return (t.trim().length + n.trim().length + w.trim().length) > 0;
-          } catch(_e){ return false; }
-        })();
-        if (prev && hadScribeContent && window.SessionManager && SessionManager.saveFullSession) {
-          await SessionManager.saveFullSession(prev);
-        }
-      } catch(_e){}
+      // Phase 4: save archive snapshot before switching (server-side)
+      try { if (typeof window.saveArchiveNow === 'function') await window.saveArchiveNow('pre-switch'); } catch(_e){}
 
       // Stop scribe via refactor endpoint; CSRF header added by global fetch patch
       try { await fetch('/api/scribe/stop', { method: 'POST' }); } catch(_e){}
+
+      // Purge server ephemeral state for the previous patient to ensure no PHI lingers
+      try {
+        const pid = (prevDfn == null) ? '' : String(prevDfn).trim();
+        if (pid) {
+          await fetch('/api/session/purge', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ patient_id: pid }),
+            credentials: 'same-origin'
+          });
+        }
+      } catch(_e){}
     } catch (e) {
       console.warn('[Patient] server save/clear before switch warning:', e);
     }
+  }
+
+  async function _promptReloadLatestArchiveForPatient(patientId){
+    try {
+      const pid = (patientId==null)?'':String(patientId).trim();
+      if (!pid) return false;
+      const r = await fetch(`/api/archive/list?patient_id=${encodeURIComponent(pid)}`, { credentials:'same-origin', cache:'no-store' });
+      if (!r.ok) return false;
+      const j = await r.json().catch(()=>({}));
+      const items = (j && Array.isArray(j.items)) ? j.items : [];
+      if (!items.length) return false;
+      const latest = items[0];
+      const when = (function(){ try{ const d = new Date((latest.updated_at||latest.created_at)*1000 || latest.updated_at || latest.created_at); return isNaN(d) ? '' : d.toLocaleString(); }catch(_e){ return ''; }})();
+      const msg = `A previous archive was found for this patient${when?` (last updated ${when})`:''}.\n\nReload it now?`;
+      const ok = window.confirm(msg);
+      if (!ok) return false;
+      const r2 = await fetch(`/api/archive/load?id=${encodeURIComponent(latest.archive_id)}`, { credentials:'same-origin', cache:'no-store' });
+      if (!r2.ok) return false;
+      const j2 = await r2.json().catch(()=>({}));
+      const doc = j2 && j2.archive;
+      const state = doc && doc.state;
+      if (!state) return false;
+      if (window.SessionManager && typeof window.SessionManager.restoreData === 'function') {
+        await window.SessionManager.restoreData(state);
+        // Persist restored state to ephemeral immediately
+        try { if (typeof window.SessionManager.saveToSession === 'function') await window.SessionManager.saveToSession(); } catch(_e){}
+        return true;
+      }
+      return false;
+    } catch(_e){ return false; }
   }
 
   async function switchTo(dfn, opts = {}){
@@ -179,7 +212,7 @@
     _hideTransientUi();
     abortAllInFlight();
 
-    await _serverSaveAndClearBeforeSwitch();
+  await _serverSaveAndClearBeforeSwitch(current);
 
     try { _immediateClearOnSwitchStart(); } catch(_e){}
 
@@ -223,9 +256,12 @@
         }
       } catch(_e){}
 
-      await _rehydrateLayout();
+    await _rehydrateLayout();
       try{ window.dispatchEvent(new CustomEvent('workspace:patientSwitched', { detail: { dfn: target, alreadyRehydrated: true } })); }catch(_e){}
   await _updateHeaderAndModules();
+
+    // Prompt to reload last archive (if any) for the newly selected patient
+    try { await _promptReloadLatestArchiveForPatient(target); } catch(_e){}
 
       _emit('PATIENT_SWITCH_DONE', { to: target, token });
       try{ window.dispatchEvent(new CustomEvent('patient:changed', { detail: { dfn: target } })); }catch(_e){}

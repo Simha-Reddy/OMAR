@@ -485,22 +485,34 @@ window.addEventListener("DOMContentLoaded", () => {
     async function displayPatientInfoFromApi() {
         try {
             const demo = await Api.quick('demographics');
-            const safeName = (demo && (demo.name || demo.displayName || demo.fullName)) || '';
-            const ageStr = (demo && (demo.age || demo.ageYears)) ? String(demo.age || demo.ageYears) : '';
-            const dobStr = demo && demo.dob ? demo.dob : '';
+            // Prefer refactor quick demographics fields (Name, DOB/DOB_ISO), fallback to legacy/fhir-style
+            const nameFromQuick = (demo && (demo.Name || demo.name || demo.displayName || demo.fullName)) || '';
+            const dobIso = (demo && (demo.DOB_ISO || demo.dob || '')) || '';
+            const dobPretty = (demo && (demo.DOB || '')) || '';
+            // Compute age consistently with workspace.js if DOB available
+            let ageStr = '';
+            try {
+                const dobForAge = dobIso || dobPretty;
+                if (dobForAge && typeof window.computeAgeFromDob === 'function') {
+                    ageStr = window.computeAgeFromDob(String(dobForAge)) || '';
+                }
+            } catch(_e){}
+
             const patientNameDisplay = document.getElementById('patientNameDisplay');
             if (patientNameDisplay) {
-                const dobText = dobStr ? `, DOB: ${dobStr}` : '';
-                patientNameDisplay.textContent = `Name: ${safeName}${dobText}`;
+                const dobText = dobPretty ? `, DOB: ${dobPretty}` : '';
+                patientNameDisplay.textContent = `Name: ${nameFromQuick}${dobText}`;
             }
             const topBarStatus = document.getElementById('patientLookupResults');
             if (topBarStatus) {
-                let displayText = safeName;
-                if (safeName && ageStr) displayText = `${safeName}, Age: ${ageStr}`;
+                // Use unified display style: Name (Age) if age present
+                const displayText = (nameFromQuick && ageStr)
+                    ? `${nameFromQuick} (${ageStr})`
+                    : nameFromQuick;
                 topBarStatus.dataset.originalText = displayText;
                 if (window.demoMasking && window.demoMasking.enabled) {
-                    const maskedName = window.demoMasking.maskName(safeName);
-                    topBarStatus.textContent = ageStr ? `${maskedName}, Age: ${ageStr}` : maskedName;
+                    const maskedName = window.demoMasking.maskName(nameFromQuick);
+                    topBarStatus.textContent = ageStr ? `${maskedName} (${ageStr})` : maskedName;
                 } else {
                     topBarStatus.textContent = displayText;
                 }

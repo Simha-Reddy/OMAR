@@ -13,6 +13,9 @@ def create_app():
 
     # Feature flags (placeholders)
     app.config['USE_VAX_GATEWAY'] = os.getenv('USE_VAX_GATEWAY', '1').lower() in ('1', 'true', 'yes', 'on')
+    # Phase 0: establish flags for upcoming privacy refactor
+    app.config['EPHEMERAL_SERVER_STATE'] = os.getenv('EPHEMERAL_SERVER_STATE', '1').lower() in ('1','true','yes','on')
+    app.config['AUTO_ARCHIVE_DEFAULT'] = os.getenv('AUTO_ARCHIVE_DEFAULT', '1').lower() in ('1','true','yes','on')
 
     # Session config (Redis or FakeRedis)
     from datetime import timedelta
@@ -54,6 +57,12 @@ def create_app():
     if redis_client is not None:
         app.config['SESSION_REDIS'] = redis_client
     Session(app)
+
+    # Ephemeral state TTL (seconds)
+    try:
+        app.config['EPHEMERAL_STATE_TTL'] = int(os.getenv('EPHEMERAL_STATE_TTL', '1800'))
+    except Exception:
+        app.config['EPHEMERAL_STATE_TTL'] = 1800
 
     # Security headers + CSRF double-submit cookie
     from flask import request, session as flask_session, jsonify
@@ -163,11 +172,26 @@ def create_app():
         from .blueprints.scribe_api import bp as scribe_bp
     except Exception:
         scribe_bp = None
+    # Scribe Note/Chat endpoints (frontend expects /scribe/* without /api prefix)
+    try:
+        from .scribe.blueprints.note_api import bp as scribe_note_bp
+    except Exception:
+        scribe_note_bp = None
     # CPRS sync API (optional until implemented)
     try:
         from .blueprints.cprs_api import bp as cprs_bp
     except Exception:
         cprs_bp = None
+    # Ephemeral session state API
+    try:
+        from .blueprints.session_api import bp as session_state_bp
+    except Exception:
+        session_state_bp = None
+    # Archive API
+    try:
+        from .blueprints.archive_api import bp as archive_bp
+    except Exception:
+        archive_bp = None
 
     app.register_blueprint(general_bp)
     # Legacy-compatible endpoints at root for existing frontend JS (patient search/default list)
@@ -179,7 +203,14 @@ def create_app():
         app.register_blueprint(rag_bp, url_prefix='/api/rag')
     if scribe_bp is not None:
         app.register_blueprint(scribe_bp, url_prefix='/api/scribe')
+    if scribe_note_bp is not None:
+        # Register legacy/expected root path for note+chat endpoints
+        app.register_blueprint(scribe_note_bp, url_prefix='/scribe')
     if cprs_bp is not None:
         app.register_blueprint(cprs_bp, url_prefix='/api/cprs')
+    if session_state_bp is not None:
+        app.register_blueprint(session_state_bp, url_prefix='/api/session')
+    if archive_bp is not None:
+        app.register_blueprint(archive_bp, url_prefix='/api/archive')
 
     return app

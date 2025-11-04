@@ -378,45 +378,105 @@ def vpr_to_quick_medications(vpr_payload: Any) -> List[Dict[str, Any]]:
 
 def vpr_to_quick_labs(vpr_payload: Any) -> List[Dict[str, Any]]:
     """Map VPR 'labs' items to a simplified quick shape.
-    Fields: name, result, units, refRange, abnormal, observedDate
+    Fields (quick):
+      - name (prefers displayName), result, units, specimen
+      - referenceRange (string "low - high" when both present)
+      - abnormal (True/False when reference range present; else None)
+      - observed (raw Fileman value if present)
+      - observedDate (ISO)
+    Also include a few compatibility aliases used by UI modules:
+      - test (alias of name), unit (alias of units), resulted (ISO, same as observedDate)
+      - refRange (legacy alias of referenceRange)
     """
     items = _get_nested_items(vpr_payload)
     out: List[Dict[str, Any]] = []
     for it in items:
         if not isinstance(it, dict):
             continue
-        name = it.get('typeName') or it.get('test') or it.get('name') or it.get('display') or ''
-        result = it.get('result') or it.get('value') or ''
+        # Name: prefer displayName when present
+        name = (
+            it.get('displayName')
+            or it.get('typeName')
+            or it.get('test')
+            or it.get('name')
+            or it.get('display')
+            or ''
+        )
+        # Result & units
+        result = it.get('result') if it.get('result') is not None else it.get('value')
         units = it.get('units') or it.get('unit') or None
-        ref = None
+        # Specimen/sample
+        specimen = it.get('specimen') or it.get('specimenType') or it.get('sample') or it.get('source') or None
+        # Reference range: prefer top-level low/high when present; else use referenceRanges[0]
+        low = None
+        high = None
         try:
-            rr = it.get('referenceRanges')
-            if isinstance(rr, list) and rr:
-                r0 = rr[0] or {}
-                lo = r0.get('low'); hi = r0.get('high')
-                if lo is not None or hi is not None:
-                    ref = f"{lo or ''}-{hi or ''}"
-            elif isinstance(rr, str):
-                ref = rr
+            if it.get('low') is not None or it.get('high') is not None:
+                low = it.get('low'); high = it.get('high')
+            else:
+                rr = it.get('referenceRanges')
+                if isinstance(rr, list) and rr:
+                    r0 = rr[0] or {}
+                    low = r0.get('low'); high = r0.get('high')
         except Exception:
-            pass
+            low = None; high = None
+        reference_range = None
+        if low is not None or high is not None:
+            # Build a human-readable range string
+            if low is not None and high is not None:
+                reference_range = f"{low} - {high}"
+            elif low is not None:
+                reference_range = f"> {low}"
+            elif high is not None:
+                reference_range = f"< {high}"
+        # Abnormal calculation: only when both low and high are numeric and result is numeric
         abnormal = None
         try:
-            abn = it.get('interpretationName') or it.get('abnormal')
-            if isinstance(abn, str):
-                abnormal = abn
+            def _to_num(x):
+                try:
+                    if x is None:
+                        return None
+                    s = str(x).strip()
+                    # tolerate values like "5.2*" or "5.2 H"
+                    s = ''.join(ch for ch in s if (ch.isdigit() or ch in '.-'))
+                    return float(s) if s not in ('', '.', '-', '-.', '.-') else None
+                except Exception:
+                    return None
+            rv = _to_num(result)
+            lo_n = _to_num(low)
+            hi_n = _to_num(high)
+            if rv is not None and lo_n is not None and hi_n is not None:
+                abnormal = (rv < lo_n) or (rv > hi_n)
+            elif rv is not None and (lo_n is not None or hi_n is not None):
+                # When only one bound exists, mark abnormal if outside the single constraint
+                if lo_n is not None:
+                    abnormal = rv < lo_n
+                if hi_n is not None:
+                    abnormal = (rv > hi_n) if abnormal is None else (abnormal or (rv > hi_n))
+            else:
+                abnormal = None
         except Exception:
-            pass
-        obs = it.get('observed') or it.get('resulted') or it.get('collected')
+            abnormal = None
+        # Observed/resulted dates
+        observed_fm = it.get('observed')
+        obs = observed_fm or it.get('resulted') or it.get('collected')
         obs_iso = _parse_any_datetime_to_iso(obs)
-        out.append({
+        # Build object with friendly names and aliases for UI compatibility
+        obj: Dict[str, Any] = {
             'name': name,
+            'test': name,               # alias
             'result': result,
             'units': units,
-            'refRange': ref,
+            'unit': units,              # alias
+            'specimen': specimen,
+            'referenceRange': reference_range,
+            'refRange': reference_range,  # legacy alias
             'abnormal': abnormal,
+            'observed': observed_fm,    # raw Fileman
             'observedDate': obs_iso,
-        })
+            'resulted': obs_iso,        # alias preferred by some UIs
+        }
+        out.append(obj)
     return out
 
 
@@ -653,8 +713,20 @@ def vpr_to_quick_allergies(vpr_payload: Any) -> List[Dict[str, Any]]:
             it.get('allergenName')
             or (lambda a: (a.get('name') if isinstance(a, dict) else None))(it.get('allergen') or {})
             or it.get('name')
-            or ''
         )
+        # Some VPR payloads provide the allergen under products[0].name
+        if not substance:
+            try:
+                products = it.get('products')
+                if isinstance(products, list) and products:
+                    p0 = products[0]
+                    if isinstance(p0, dict):
+                        pname = p0.get('name') or p0.get('product') or p0.get('displayName')
+                        if pname:
+                            substance = pname
+            except Exception:
+                pass
+        substance = substance or ''
         # Reactions as simple list of names
         reactions: List[str] = []
         try:

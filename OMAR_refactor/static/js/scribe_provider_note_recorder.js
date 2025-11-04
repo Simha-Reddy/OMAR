@@ -30,41 +30,12 @@
 
   // Local transcript accumulator so UI can read without server round-trips
   let _transcript = '';
-  let _statusTimer = null;
   function _appendDelta(delta){
     if (!delta) return;
     _transcript += String(delta);
     try { window.ScribeRuntime.setTranscript(_transcript); } catch(_e){}
   }
-
-  async function _pollStatus(){
-    try{
-      const sid = window.currentScribeSessionId || null;
-      if (!sid) return;
-      const url = `/api/scribe/status?session_id=${encodeURIComponent(sid)}`;
-      const res = await fetch(url, { method:'GET', cache:'no-store', credentials:'same-origin' });
-      if (!res.ok) return;
-      const j = await res.json().catch(()=>null);
-      if (!j) return;
-      // Update status
-      try { window.ScribeRuntime.setStatus(String(j.status||'') === 'active'); } catch(_e){}
-      // Update transcript if changed
-      const t = (j.transcript || '').toString();
-      if (t && t !== _transcript){
-        _transcript = t;
-        try { window.ScribeRuntime.setTranscript(_transcript); } catch(_e){}
-      }
-    }catch(_e){}
-  }
-
-  function _startStatusPolling(){
-    try { if (_statusTimer) { clearInterval(_statusTimer); _statusTimer = null; } } catch(_e){}
-    _statusTimer = setInterval(_pollStatus, 1500);
-  }
-  function _stopStatusPolling(){
-    try { if (_statusTimer) clearInterval(_statusTimer); } catch(_e){}
-    _statusTimer = null;
-  }
+  // Polling removed: server is SoT and transcript is fetched on-demand when requested.
 
   // Custom uploader that mirrors NoteRecorder default but taps transcript deltas
   async function _uploader({ patientId, generation, blob, seq, mimeType }){
@@ -137,7 +108,6 @@
     await _rec.start();
     _active = true;
     try { window.ScribeRuntime.setStatus(true); } catch(_e){}
-    _startStatusPolling();
   }
 
   async function stop(){
@@ -147,7 +117,6 @@
     _rec = null;
     _active = false;
     try { window.ScribeRuntime.setStatus(false); } catch(_e){}
-    _stopStatusPolling();
   }
 
   async function getStatus(){
@@ -155,7 +124,13 @@
   }
 
   // Stop cleanly on patient switch
-  try { window.addEventListener('PATIENT_SWITCH_START', () => { try { stop(); } catch(_e){} try{ _stopStatusPolling(); }catch(__){} }); } catch(_e){}
+  try {
+    window.addEventListener('PATIENT_SWITCH_START', () => {
+      try { stop(); } catch(_e){}
+      // Clear any cached transcript so new patient doesn't see prior text
+      try { _transcript = ''; window.ScribeRuntime.setTranscript(''); } catch(__){}
+    });
+  } catch(_e){}
 
   // Register with runtime
   try { window.ScribeRuntime.registerProvider({ start, stop, getStatus }); } catch(_e){}

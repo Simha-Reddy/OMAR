@@ -1296,13 +1296,15 @@ window.WorkspaceModules['${moduleKey}'] = {
     }); } catch(_e){}
     // On patient switch: blank then rehydrate server-saved layout for new DFN (or defaults)
     // On patient switch/context change: blank then rehydrate layout from localStorage only (never refetch from server)
-    try { window.addEventListener('workspace:patientSwitched', (e) => {
+    try { window.addEventListener('workspace:patientSwitched', async (e) => {
         if (!__layoutRestored) return;
         if (e && e.detail && e.detail.alreadyRehydrated) {
             console.debug('[Workspace] Skipping layout rehydrate (alreadyRehydrated flag)');
-            return;
+        } else {
+            _rehydrateForCurrentPatient(true);
         }
-        _rehydrateForCurrentPatient(true);
+        // Also refresh the top bar patient display immediately for better UX
+        try { if (typeof updateHeaderFromDemographics === 'function') { await updateHeaderFromDemographics(e && e.detail && e.detail.dfn); } } catch(_e){}
     }); } catch(_e){}
 
     // Floating tab indicator functions

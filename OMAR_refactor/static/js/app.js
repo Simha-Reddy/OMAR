@@ -4,6 +4,8 @@ let isRecordingActive = false;
 let lastServerTranscript = "";
 let audioContext, analyser, microphone, animationId, micStream;
 let autoSaveIntervalId = null;
+let autoArchiveEnabled = true; // server-backed user preference (refreshed on load)
+let lastArchiveStateSig = '';
 
 // --- Theme bootstrap (Original vs VADesign) ---
 // Applies on load based on localStorage and exposes a simple toggler for quick review.
@@ -40,11 +42,82 @@ try {
     });
 } catch(_e){}
 
+// --- Privacy: scrub legacy PHI from localStorage on startup (Phase 0) ---
+(function(){
+    try {
+        // Remove known PHI-bearing keys from older builds. Do NOT remove non-PHI prefs.
+        const removeExact = [
+            'session:last',
+            'workspace_feedback_reply',
+            // Older archive continuation name (may include patient info in value)
+            'ssva:currentArchiveName'
+        ];
+        const removePrefixes = [
+            'session:archive:',          // legacy client-side archives containing PHI
+            'workspace_feedback_reply:', // per-DFN draft note snapshots
+            'explore:',                  // any Explore leftovers that may include PHI
+            'exploreQAHistory:',         // legacy explore QA history
+        ];
+
+        // Best-effort scrub
+        for (const k of removeExact) {
+            try { localStorage.removeItem(k); } catch(_e) {}
+        }
+        // Iterate once and collect keys to avoid mutating during iteration
+        const toDelete = [];
+        try {
+            for (let i = 0; i < localStorage.length; i++) {
+                const k = localStorage.key(i);
+                if (!k) continue;
+                if (removePrefixes.some(p => k.startsWith(p))) toDelete.push(k);
+            }
+        } catch(_e) {}
+        for (const k of toDelete) {
+            try { localStorage.removeItem(k); } catch(_e) {}
+        }
+    } catch(_e) {
+        // non-fatal
+    }
+})();
+
+// --- Phase 5: Enforce strict client-storage allowlist (localStorage only) ---
+(function(){
+    try {
+        const allowedExact = new Set([
+            // UI/UX preferences only — no PHI
+            'ui:theme',
+            'ssva:autoSaveArchives',        // local fallback only; no PHI
+            'ssva:autoDeleteArchives10d',   // retention policy flag
+            'ssva:autoCprsSync',            // CPRS sync toggle
+            'ssva:cprsPaused',              // CPRS manual pause flag
+            'ssva:cprsHoldUntil',           // transient hold timestamp
+            'ssva:cprsHoldDFN',             // transient DFN hint for sync race control (may contain DFN, but used purely for short-lived control)
+            'ssva:cprsHoldReason'
+        ]);
+        const allowedPrefixes = [
+            // No allowed PHI-bearing prefixes
+        ];
+        const toRemove = [];
+        for (let i = 0; i < localStorage.length; i++) {
+            const k = localStorage.key(i);
+            if (!k) continue;
+            if (allowedExact.has(k)) continue;
+            if (allowedPrefixes.some(p => k.startsWith(p))) continue;
+            toRemove.push(k);
+        }
+        toRemove.forEach(k => { try { localStorage.removeItem(k); } catch(_e){} });
+        if (toRemove.length) { try { console.info(`[Privacy] Purged ${toRemove.length} disallowed localStorage keys.`); } catch(_e){} }
+    } catch(_e) { /* non-fatal */ }
+})();
+
 // Ensure an archive file name exists for the current patient; create one if missing
 async function ensureArchiveNameInitialized() {
     try {
-        const existing = localStorage.getItem('ssva:currentArchiveName');
-        if (existing && existing.trim().length) return existing;
+    // Phase 4 (server archives): no longer rely on local name for server archive ID.
+    // We retain this function for backward-compat references, but it returns a
+    // placeholder and does not affect server-side archiving.
+    const existing = localStorage.getItem('ssva:currentArchiveName');
+    if (existing && existing.trim().length) return existing;
         let patientName = '';
         // Do not call legacy /get_patient; name will be set by header updates later
         let base = '';
@@ -355,6 +428,76 @@ async function getRecordingStatus() {
     return !!currentRecordingState;
 }
 
+// --- Patient helpers ---
+function getCurrentPatientId(){
+    try { if (window.Api && typeof window.Api.getDFN === 'function') { const v = window.Api.getDFN(); if (v) return String(v); } } catch(_e){}
+    try { const v = sessionStorage.getItem('CURRENT_PATIENT_DFN'); if (v) return String(v); } catch(_e){}
+    try { if (window.CURRENT_PATIENT_DFN) return String(window.CURRENT_PATIENT_DFN); } catch(_e){}
+    return '';
+}
+
+function quickStateSignature(obj){
+    try {
+        // Build a light signature over main fields to avoid redundant saves
+        const t = (obj && obj.transcript) ? String(obj.transcript) : '';
+        const d = (obj && obj.draftNote) ? String(obj.draftNote) : '';
+        const a = (obj && obj.patientInstructions) ? String(obj.patientInstructions) : '';
+        const todo = (obj && Array.isArray(obj.to_dos)) ? obj.to_dos.length : 0;
+        const len = t.length + d.length + a.length;
+        // Simple rolling hash on first 2000 chars to keep cheap
+        let h = 0; const s = (t + '|' + d + '|' + a).slice(0, 2000);
+        for (let i=0;i<s.length;i++){ h = (h*31 + s.charCodeAt(i))|0; }
+        return `${len}:${todo}:${h}`;
+    } catch(_e){ return String(Math.random()); }
+}
+
+async function refreshAutoArchiveStatus(){
+    try {
+        const r = await fetch('/api/archive/auto-archive/status', { credentials: 'same-origin', cache: 'no-store' });
+        if (!r.ok) throw new Error('status http ' + r.status);
+        const j = await r.json().catch(()=>({}));
+        if (j && typeof j.enabled === 'boolean') autoArchiveEnabled = !!j.enabled;
+    } catch(_e) {
+        // Fallback to local setting if server unreachable
+        try { autoArchiveEnabled = (localStorage.getItem('ssva:autoSaveArchives') !== '0'); } catch(__){}
+    }
+    return autoArchiveEnabled;
+}
+
+async function saveArchiveNow(reason){
+    try {
+        if (!autoArchiveEnabled) return false;
+        const patient_id = getCurrentPatientId();
+        if (!patient_id) return false;
+        if (!window.SessionManager || typeof SessionManager.collectData !== 'function') return false;
+        const state = await SessionManager.collectData();
+        // Skip if empty to avoid noise
+        const hasAny = !!(
+            (state.transcript && String(state.transcript).trim().length) ||
+            (state.draftNote && String(state.draftNote).trim().length) ||
+            (state.patientInstructions && String(state.patientInstructions).trim().length) ||
+            (Array.isArray(state.to_dos) && state.to_dos.length)
+        );
+        if (!hasAny) return false;
+        const sig = quickStateSignature(state);
+        if (sig === lastArchiveStateSig && reason !== 'unload') {
+            // No change since last interval; skip to reduce write load
+            return false;
+        }
+        const res = await fetch('/api/archive/save', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            credentials: 'same-origin',
+            body: JSON.stringify({ patient_id, state })
+        });
+        if (!res.ok) throw new Error('archive save http ' + res.status);
+        lastArchiveStateSig = sig;
+        try { console.debug(`[Archive] Saved (${reason || 'tick'})`); } catch(_e){}
+        return true;
+    } catch(e){ console.warn('Archive save failed:', e); return false; }
+}
+try { window.saveArchiveNow = saveArchiveNow; } catch(_e){}
+
 function _csrf(){ 
     try{ 
         // Prefer cookie value since it's set by server and matches session
@@ -431,6 +574,8 @@ async function setRecordBtnState(isRecording) {
         updateFaviconForRecording(false);
         // Publish status via runtime bus
         try { if (window.ScribeRuntime && typeof window.ScribeRuntime.setStatus === 'function') window.ScribeRuntime.setStatus(false); } catch(_e){}
+        // Phase 4: opportunistic archive save on stop
+        try { await saveArchiveNow('recording-stopped'); } catch(_e){}
     }
 }
 
@@ -536,6 +681,9 @@ document.addEventListener("DOMContentLoaded", async () => {
     } else {
         console.error("⚠️ SessionManager is not defined. Ensure SessionManager.js is loaded before app.js.");
     }
+
+    // Refresh auto-archive status from server and possibly start loop
+    try { await refreshAutoArchiveStatus(); } catch(_e){}
 });
 
 // Bootstrap CURRENT_PATIENT_DFN from server session on load
@@ -662,28 +810,8 @@ async function autoSaveTick() {
         if (typeof SessionManager !== 'undefined' && SessionManager.saveToSession) {
             await SessionManager.saveToSession();
         }
-        // Only persist to archive if we have meaningful content (transcript, scribe notes, or workspace draft note)
-        const transcriptEl = document.getElementById('rawTranscript');
-        const visitNotesEl = document.getElementById('visitNotes');
-        const feedbackReplyEl = document.getElementById('feedbackReply');
-        const avsEl = document.getElementById('patientInstructionsBox');
-        let hasTranscript = !!(transcriptEl && transcriptEl.value && transcriptEl.value.trim().length);
-        const hasVisitNotes = !!(visitNotesEl && visitNotesEl.value && visitNotesEl.value.trim().length);
-        const hasWorkspaceDraft = !!(feedbackReplyEl && feedbackReplyEl.innerText && feedbackReplyEl.innerText.trim().length);
-        const hasAvs = !!(avsEl && avsEl.value && avsEl.value.trim().length);
-
-        // Fallback: check server live transcript via SessionManager if DOM field is absent/empty
-        if (!hasTranscript && typeof SessionManager !== 'undefined' && SessionManager.getTranscript) {
-            try {
-                const t = await SessionManager.getTranscript(0);
-                hasTranscript = !!(t && String(t).trim().length);
-            } catch(_e) {}
-        }
-
-        const archiveName = localStorage.getItem('ssva:currentArchiveName');
-        if (archiveName && (hasTranscript || hasVisitNotes || hasWorkspaceDraft || hasAvs) && typeof SessionManager !== 'undefined' && SessionManager.saveFullSession) {
-            await SessionManager.saveFullSession(archiveName);
-        }
+        // Phase 4: server-side archive auto-save tick
+        await saveArchiveNow('tick');
     } catch (e) {
         console.warn('Auto-save tick failed', e);
     }
@@ -691,7 +819,7 @@ async function autoSaveTick() {
 
 function startAutoSaveLoop() {
     // Guard by setting
-    if (!getBoolSetting('ssva:autoSaveArchives', true)) {
+    if (!autoArchiveEnabled) {
         stopAutoSaveLoop();
         return;
     }
@@ -707,6 +835,19 @@ function stopAutoSaveLoop() {
         autoSaveIntervalId = null;
     }
 }
+// End Session: global function (server-backed)
+async function endSession() {
+    if (!confirm('End session and save to archive?')) return;
+    try {
+        stopAutoSaveLoop();
+        await saveArchiveNow('manual');
+        alert('Session saved to server archives.');
+        window.location.reload();
+    } catch(e) {
+        alert('Failed to save session.');
+    }
+}
+try { window.endSession = endSession; } catch(_e){}
 
 // Back-compat name used by selection flows
 async function startAutoArchiveForCurrentPatient() { startAutoSaveLoop(); }
@@ -716,5 +857,5 @@ try { window.stopAutoSaveLoop = stopAutoSaveLoop; } catch(_e){}
 
 // Start auto-save loop on load if enabled
 document.addEventListener('DOMContentLoaded', () => {
-    try { startAutoSaveLoop(); } catch(_e){}
+    try { if (autoArchiveEnabled) startAutoSaveLoop(); } catch(_e){}
 });
