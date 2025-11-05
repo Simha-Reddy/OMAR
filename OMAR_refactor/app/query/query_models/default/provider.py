@@ -290,11 +290,23 @@ class DefaultQueryModelImpl:
             if override:
                 system = override
             elif mode == 'summary':
-                # Load from OMAR_refactor/templates
+                # Prefer static/prompts first; fall back to legacy templates/
                 from pathlib import Path as _P
                 try:
-                    templates_dir = _P(__file__).resolve().parents[4] / 'templates'
-                    system = (templates_dir / template_name).read_text(encoding='utf-8')
+                    root_dir = _P(__file__).resolve().parents[4]
+                    prompts_dir = root_dir / 'static' / 'prompts'
+                    templates_dir = root_dir / 'templates'
+                    # Try static prompts location
+                    p1 = prompts_dir / template_name
+                    if p1.exists():
+                        system = p1.read_text(encoding='utf-8')
+                    else:
+                        # Fallback to legacy templates
+                        p2 = templates_dir / template_name
+                        if p2.exists():
+                            system = p2.read_text(encoding='utf-8')
+                        else:
+                            system = ''
                 except Exception:
                     system = ''
             if not system:

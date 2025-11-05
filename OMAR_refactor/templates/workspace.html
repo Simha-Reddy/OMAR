@@ -4,10 +4,9 @@
     <meta charset="UTF-8">
     <title>Workspace</title>
     <link rel="icon" type="image/x-icon" href="/static/js/icon.ico">
-    <!-- Load refactor styles (theme + base + workspace) -->
+    <!-- Load refactor styles (theme + base) -->
     <link rel="stylesheet" href="/static/styles/theme.css">
     <link rel="stylesheet" href="/static/styles/style.css">
-    <link rel="stylesheet" href="/static/styles/workspace.css">
     <!-- CSRF token for client-side fetches -->
     <meta name="csrf-token" content="{{ csrf_token }}">
     <script>
@@ -1248,6 +1247,8 @@
             display: flex;
             flex-direction: column;
             z-index: 10;
+            /* Match Hey OMAR modal depth */
+            box-shadow: 0 8px 24px rgba(0,0,0,0.25);
         }
 
         .doc-viewer-header {
@@ -1352,6 +1353,7 @@
             line-height: 1.5;
             white-space: pre-wrap;
             background-color: white;
+            color: var(--paper-contrast);
         }
 
         .doc-viewer-content:focus {

@@ -382,9 +382,10 @@
     let norm = Array.isArray(payload.matches) ? payload.matches : [];
     if ((!norm || !norm.length) && Array.isArray(payload.citations)){
       norm = payload.citations.map((c, i) => ({
-        doc_id: c.doc_id || c.id || c.uid || '',
-        docId: c.doc_id || c.id || c.uid || '',
-        note_id: c.doc_id || c.id || c.uid || '',
+        // Prefer note_id, then fall back to common variants
+        doc_id: c.note_id || c.doc_id || c.id || c.uid || '',
+        docId: c.note_id || c.doc_id || c.id || c.uid || '',
+        note_id: c.note_id || c.doc_id || c.id || c.uid || '',
         date: c.date || '',
         section: c.section || '',
         title: c.title || c.section || '',
@@ -668,7 +669,8 @@
   function interpretShowMeToDotTokens(input){
     try{
       const s = String(input||'').trim(); if(!s) return null;
-      const m = s.match(/^\s*(?:hey\s*,?\s*)?(?:omar\s*,?\s*)?(?:show|display|list|give\s+me|tell\s+me|get\s+me|show\s+me)\s+(.+)$/i);
+  // Parse commands like "show me ...", "display ...", "give me ..."; ensure multi-word variants don't leak words (e.g., 'me') into tail
+  const m = s.match(/^\s*(?:hey\s*,?\s*)?(?:omar\s*,?\s*)?(?:(?:show|display|list|give|tell|get)(?:\s+me)?)\s+(.+)$/i);
       if(!m) return null;
       const tail = m[1].trim(); if(!tail) return null;
       const low = tail.toLowerCase();
@@ -702,13 +704,15 @@
       const defaultRecentDaysVitals = 14;
 
       // Helper to extract filters (names/loincs) from remaining text for labs
-      function extractFilters(txt){
+  function extractFilters(txt){
         const original = String(txt||'');
         let t = ' ' + original.toLowerCase() + ' ';
         // Remove common non-filter words
-        t = t.replace(/\b(labs?|lab\s+results?|vitals?|meds?|medications?|problems?|orders?|panel|test|tests)\b/g,' ')
+     t = t.replace(/\b(labs?|lab\s+results?|vitals?|meds?|medications?|problems?|orders?|panel|test|tests)\b/g,' ')
              .replace(/\b(his|her|their|the|a|an|this|that|these|those)\b/g,' ')
-             .replace(/\b(last|latest|most\s+recent|all|range|since|after|from|between|to|and|through|thru|past|days?|weeks?|months?|years?)\b/g,' ')
+       // Also strip pronouns/stop-words that can leak from commands (e.g., 'me' from 'show me')
+       .replace(/\b(me|my|our|us|you|your)\b/g,' ')
+       .replace(/\b(last|latest|most\s+recent|all|range|since|after|from|between|to|and|through|thru|past|days?|weeks?|months?|years?)\b/g,' ')
              .replace(/[^a-z0-9\-+,\s]/g,' ');
         // Preserve common multi-word lab phrases if present in original
         const phrases = [];
@@ -737,7 +741,9 @@
       // Problems
       if (/\bproblems?\b/.test(low) || /\bproblem\s*list\b/.test(low) || /\bpast\s+medical\s+history\b/.test(low)){
         const act = (/\bactive\b|\bcurrent\b/).test(low);
-        tokens.push(act ? '.problems/active' : '.problems');
+        const wantsDetailed = (/\bdetailed\b/.test(low)) || (/\bwith\s+comments?\b/.test(low)) || (/\bcomments?\b/.test(low));
+        const base = act ? '.problems/active' : '.problems';
+        tokens.push(wantsDetailed ? (base + '/detailed') : base);
       }
       // Allergies
       if (/\ballerg(?:y|ies|ens?)\b/.test(low) || /\badverse\s+reactions?\b/.test(low)){

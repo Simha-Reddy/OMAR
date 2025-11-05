@@ -1,6 +1,0 @@
-{
-  "Primary Care Progress Note": "Summarize the encounter in a concise, clinically accurate SOAP note. Include relevant history, exam findings, assessment with differential when applicable, and a clear plan with medications, follow-up, and patient instructions.",
-  "Specialist Consult": "Draft a consult note including chief complaint, pertinent history and prior workup, focused exam, impression, and specific recommendations to the referring provider.",
-  "Discharge Summary": "Create a brief discharge summary: reason for admission, hospital course, key diagnostics/procedures, discharge medications with changes, follow-up, and return precautions.",
-  "ED Provider Note": "Generate an emergency department provider note summarizing HPI, vitals, focused exam, ED course, diagnostics, medical decision-making, and disposition with instructions."
-}

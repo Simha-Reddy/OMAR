@@ -22,6 +22,27 @@
       return await r.json().catch(()=>null);
     } catch(_e){ return null; }
   }
+  function toQuery(params){
+    try{
+      if(!params) return '';
+      const usp = new URLSearchParams();
+      Object.entries(params).forEach(([k,v])=>{ if(v!==undefined && v!==null && v!=='') usp.set(k, String(v)); });
+      const s = usp.toString();
+      return s ? ('?'+s) : '';
+    }catch(_e){ return ''; }
+  }
+  async function apiQuick(domain, params){
+    // Prefer unified Api.quick; fallback to legacy /quick/patient/*
+    try{
+      if (g.Api && typeof g.Api.quick === 'function'){
+        return await g.Api.quick(domain, params||{});
+      }
+    }catch(_e){ /* fallback below */ }
+    try{
+      const qs = toQuery(params||{});
+      return await getJson(`/quick/patient/${encodeURIComponent(domain)}${qs}`);
+    }catch(_e){ return null; }
+  }
 
   // Patient metadata helpers
   async function getPatientMeta(){
@@ -144,7 +165,7 @@
     try{
       // name
       if (t === 'name' || t === 'patient'){
-        const j = await getJson('/quick/patient/demographics');
+        const j = await apiQuick('demographics');
         let full = '';
         if (j && j.demographics){
           const d = j.demographics;
@@ -176,7 +197,7 @@
       }
       // dob
       if (t === 'dob'){
-        const j = await getJson('/quick/patient/demographics');
+        const j = await apiQuick('demographics');
         let dob = '';
         try{
           const d = j?.demographics || {};
@@ -203,7 +224,7 @@
       if (t === 'age'){
         // Prefer DOB from demographics
         let dob = '';
-        try{ const j = await getJson('/quick/patient/demographics'); const d = j?.demographics||{}; dob = d.DOB_ISO || d.DOB || d.dob || ''; }catch(_e){}
+        try{ const j = await apiQuick('demographics'); const d = j?.demographics||{}; dob = d.DOB_ISO || d.DOB || d.dob || ''; }catch(_e){}
         if (!dob){
           const s = await getJson('/session_data');
           try{ const ent = s?.patient_record?.entry || []; const pat = ent.find(e=> e?.resource?.resourceType==='Patient'); dob = pat?.resource?.birthDate || ''; }catch(_e){}
@@ -215,7 +236,7 @@
       }
       // phone (mobile preferred)
       if (t === 'phone'){
-        const j = await getJson('/quick/patient/demographics');
+        const j = await apiQuick('demographics');
         const d = j?.demographics || {};
         // Collect possible keys case-insensitively
         const entries = Object.entries(d);
@@ -233,12 +254,12 @@
       }
       // medications
       if (t === 'meds/active' || t === 'medications/active'){
-        const j = await getJson('/quick/patient/medications?status=ACTIVE+PENDING');
+        const j = await apiQuick('medications', { status: 'ACTIVE+PENDING' });
         const meds = j?.medications || j?.items || []; // tolerate alt shapes
         return fmtMeds(meds.filter(m=> String(m.status||'active').toLowerCase()==='active'));
       }
       if (t === 'meds' || t === 'medications'){
-        const j = await getJson('/quick/patient/medications');
+        const j = await apiQuick('medications');
         const meds = j?.medications || j?.items || [];
         return fmtMeds(meds);
       }
@@ -266,7 +287,7 @@
         if (days != null) qs.set('days', String(Math.max(0, days)));
         if (start) qs.set('start', start);
         if (end) qs.set('end', end);
-        let meds = (await getJson('/quick/patient/medications'+(qs.toString()? ('?'+qs.toString()):'')))?.medications || [];
+        let meds = (await apiQuick('medications', Object.fromEntries(qs)))?.medications || [];
         // Fallback to FHIR session if quick endpoint unavailable
         if (!Array.isArray(meds) || !meds.length){
           const f = await getJson('/fhir/meds?status='+(status==='ACTIVE+PENDING'?'active':''));
@@ -282,7 +303,7 @@
         const name = parts.slice(1).join(' ').trim();
         if (!name) return '';
         // Pull wide window from quick endpoint (10 years)
-        const j = await getJson('/quick/patient/medications?status=ALL&days=3650');
+        const j = await apiQuick('medications', { status:'ALL', days:3650 });
         let meds = j?.medications || j?.items || [];
         if (!Array.isArray(meds) || !meds.length){
           const f = await getJson('/fhir/meds');
@@ -302,16 +323,24 @@
       }
       // problems
       if (t === 'problems' || t === 'problems/active'){
-        const j = await getJson(`/quick/patient/problems${t.endsWith('/active')? '?status=active':''}`);
+        const j = await apiQuick('problems', t.endsWith('/active') ? { status:'active' } : {});
         const probs = j?.problems || [];
         return fmtProblems(probs, t.endsWith('/active'));
       }
-      if (t === 'problems/details' || t === 'problems/active/details'){
+      if (t === 'problems/details' || t === 'problems/active/details' || t === 'problems/detailed' || t === 'problems/active/detailed'){
         const active = t.startsWith('problems/active');
-        const qs = active ? '?status=active&detail=1' : '?detail=1';
-        const j = await getJson(`/quick/patient/problems${qs}`);
+        const j = await apiQuick('problems', Object.assign({ detail: 1 }, active ? { status:'active' } : {}));
         const probs = j?.problems || [];
         return fmtProblemsDetailed(probs, active);
+      }
+      // General problems handler to tolerate combined flags like .problems/active/detailed
+      if (t.startsWith('problems/')){
+        const segs = t.split('/').slice(1).map(x=>x.toLowerCase());
+        const active = segs.includes('active') || segs.includes('current');
+        const detailed = segs.includes('detailed') || segs.includes('details') || segs.includes('detail');
+        const j = await apiQuick('problems', Object.assign({}, active?{status:'active'}:{}, detailed?{detail:1}:{}) );
+        const probs = j?.problems || [];
+        return detailed ? fmtProblemsDetailed(probs, active) : fmtProblems(probs, active);
       }
       // vitals
       if (t.startsWith('vitals')){
@@ -319,7 +348,7 @@
         for(let i=1;i<parts.length;i++){ const p=parts[i]; if(/^\d+$/.test(p)) days=parseInt(p,10); else if(p.startsWith('since=')) start=parseNaturalDate(p.split('=',2)[1], false); else if(p.startsWith('start=')) start=parseNaturalDate(p.split('=',2)[1], false); else if(p.startsWith('end=')) end=parseNaturalDate(p.split('=',2)[1], true); }
         if(days != null){ const now=new Date(); const startDt=new Date(now); startDt.setDate(now.getDate()-Math.max(0,days)); start = startDt.toISOString().slice(0,10); end = now.toISOString().slice(0,10); }
         const qs = new URLSearchParams(); if(start) qs.set('start', start); if(end) qs.set('end', end);
-        const j = await getJson('/quick/patient/vitals'+(qs.toString()? ('?'+qs.toString()):''));
+        const j = await apiQuick('vitals', Object.fromEntries(qs));
         const vitals = j?.vitals || {};
         const md = fmtVitalsTable(vitals);
         return { markdown: md, replace: md };
@@ -362,12 +391,12 @@
         }
         // New: if user specified specific tests and no date bounds, default to all results
         if (filters.length && days==null && !start && !end && !since && allParam==null){ allParam = 1; }
-        const qs = new URLSearchParams();
+  const qs = new URLSearchParams();
         if(filters.length) qs.set('names', filters.join(','));
         if(days != null) qs.set('days', String(Math.max(0,days)));
         if(since && !start) start = since; if(start) qs.set('start', start); if(end) qs.set('end', end);
         if(allParam!=null) qs.set('all', String(allParam));
-        const j = await getJson('/quick/patient/labs'+(qs.toString()? ('?'+qs.toString()):''));
+  const j = await apiQuick('labs', Object.fromEntries(qs));
         let labs = j?.labs || [];
         // Client-side filter when specific tests requested
         if (filters.length){

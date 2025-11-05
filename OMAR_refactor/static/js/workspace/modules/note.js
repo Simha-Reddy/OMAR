@@ -628,11 +628,18 @@ window.WorkspaceModules['Note'] = {
         if (!selector) return;
         try {
             let data = null;
-            // Load bundled defaults; no legacy server prompt endpoint
+            // Prefer server aggregation from static/prompts/note_scribe_prompts
             try {
-                const r2 = await fetch('/static/prompts/default_prompts.json', { cache: 'no-store' });
-                if (r2.ok) data = await r2.json();
+                const r1 = await fetch('/get_prompts', { cache: 'no-store' });
+                if (r1.ok) data = await r1.json();
             } catch(_e) {}
+            // Fallback to bundled JSON defaults
+            if (!data || typeof data !== 'object' || !Object.keys(data).length) {
+                try {
+                    const r2 = await fetch('/static/prompts/default_prompts.json', { cache: 'no-store' });
+                    if (r2.ok) data = await r2.json();
+                } catch(_e) {}
+            }
             if (!data || typeof data !== 'object' || !Object.keys(data).length) {
                 // Final fallback: a single simple prompt
                 data = {
