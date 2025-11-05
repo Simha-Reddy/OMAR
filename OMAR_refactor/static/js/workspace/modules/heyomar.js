@@ -53,10 +53,8 @@
           <span class="hey-ask-inline">
             <input class="hey-ask-input" type="text" placeholder="Type a question or hold 'Hey, Omar'">
             <button class="hey-ask-btn">Ask</button>
+            <button class="hey-reset-btn" title="Start a new chat" aria-label="Reset chat">⟳</button>
             <button class="hey-summary-btn" title="Generate a one-line clinical summary">Summary</button>
-            <label style="display:inline-flex; align-items:center; gap:6px; margin-left:8px; white-space:nowrap; font-size:12px; opacity:0.9;">
-              <input type="checkbox" class="hey-deep-toggle" /> Deep Answer
-            </label>
             <span class="hey-voice-status voice-status" aria-live="polite"></span>
           </span>
         </div>
@@ -79,7 +77,8 @@
     const st = ensureState(container);
     const q = (sel)=> container.querySelector(sel);
     const input = q('.hey-ask-input');
-    const askBtn = q('.hey-ask-btn');
+  const askBtn = q('.hey-ask-btn');
+  const resetBtn = q('.hey-reset-btn');
     const sumBtn = q('.hey-summary-btn');
     const limit = q('.hey-limit-visible-docs-toggle');
     const deepToggle = q('.hey-deep-toggle');
@@ -89,9 +88,10 @@
     if (limit){ limit.addEventListener('change', ()=>{ st.limitToVisible = !!limit.checked; }); st.limitToVisible = !!limit.checked; }
     if (deepToggle){ st.deepAnswer = !!deepToggle.checked; deepToggle.addEventListener('change', ()=>{ st.deepAnswer = !!deepToggle.checked; }); } else { st.deepAnswer = false; }
     // Start queries only on actual click/Enter
-    if (askBtn){ askBtn.addEventListener('click', ()=> runAsk(container)); }
-    if (input){ input.addEventListener('keyup', (e)=>{ if(e.key==='Enter') runAsk(container); }); }
-    if (sumBtn){ sumBtn.addEventListener('click', ()=> runSummary(container)); }
+  if (askBtn){ askBtn.addEventListener('click', ()=> runAsk(container)); }
+  if (input){ input.addEventListener('keyup', (e)=>{ if(e.key==='Enter') runAsk(container); }); }
+  if (sumBtn){ sumBtn.addEventListener('click', ()=> runSummary(container)); }
+  if (resetBtn){ resetBtn.addEventListener('click', ()=> resetChat(container)); }
     if (answerBox){ answerBox.addEventListener('click', (e)=> handleAnswerClick(container, e)); }
 
     // Modal close + ESC
@@ -126,7 +126,7 @@
       try { window.dispatchEvent(new CustomEvent('heyomar:query-start', { detail: { container, type: 'ask', ts: Date.now() } })); } catch(_e){}
       if (btn) { btn.disabled = true; btn.textContent = 'Asking…'; }
       if (status) status.textContent = 'Asking over notes…';
-      if (box) { box.style.display=''; box.innerHTML=''; box.setAttribute('aria-busy','true'); }
+  if (box) { box.style.display=''; box.setAttribute('aria-busy','true'); box.innerHTML = box.innerHTML || ''; box.innerHTML += `<div class="hey-chat-q" style="margin:8px 0; color:var(--paper-contrast);"><strong>Q:</strong> ${escHtml(text)}</div>`; }
 
       // Render immediate structured data for: "show me ..." (intent) and dot-phrases, but do NOT short-circuit the QA request.
       let hadImmediate = false;
@@ -151,7 +151,7 @@
         }catch(_e){}
       }
 
-      const { replaced, dotReplacements } = await replaceFhirPlaceholdersInQueryDetailed(text, ctrl.signal);
+  const { replaced, dotReplacements } = await replaceFhirPlaceholdersInQueryDetailed(text, ctrl.signal);
       if (!isLive(container)) return; // guard
       if (box && Array.isArray(dotReplacements) && dotReplacements.length){
         const html = renderDotExpansions(dotReplacements);
@@ -215,6 +215,13 @@
 
       // Ask via unified /api/query/ask endpoint (prefer Api.ask helper when available)
       const Api = window.Api || {};
+      // Kick off early RAG results to render list of notes before the final answer
+      let ragEarly = null;
+      try { ragEarly = await (Api.ragResults ? Api.ragResults(replaced, body) : Promise.resolve(null)); } catch(_e){ ragEarly = null; }
+      if (box && ragEarly && Array.isArray(ragEarly.results) && ragEarly.results.length){
+        const listHtml = renderRagList(ragEarly.results);
+        box.style.display=''; box.innerHTML = (box.innerHTML||'') + listHtml; hadImmediate = true;
+      }
       const data = await (Api.ask ? Api.ask(replaced, body) : (async ()=>{
         const res = await fetch('/api/query/ask', { method:'POST', headers:{ 'Content-Type':'application/json', 'X-CSRF-Token': document.querySelector('meta[name="csrf-token"]').getAttribute('content') || '' }, body: JSON.stringify({ query: replaced, ...body }), signal: ctrl.signal });
         const j = await res.json().catch(()=>({}));
@@ -223,7 +230,8 @@
       })());
 
       if (!isLive(container)) return; // guard after await
-  renderAnswer(container, data, { append: !!(hadImmediate || (dotReplacements && dotReplacements.length)) });
+  renderAnswer(container, data, { append: true });
+  try{ if (box) { box.scrollTop = box.scrollHeight; } }catch(_e){}
   // Notify that an answer is ready (success path)
   try { window.dispatchEvent(new CustomEvent('heyomar:answer-ready', { detail: { container, ts: Date.now() } })); } catch(_e){}
       // Bring the Hey OMAR tab to the foreground when the final answer is ready
@@ -278,57 +286,38 @@
     const q = (sel)=> container.querySelector(sel);
     const btn = q('.hey-summary-btn');
     const status = q('.hey-voice-status');
+    const box = q('.hey-answer-box');
     const ctrl = new AbortController(); addController(container, ctrl);
     try{
       try { window.dispatchEvent(new CustomEvent('heyomar:query-start', { detail: { container, type: 'summary', ts: Date.now() } })); } catch(_e){}
-      if (btn) { btn.disabled = true; btn.textContent = 'Summarizing…'; }
-      if (status) status.textContent = 'Loading summary prompt…';
-      const r = await fetch('/load_health_summary_prompt', { cache:'no-store', signal: ctrl.signal });
-      if (!r.ok) throw new Error('Prompt not found');
-      const promptText = await r.text();
-      // Hint at deeper retrieval by enabling deep answer and more documents
-      const st = ensureState(container);
-      st.deepAnswer = true;
-      st.overrideTopK = 16; // Increase recall for Summary
-      // Pre-expand a structured bundle for 6 months to feed the model
+  if (btn) { btn.disabled = true; btn.textContent = 'Summarizing…'; }
+  if (status) status.textContent = 'Summarizing patient…';
+  if (box) { box.style.display=''; box.setAttribute('aria-busy','true'); box.innerHTML = box.innerHTML || ''; box.innerHTML += `<div class=\"hey-chat-q\" style=\"margin:8px 0; color:var(--paper-contrast);\"><strong>Q:</strong> Summary of patient</div>`; }
+      // Use backend summary mode with optional local override
+      const Api = window.Api || {};
+      const override = (function(){ try { return localStorage.getItem('SUMMARY_PROMPT_OVERRIDE') || ''; } catch(_e){ return ''; } })();
+      const body = { mode: 'summary' };
+      if (override && override.trim()) body.prompt_override = override.trim();
+      // Early RAG results
       try{
-        if (window.DotPhrases && DotPhrases.expand){
-          const sixMo = 180;
-          const tokens = [
-            '.meds/active',
-            '.allergies',
-            `.vitals/${sixMo}`,
-            `.labs/a1c,egfr,uacr,cholesterol,ldl,hdl,triglycerides:days=${sixMo}`,
-            `.orders:status=current,type=all,days=${sixMo}`
-          ];
-          const joined = tokens.join('\n');
-          const { replacements } = await DotPhrases.expand(joined);
-          if (Array.isArray(replacements) && replacements.length){
-            const parts = replacements.map(({raw,value})=>{
-              const title = `Requested: ${raw}`;
-              const underline = '='.repeat(title.length);
-              const body = (value && typeof value==='object' && value.markdown) ? String(value.markdown||'') : String(value||'');
-              return `${title}\n${underline}\n${body}`;
-            });
-            let bundle = parts.join('\n\n');
-            if (bundle.length > 20000) bundle = bundle.slice(0,20000) + '\n... (truncated)';
-            st.summaryBundle = bundle;
-            st.preExpandedReplacements = replacements;
-          }
+        const early = await (Api.ragResults ? Api.ragResults('Summary of patient', body) : Promise.resolve(null));
+        if (early && Array.isArray(early.results) && early.results.length){
+          const listHtml = renderRagList(early.results);
+          box.innerHTML = (box.innerHTML||'') + listHtml;
         }
       }catch(_e){}
-  await runAsk(container, promptText);
-  try { window.dispatchEvent(new CustomEvent('heyomar:answer-ready', { detail: { container, type: 'summary', ts: Date.now() } })); } catch(_e){}
-      // Bring Hey OMAR to front for summary as well
-      try{
-        const tab = document.querySelector('.tab-bar [data-module-name="Hey OMAR"], .tab-bar [data-tab-name="Hey OMAR"]');
-        if (tab && typeof tab.click === 'function') tab.click();
-      }catch(_e){}
+      const data = await (Api.ask ? Api.ask('Summarize the patient', body) : Promise.resolve({ answer: 'Summary unavailable', citations: [] }));
+      if (!isLive(container)) return;
+  renderAnswer(container, data, { append: true });
+  try{ if (box){ box.scrollTop = box.scrollHeight; } }catch(_e){}
+      if (status) status.textContent = 'Ready';
+      try { window.dispatchEvent(new CustomEvent('heyomar:answer-ready', { detail: { container, type: 'summary', ts: Date.now() } })); } catch(_e){}
     } catch(e){
       if (!isLive(container)) return;
-      if (status) status.textContent = 'Error: could not load summary prompt';
+      if (status) status.textContent = 'Error during summary';
     } finally {
       if (isLive(container) && btn){ btn.disabled=false; btn.textContent='Summary'; }
+      const box2 = q('.hey-answer-box'); if (box2) box2.removeAttribute('aria-busy');
       try { window.dispatchEvent(new CustomEvent('heyomar:query-finish', { detail: { container, type: 'summary', ts: Date.now() } })); } catch(_e){}
     }
   }
@@ -346,9 +335,10 @@
         docId: c.doc_id || c.id || c.uid || '',
         note_id: c.doc_id || c.id || c.uid || '',
         date: c.date || '',
-        section: c.title || c.section || '',
+        section: c.section || '',
+        title: c.title || c.section || '',
         text: c.preview || c.text || '',
-        page: (typeof c.excerpt === 'number') ? c.excerpt : (i + 1)
+        excerpt: (typeof c.excerpt === 'number') ? c.excerpt : (i + 1)
       }));
     }
     st.lastMatches = Array.isArray(norm) ? norm : [];
@@ -356,14 +346,14 @@
     const matches = st.lastMatches;
     const ansHtmlRaw = mdToHtml(payload.answer || '');
 
-    // Build page map
+    // Build page map (map excerpt/page -> note metadata)
     const pageMap = new Map();
     if (Array.isArray(matches)){
       for (let i=0;i<matches.length;i++){
         const m = matches[i]||{};
         const docId = String(m.note_id || m.doc_id || m.docId || '');
-        const page = (typeof m.page === 'number' && m.page>0) ? m.page : (i+1);
-        if (docId){ pageMap.set(String(page), { docId, text: m.text||'', date: m.date||'', section: m.section||'' }); }
+        const page = (typeof m.excerpt === 'number' && m.excerpt>0) ? m.excerpt : ((typeof m.page === 'number' && m.page>0) ? m.page : (i+1));
+        if (docId){ pageMap.set(String(page), { docId, text: m.text||'', date: m.date||'', title: (m.title||m.section||'') }); }
       }
     }
 
@@ -371,8 +361,8 @@
     if (pageMap.size){
       const buildAnchor = (n)=>{
         const meta = pageMap.get(String(n)); if(!meta) return null;
-        const title = escHtml([meta.date, meta.section].filter(Boolean).join(' — '));
-        return `<a href="#" class="excerpt-citation" data-doc-id="${escHtml(meta.docId)}" data-excerpt="${escHtml(n)}" title="${title}">${escHtml(n)}</a>`;
+        const tip = escHtml([meta.date, meta.title].filter(Boolean).join(' — '));
+        return `<a href="#" class="excerpt-citation" data-doc-id="${escHtml(meta.docId)}" data-excerpt="${escHtml(n)}" data-title="${escHtml(meta.title||'')}" data-date="${escHtml(meta.date||'')}" title="${tip}">${escHtml(n)}</a>`;
       };
       // (Excerpts 1,2-4)
       answerHtml = answerHtml.replace(/\((Excerpts?)\s+([0-9,\s\-]+)\)/gi, (full, label, nums) => {
@@ -391,6 +381,8 @@
         .replace(/\(\s*Excerpt\s+(\d+)\s*,\s*Date:\s*([0-9]{4}(?:-[0-9]{2}(?:-[0-9]{2})?)?)\s*\)/gi, (full,n,d)=>{ const a=buildAnchor(n); return a?`(Excerpt ${a}, Date: ${escHtml(d)})`:full; })
         .replace(/\(\s*Excerpt\s+(\d+)\s*,\s*([0-9]{4}(?:-[0-9]{2}(?:-[0-9]{2})?)?)\s*\)/gi, (full,n,d)=>{ const a=buildAnchor(n); return a?`(Excerpt ${a}, ${escHtml(d)})`:full; })
         .replace(/\(\s*Excerpt\s+(\d+)\s*,\s*([0-9]{4})\s*\)/gi, (full,n,y)=>{ const a=buildAnchor(n); return a?`(Excerpt ${a}, ${escHtml(y)})`:full; });
+      // Also link bare 'Excerpt N' tokens outside parentheses
+      answerHtml = answerHtml.replace(/\bExcerpt\s+(\d+)\b/g, (m,n)=>{ const a=buildAnchor(n); return a ? `Excerpt ${a}` : m; });
     }
 
     // Sources list
@@ -399,9 +391,10 @@
       const seen = new Set(); const items = [];
       for (let i=0;i<matches.length;i++){
         const m = matches[i]||{}; const nid = String(m.note_id || m.doc_id || m.docId || ''); if(!nid) continue;
-        const page = (typeof m.page === 'number' && m.page>0) ? m.page : (i+1); const key = nid+'::'+page; if(seen.has(key)) continue; seen.add(key);
-        const date = escHtml(m.date || ''); const section = escHtml(m.section || ''); const label = [date, section].filter(Boolean).join(' — ');
-        items.push(`<a href="#" class="excerpt-citation" data-doc-id="${escHtml(nid)}" data-excerpt="${page}">[${page}]${label? ' '+label:''}</a>`);
+        const page = (typeof m.excerpt === 'number' && m.excerpt>0) ? m.excerpt : ((typeof m.page === 'number' && m.page>0) ? m.page : (i+1));
+        const key = nid+'::'+page; if(seen.has(key)) continue; seen.add(key);
+        const date = escHtml(m.date || ''); const title = escHtml(m.title || m.section || ''); const label = [date, title].filter(Boolean).join(' — ');
+        items.push(`<a href="#" class="excerpt-citation" data-doc-id="${escHtml(nid)}" data-excerpt="${page}" data-title="${title}" data-date="${date}">[${page}]${label? ' '+label:''}</a>`);
       }
       if (items.length) citesHtml = `<div class="notes-citations">${items.slice(0,10).join(' ')}</div>`;
     }
@@ -414,30 +407,72 @@
   function handleAnswerClick(container, e){
     if (!isLive(container)) return;
     const st = ensureState(container);
+    const modalLink = e.target.closest('a.rag-note-link');
+    if (modalLink){
+      e.preventDefault();
+      const docId = modalLink.getAttribute('data-doc-id') || '';
+      const text = modalLink.getAttribute('data-excerpt-text') || '';
+      const title = modalLink.getAttribute('data-title') || '';
+      const date = modalLink.getAttribute('data-date') || '';
+      if (docId) openExcerptModal(container, { docId, excerptText: text, title, date });
+      return;
+    }
     const a = e.target.closest('a.excerpt-citation'); if(!a) return; e.preventDefault();
     const matches = st.lastMatches || [];
     let docId = a.getAttribute('data-doc-id') || '';
     const pageAttr = a.getAttribute('data-excerpt');
     const hasIndex = a.hasAttribute('data-excerpt-index');
     let excerptText = '';
+    const titleAttr = a.getAttribute('data-title') || '';
+    const dateAttr = a.getAttribute('data-date') || '';
     if (pageAttr){
       const pageStr = String(pageAttr); let found = null;
-      for (const m of matches){ const nid = String(m.note_id || m.doc_id || m.docId || ''); const p = (typeof m.page === 'number') ? String(m.page) : ''; if((docId && nid===docId && p===pageStr) || (!docId && p===pageStr)) { found=m; break; } }
+      for (const m of matches){ const nid = String(m.note_id || m.doc_id || m.docId || ''); const p = (typeof m.excerpt === 'number') ? String(m.excerpt) : ((typeof m.page === 'number') ? String(m.page) : ''); if((docId && nid===docId && p===pageStr) || (!docId && p===pageStr)) { found=m; break; } }
       if (!found && docId){ found = matches.find(m => String(m.note_id || m.doc_id || m.docId || '') === docId); }
       if (found){ excerptText = found.text || ''; if (!docId) docId = String(found.note_id || found.doc_id || found.docId || ''); }
     } else if (hasIndex){
       const idx = Number(a.getAttribute('data-excerpt-index') || '0'); const m = matches[idx] || {}; if(!docId) docId = m.doc_id || m.docId || m.note_id || ''; excerptText = m.text || '';
     }
     if (!docId) return;
-    openExcerptModal(container, { docId, excerptText });
+    openExcerptModal(container, { docId, excerptText, title: titleAttr, date: dateAttr });
   }
 
-  function openExcerptModal(container, { docId, excerptText }){
+  function renderRagList(results){
+    try{
+      const fmtDate = (iso)=>{
+        if (!iso) return '';
+        try{ const d = new Date(iso); if(!isNaN(d)) return `${d.getMonth()+1}/${d.getDate()}/${d.getFullYear()}`; }catch(_e){}
+        const m = String(iso).match(/^(\d{4})-(\d{2})-(\d{2})/); if(m){ return `${parseInt(m[2],10)}/${parseInt(m[3],10)}/${m[1]}`; }
+        return String(iso);
+      };
+      const items = results.map(r => {
+        const docId = String(r.note_id || r.doc_id || r.uid || '');
+        const title = escHtml(r.title || 'Note');
+        const date = escHtml(fmtDate(r.date || ''));
+        const ex = (Array.isArray(r.excerpts) && r.excerpts[0] && r.excerpts[0].text) ? String(r.excerpts[0].text) : '';
+        const exAttr = escHtml(ex);
+        return `<li><a href="#" class="rag-note-link" data-doc-id="${escHtml(docId)}" data-excerpt-text="${exAttr}" data-title="${title}" data-date="${date}">${date ? date + ' — ' : ''}${title}</a></li>`;
+      }).join('');
+      // Use an ordered list without manual numbering to ensure 1..N consistently
+      return `<div class="hey-rag-results"><div style="font-weight:600; margin-bottom:6px;">Notes considered:</div><ol style="margin:0 0 8px 18px; padding:0;">${items}</ol></div>`;
+    }catch(_e){ return ''; }
+  }
+
+  async function resetChat(container){
+    const Api = window.Api || {};
+    try{ await (Api.resetQueryHistory ? Api.resetQueryHistory() : Promise.resolve()); }catch(_e){}
+    try{
+      const box = container.querySelector('.hey-answer-box'); if (box){ box.innerHTML=''; box.style.display='none'; }
+      const st = ensureState(container); if (st){ st.lastMatches = []; }
+    }catch(_e){}
+  }
+
+  function openExcerptModal(container, { docId, excerptText, title, date }){
     if (!isLive(container)) return;
     const modal = container.querySelector('.hey-omar-doc-modal'); if(!modal) return;
     modal.style.display = 'block';
     const titleEl = modal.querySelector('.omar-modal-title'); const contentEl = modal.querySelector('.omar-modal-content');
-    if (titleEl) titleEl.textContent = `Note ${docId}`;
+    if (titleEl) titleEl.textContent = `${(date||'').toString().trim()} — ${(title||'').toString().trim()}`.replace(/^\s+—\s+$/,'') || `Note ${docId}`;
     if (contentEl) contentEl.textContent = 'Loading…';
     try{ modal.querySelector('.omar-modal-close')?.focus(); }catch(_e){}
 

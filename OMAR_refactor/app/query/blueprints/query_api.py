@@ -36,7 +36,7 @@ def ask():
             return jsonify({ 'error': 'Missing query' }), 400
         model = _registry.get(model_id)
         # Pass 'query' to the model; models are responsible for RAG + preface composition
-        result = model.answer({ 'query': query, 'patient': patient, 'session': vista_ctx })
+        result = model.answer({ 'query': query, 'patient': patient, 'session': vista_ctx, 'mode': (data.get('mode') or ''), 'prompt_override': (data.get('prompt_override') or ''), 'prompt_template': (data.get('prompt_template') or '') })
         try:
             # Minimal diagnostics for debugging: do not include PHI
             chunks_cnt = len(result.get('citations') or []) if isinstance(result, dict) else -1
@@ -46,5 +46,63 @@ def ask():
         # Ensure model_id is present
         result['model_id'] = getattr(model, 'model_id', model_id) or model_id
         return jsonify(result)
+    except Exception as e:
+        return jsonify({ 'error': str(e) }), 500
+
+@bp.post('/rag_results')
+def rag_results():
+    try:
+        data = request.get_json(force=True, silent=True) or {}
+        query = (data.get('query') or data.get('prompt') or '').strip()
+        model_id = (data.get('model_id') or 'default').strip()
+        patient = data.get('patient') or {}
+        # Normalize DFN from payload or session
+        try:
+            dfn = (patient.get('DFN') or patient.get('dfn') or patient.get('localId') or patient.get('patientId') or '').strip()
+        except Exception:
+            dfn = ''
+        if not dfn:
+            try:
+                meta = flask_session.get('patient_meta') or {}
+                dfn = str(meta.get('dfn') or '').strip()
+            except Exception:
+                dfn = ''
+        if dfn:
+            patient['DFN'] = dfn
+        if not query:
+            return jsonify({ 'results': [] })
+        station = str(flask_session.get('station') or os.getenv('DEFAULT_STATION','500'))
+        duz = str(flask_session.get('duz') or os.getenv('DEFAULT_DUZ','983'))
+        vista_ctx = { 'station': station, 'duz': duz }
+        model = _registry.get(model_id)
+        if hasattr(model, 'rag_results') and callable(getattr(model, 'rag_results')):
+            out = model.rag_results({ 'query': query, 'patient': patient, 'session': vista_ctx })  # type: ignore
+            if isinstance(out, dict) and 'results' in out:
+                return jsonify(out)
+        return jsonify({ 'results': [] })
+    except Exception as e:
+        return jsonify({ 'error': str(e) }), 500
+
+@bp.post('/reset')
+def reset_chat():
+    try:
+        data = request.get_json(force=True, silent=True) or {}
+        model_id = (data.get('model_id') or 'default').strip()
+        patient = data.get('patient') or {}
+        try:
+            dfn = (patient.get('DFN') or patient.get('dfn') or patient.get('localId') or patient.get('patientId') or '').strip()
+        except Exception:
+            dfn = ''
+        if not dfn:
+            try:
+                meta = flask_session.get('patient_meta') or {}
+                dfn = str(meta.get('dfn') or '').strip()
+            except Exception:
+                dfn = ''
+        model = _registry.get(model_id)
+        # Best-effort reset if model exposes reset_history
+        if hasattr(model, 'reset_history') and callable(getattr(model, 'reset_history')):
+            getattr(model, 'reset_history')(dfn)
+        return jsonify({ 'status': 'ok' })
     except Exception as e:
         return jsonify({ 'error': str(e) }), 500

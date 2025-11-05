@@ -42,6 +42,8 @@ class DefaultQueryModelImpl:
             'bm25': bm25,
             'vectors': vectors,
             'updated_at': time.time(),
+            # preserve history if existed
+            'history': (self._patient_cache.get(str(dfn)) or {}).get('history', []),
         }
 
     def _build_chunks_from_document_index(self, dfn: str) -> List[Dict[str, Any]]:
@@ -66,12 +68,17 @@ class DefaultQueryModelImpl:
                 if not full:
                     continue
                 meta = meta_map.get(doc_id, {}) if isinstance(meta_map, dict) else {}
-                title = meta.get('title') or ''
+                # Prefer nationalTitle for tagging; keep local title for display
+                title_local = meta.get('title') or ''
+                title_nat = meta.get('nationalTitle') or ''
+                title = title_local
                 date = meta.get('date') or ''
                 text_clean = remove_boilerplate_phrases(full)
                 chunks = sliding_window_chunk(text_clean, window_size=1600, step_size=800)
                 for ch in chunks:
                     ch['title'] = title
+                    if title_nat:
+                        ch['title_nat'] = title_nat
                     ch['date'] = date
                     ch['note_id'] = str(doc_id)
                 all_chunks.extend(chunks)
@@ -84,6 +91,7 @@ class DefaultQueryModelImpl:
         query = (payload.get('query') or payload.get('prompt') or '').strip()
         patient = payload.get('patient')  # optional dict expected to contain DFN/localId
         sess = payload.get('session') or {}
+        mode = str(payload.get('mode') or '').strip().lower()
         if not query:
             return { 'answer': '', 'citations': [], 'model_id': self.model_id }
 
@@ -116,7 +124,20 @@ class DefaultQueryModelImpl:
                     self._set_cached(str(dfn), chunks, bm25)
             # Retrieval uses raw user query
             if chunks and bm25:
-                top_chunks = hybrid_search(query, chunks, vectors=None, bm25_index=bm25, top_k=10)
+                # Precompute tag boosts per chunk if a policy is provided (or summary mode)
+                try:
+                    from .services.title_tagging import score_for_title, DEFAULT_TAG_POLICY
+                    tag_policy = payload.get('tag_policy') or ({**DEFAULT_TAG_POLICY} if mode == 'summary' else None)
+                    if tag_policy:
+                        for ch in chunks:
+                            ttl = ch.get('title_nat') or ch.get('title') or ''
+                            try:
+                                ch['tag_boost'] = float(score_for_title(ttl, tag_policy))
+                            except Exception:
+                                ch['tag_boost'] = 0.0
+                except Exception:
+                    pass
+                top_chunks = hybrid_search(query, chunks, vectors=None, bm25_index=bm25, top_k=12)
             else:
                 top_chunks = []
         else:
@@ -125,7 +146,23 @@ class DefaultQueryModelImpl:
             rag = RagEngine(window_size=1600, step_size=800)
             rag.build_chunks_from_vpr_documents(vpr_docs)
             rag.index()
-            top_chunks = rag.retrieve(query, top_k=10)
+            top_chunks = rag.retrieve(query, top_k=12)
+
+        # Optional: re-rank by title tags (deprioritize nursing/admin/education for summaries by default)
+        try:
+            from .services.title_tagging import score_for_title, DEFAULT_TAG_POLICY
+            tag_policy = payload.get('tag_policy') or ({**DEFAULT_TAG_POLICY} if mode == 'summary' else None)
+            if tag_policy and isinstance(top_chunks, list) and top_chunks:
+                # Stable sort by tag score (higher is better), preserving prior ordering on ties
+                def _tag_score(ch):
+                    ttl = ch.get('title') or ''
+                    try:
+                        return float(score_for_title(ttl, tag_policy))
+                    except Exception:
+                        return 0.0
+                top_chunks = sorted(top_chunks, key=_tag_score, reverse=True)
+        except Exception:
+            pass
 
         # 3) Build clinical preface (demographics, active problems/meds, and today's DOS), then compose LLM prompt
         # Best-effort extraction via VPR domains; silent on errors
@@ -244,37 +281,166 @@ class DefaultQueryModelImpl:
             preface = ''
 
         # 3b) Compose compact system instruction and final prompt with context excerpts
+        # Select system prompt: summary mode override, explicit override, else default
+        system = ''
         try:
-            system = (self._prompt_path.read_text(encoding='utf-8')).strip()
+            mode = str(payload.get('mode') or '').strip().lower()
+            override = (payload.get('prompt_override') or '').strip()
+            template_name = (payload.get('prompt_template') or '').strip() or 'health_summary_prompt.txt'
+            if override:
+                system = override
+            elif mode == 'summary':
+                # Load from OMAR_refactor/templates
+                from pathlib import Path as _P
+                try:
+                    templates_dir = _P(__file__).resolve().parents[4] / 'templates'
+                    system = (templates_dir / template_name).read_text(encoding='utf-8')
+                except Exception:
+                    system = ''
+            if not system:
+                system = (self._prompt_path.read_text(encoding='utf-8')).strip()
         except Exception:
             system = (
                 'You are a clinical assistant. Use the provided excerpts to answer succinctly. '
                 'Cite each fact with (Excerpt N) matching the excerpt number shown.'
             )
+        # Build a stable note -> Excerpt number mapping based on first appearance order
+        note_order: Dict[str, int] = {}
+        order_ctr = 1
+        for c in top_chunks:
+            nid = str(c.get('note_id') or '')
+            if nid and nid not in note_order:
+                note_order[nid] = order_ctr
+                order_ctr += 1
         context_blobs: List[str] = []
         for c in top_chunks:
-            pg = c.get('page', '?')
+            nid = str(c.get('note_id') or '')
+            ex = note_order.get(nid, '?')
             dt = c.get('date') or ''
             ttl = c.get('title') or ''
-            hdr = f"### Source: (Excerpt {pg}{', Date: ' + dt if dt else ''}{', Title: ' + ttl if ttl else ''})"
+            hdr = f"### Source: (Excerpt {ex}{', Date: ' + dt if dt else ''}{', Title: ' + ttl if ttl else ''})"
             context_blobs.append(hdr + "\n" + (c.get('text') or '')[:1600])
         context = "\n\n".join(context_blobs)
+        # Include short chat history (prior Q&A) for continuity
+        prior_block = ''
+        try:
+            if dfn:
+                entry = self._patient_cache.get(str(dfn)) or {}
+                hist = entry.get('history') or []
+                if isinstance(hist, list) and hist:
+                    lines = ["Prior questions and answers (most recent first):"]
+                    for qa in reversed(hist[-4:]):
+                        qh = str(qa.get('q') or '').strip()
+                        ah = str(qa.get('a') or '').strip()
+                        if qh and ah:
+                            lines.append(f"Q: {qh}")
+                            lines.append(f"A: {ah}")
+                            lines.append("")
+                    prior_block = "\n".join(lines).strip()
+        except Exception:
+            prior_block = ''
+
         augmented_query = (preface + query) if preface else query
-        final_prompt = f"{system}\n\nQuestion: \"{augmented_query}\"\n\nBelow are excerpts from the chart:\n{context}"
+        final_prompt = f"{system}\n\nQuestion: \"{augmented_query}\"\n\n{(prior_block + '\n\n') if prior_block else ''}Below are excerpts from the chart:\n{context}"
         answer_text = llm.chat(final_prompt)
 
         # 4) Prepare citations list
         citations = []
         for c in top_chunks:
+            nid = str(c.get('note_id') or '')
             citations.append({
-                'excerpt': c.get('page', '?'),
+                'excerpt': note_order.get(nid, '?'),
                 'note_id': c.get('note_id'),
                 'title': c.get('title'),
                 'date': c.get('date'),
                 'preview': (c.get('text') or '')[:200]
             })
 
+        # Persist chat history per DFN and include prior Q&A in future prompts
+        try:
+            if dfn:
+                entry = self._patient_cache.get(str(dfn)) or {}
+                hist = entry.get('history') or []
+                if isinstance(hist, list):
+                    # Simple append; cap to last 10
+                    hist.append({'q': query, 'a': answer_text})
+                    if len(hist) > 10:
+                        hist[:] = hist[-10:]
+                else:
+                    hist = [{'q': query, 'a': answer_text}]
+                entry['history'] = hist
+                self._patient_cache[str(dfn)] = { **entry }
+        except Exception:
+            pass
+
         return { 'answer': answer_text, 'citations': citations, 'model_id': self.model_id }
+
+    def rag_results(self, payload: Dict[str, Any]) -> Dict[str, Any]:
+        """Return early RAG results (notes/excerpts) for the given query. If DFN or index not available, return empty list.
+        Response: { results: [ { note_id, title, date, excerpts: [ { page, text } ] } ] }
+        """
+        query = (payload.get('query') or payload.get('prompt') or '').strip()
+        patient = payload.get('patient') or {}
+        if not query:
+            return { 'results': [] }
+        dfn = ''
+        try:
+            dfn = (patient.get('DFN') or patient.get('dfn') or patient.get('localId') or patient.get('patientId') or '').strip()
+        except Exception:
+            dfn = ''
+        if not dfn:
+            return { 'results': [] }
+        cached = self._get_cached(str(dfn))
+        chunks: List[Dict[str, Any]] = []
+        bm25: Dict[str, Any] | None = None
+        if cached and (cached.get('chunks')):
+            chunks = list(cached.get('chunks') or [])
+            bm25 = cached.get('bm25')  # type: ignore
+        else:
+            chunks = self._build_chunks_from_document_index(str(dfn))
+            bm25 = build_bm25_index(chunks) if chunks else None
+            if chunks and bm25:
+                self._set_cached(str(dfn), chunks, bm25)
+        if not (chunks and bm25):
+            return { 'results': [] }
+        top_chunks = hybrid_search(query, chunks, vectors=None, bm25_index=bm25, top_k=12)
+        # Group by note
+        by_note: Dict[str, Dict[str, Any]] = {}
+        for ch in top_chunks:
+            nid = str(ch.get('note_id') or '')
+            if not nid:
+                continue
+            rec = by_note.get(nid)
+            if not rec:
+                rec = { 'note_id': nid, 'title': ch.get('title') or '', 'date': ch.get('date') or '', 'excerpts': [] }
+                by_note[nid] = rec
+            rec['excerpts'].append({ 'page': ch.get('page') or '?', 'text': (ch.get('text') or '')[:300] })
+        # Order by first appearance in top_chunks
+        order: List[Dict[str, Any]] = []
+        seen = set()
+        for ch in top_chunks:
+            nid = str(ch.get('note_id') or '')
+            if not nid or nid in seen:
+                continue
+            seen.add(nid)
+            if nid in by_note:
+                order.append(by_note[nid])
+        # Attach stable 1-based index (Excerpt number) for UI and server consistency
+        for i, rec in enumerate(order, start=1):
+            rec['index'] = i
+        return { 'results': order }
+
+    def reset_history(self, dfn: str | None = None):
+        try:
+            if not dfn:
+                return
+            key = str(dfn)
+            if key in self._patient_cache:
+                entry = self._patient_cache.get(key) or {}
+                entry['history'] = []
+                self._patient_cache[key] = { **entry }
+        except Exception:
+            pass
 
 # Export symbol for registry
 model: QueryModel = DefaultQueryModelImpl()

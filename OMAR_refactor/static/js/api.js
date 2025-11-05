@@ -83,6 +83,20 @@ async function ask(query, extra = {}) {
   return res.json();
 }
 
+async function ragResults(query, extra = {}) {
+  const body = { query, ...extra };
+  try { body.patient = Object.assign({}, body.patient || {}, { DFN: requireDFN() }); } catch {}
+  const res = await csrfFetch('/api/query/rag_results', { method: 'POST', body: JSON.stringify(body) });
+  try { return await res.json(); } catch { return { results: [] }; }
+}
+
+async function resetQueryHistory(extra = {}) {
+  const body = { patient: { DFN: '' }, ...extra };
+  try { body.patient = Object.assign({}, body.patient || {}, { DFN: requireDFN() }); } catch {}
+  const res = await csrfFetch('/api/query/reset', { method: 'POST', body: JSON.stringify(body) });
+  try { return await res.json(); } catch { return { status: 'error' }; }
+}
+
 // Documents helpers
 async function documentsSearch(params) {
   const dfn = requireDFN();
@@ -102,12 +116,8 @@ async function documentsTextBatch(ids) {
 
 // RAG: embed a specific list of documents for the current patient
 async function embedDocuments(ids) {
-  const dfn = requireDFN();
-  const body = { dfn, ids: Array.isArray(ids) ? ids.map(String) : [] };
-  if (!body.ids.length) return { status: 'no-op' };
-  // RAG endpoints are under /api/rag
-  const res = await csrfFetch(`/api/rag/index/embed-docs`, { method: 'POST', body: JSON.stringify(body) });
-  try { return await res.json(); } catch { return { status: 'error' }; }
+  // Backward-compat no-op: embedding is handled in-model now
+  return { status: 'removed' };
 }
 
 const Api = {
@@ -118,6 +128,8 @@ const Api = {
   list,
   vpr,
   ask,
+  ragResults,
+  resetQueryHistory,
   csrfFetch,
   documentsSearch,
   documentsTextBatch,

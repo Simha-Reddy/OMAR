@@ -98,6 +98,8 @@ class DocumentSearchIndex:
             dtype = str(q.get('documentType') or '')
             dclass = str(q.get('documentClass') or '')
             date = str(q.get('date') or '')
+            # national title from quick if present
+            nt = str(q.get('nationalTitle') or '')
             full = ''
             if isinstance(r, dict):
                 try:
@@ -106,7 +108,7 @@ class DocumentSearchIndex:
                 except Exception:
                     full = ''
             # store
-            self.meta[doc_id] = { 'title': title, 'author': author, 'type': dtype, 'class': dclass, 'date': date }
+            self.meta[doc_id] = { 'title': title, 'author': author, 'type': dtype, 'class': dclass, 'date': date, 'nationalTitle': nt }
             self.text[doc_id] = full
             # index tokens
             toks = self._tokenize(full)

@@ -255,6 +255,12 @@ def hybrid_search(query: str, chunks: List[Dict[str, Any]], vectors: Optional[np
                     boost += 0.12
         except Exception:
             pass
+        # Optional per-chunk tag boost (precomputed by provider based on nationalTitle/localTitle)
+        try:
+            tb = float(chunks[i].get('tag_boost') or 0.0)
+            boost += tb
+        except Exception:
+            pass
         combined[i] = base + boost
 
     ordered = sorted(combined.keys(), key=lambda x: combined[x], reverse=True)
@@ -264,7 +270,7 @@ def hybrid_search(query: str, chunks: List[Dict[str, Any]], vectors: Optional[np
         if not (0 <= int(i) < len(chunks)):
             continue
         nid = str(chunks[i].get('note_id') or chunks[i].get('chunk_id') or i)
-        if seen_note.get(nid, 0) >= 2:  # cap 2 excerpts per note
+        if seen_note.get(nid, 0) >= 3:  # cap 3 excerpts per note
             continue
         results.append(chunks[i])
         seen_note[nid] = seen_note.get(nid, 0) + 1

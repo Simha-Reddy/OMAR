@@ -162,11 +162,8 @@ def create_app():
         from .query.blueprints.query_api import bp as query_bp
     except Exception:
         query_bp = None
-    # RAG API (optional if module not available)
-    try:
-        from .query.blueprints.rag_api import bp as rag_bp
-    except Exception:
-        rag_bp = None
+    # RAG API removed in favor of in-model retrieval via /api/query
+    rag_bp = None
     # Scribe API (optional until implemented)
     try:
         from .blueprints.scribe_api import bp as scribe_bp
@@ -199,8 +196,7 @@ def create_app():
     app.register_blueprint(patient_bp, url_prefix='/api/patient')
     if query_bp is not None:
         app.register_blueprint(query_bp, url_prefix='/api/query')
-    if rag_bp is not None:
-        app.register_blueprint(rag_bp, url_prefix='/api/rag')
+    # rag_bp intentionally not registered
     if scribe_bp is not None:
         app.register_blueprint(scribe_bp, url_prefix='/api/scribe')
     if scribe_note_bp is not None:

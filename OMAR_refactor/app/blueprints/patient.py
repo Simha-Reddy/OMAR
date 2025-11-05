@@ -496,14 +496,8 @@ def documents_quick(dfn: str):
         vpr = svc.get_vpr_raw(dfn, 'document', params={'text': '1'})
         quick_list = svc.get_documents_quick(dfn)
 
-        # Proactively build indices used by Query default model and Documents search
+        # Proactively build keyword index if not present (lazy in search too)
         try:
-            # Build chunk BM25 for RAG
-            rag_store.ensure_index(str(dfn), vpr)
-        except Exception:
-            pass
-        try:
-            # Build keyword index if not present (lazy in search too)
             _ = get_or_build_index_for_dfn(str(dfn))
         except Exception:
             pass
@@ -578,11 +572,7 @@ def documents_quick(dfn: str):
                     obj['encounter'] = enc
             out.append(obj)
 
-        # Kick off selective embeddings per policy (non-blocking best-effort)
-        try:
-            rag_store.embed_docs_policy(str(dfn), vpr)
-        except Exception:
-            pass
+        # No background embedding; RAG uses the keyword index's in-memory texts
 
         return jsonify(out if (include_raw or include_text or include_enc or class_filters or type_filters) else quick_list)
     except Exception as e:
@@ -687,13 +677,7 @@ def documents_list_envelope(dfn: str):
             except Exception:
                 pass
 
-        # Proactively build indices and kick off embeddings, using the canonical 'document' domain for RAG
-        try:
-            vpr_docs = svc.get_vpr_raw(dfn, 'document', params={'text': '1'})
-            rag_store.ensure_index(str(dfn), vpr_docs)
-            rag_store.embed_docs_policy(str(dfn), vpr_docs)
-        except Exception:
-            pass
+        # Proactively build keyword index (optional)
         try:
             _ = get_or_build_index_for_dfn(str(dfn))
         except Exception:
