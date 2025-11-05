@@ -11,6 +11,15 @@
   const escHtml = (s)=> String(s ?? '').replace(/[&<>]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;'}[c] || ''));
   const mdToHtml = (s)=> (window.marked && typeof window.marked.parse === 'function') ? window.marked.parse(String(s)) : escHtml(String(s)).replace(/\n/g,'<br>');
   const nowId = ()=> `hey-${Date.now().toString(36)}-${Math.random().toString(36).slice(2,8)}`;
+  const fmtNow = ()=>{ try{ return new Date().toLocaleString(undefined, { dateStyle:'medium', timeStyle:'short' }); }catch(_e){ try{ return new Date().toLocaleString(); }catch(_e2){ return new Date().toString(); } } };
+  const renderDivider = (ts)=>{
+    const t = escHtml(ts||fmtNow());
+    return `<div class="hey-chat-divider" style="margin:14px 0 10px; display:flex; align-items:center; gap:8px;">
+      <hr style="flex:1; border:none; border-top:1px solid var(--paper-border);" />
+      <span class="hey-chat-timestamp" style="font-size:12px; color:#666; white-space:nowrap;">${t}</span>
+      <hr style="flex:1; border:none; border-top:1px solid var(--paper-border);" />
+    </div>`;
+  };
 
   function getState(container){ return (container && container.__heyState) || null; }
   function ensureState(container){
@@ -29,7 +38,8 @@
         .hey-omar-root { display:flex; flex-direction:column; height:100%; min-height:0; position:relative; }
         .hey-answer-box { flex:1 1 auto; min-height:0; overflow:auto; padding:0; border:none !important; background:transparent !important; margin:0; max-height:none !important; }
         .heyomar-controls { flex:0 0 auto; padding-top:8px; margin-top:auto; }
-        .heyomar-controls .hey-ask-inline { display:flex; align-items:center; gap:8px; flex-wrap:nowrap; width:100%; overflow:hidden; }
+  .heyomar-controls .hey-ask-inline { display:flex; align-items:center; gap:8px; flex-wrap:nowrap; width:100%; overflow:hidden; }
+  .hey-provider-select { flex:0 0 auto; max-width:180px; }
         .hey-ask-input { flex:1 1 auto; min-width:160px; max-width:none; box-sizing:border-box; }
   /* Let global button styles apply; allow labels to wrap when needed */
   .heyomar-controls button { white-space: normal; padding:6px 10px; font-size:13px; }
@@ -51,6 +61,7 @@
         <div class="hey-answer-box markdown-box" style="display:none;"></div>
         <div class="heyomar-controls">
           <span class="hey-ask-inline">
+            <select class="hey-provider-select" title="Model provider" aria-label="Model provider"></select>
             <input class="hey-ask-input" type="text" placeholder="Type a question or hold 'Hey, Omar'">
             <button class="hey-ask-btn">Ask</button>
             <button class="hey-reset-btn" title="Start a new chat" aria-label="Reset chat">⟳</button>
@@ -77,6 +88,7 @@
     const st = ensureState(container);
     const q = (sel)=> container.querySelector(sel);
     const input = q('.hey-ask-input');
+    const modelSel = q('.hey-provider-select');
   const askBtn = q('.hey-ask-btn');
   const resetBtn = q('.hey-reset-btn');
     const sumBtn = q('.hey-summary-btn');
@@ -86,6 +98,29 @@
     const modal = q('.hey-omar-doc-modal');
 
     if (limit){ limit.addEventListener('change', ()=>{ st.limitToVisible = !!limit.checked; }); st.limitToVisible = !!limit.checked; }
+    // Provider select: fetch from server and persist selection
+    (async ()=>{
+      const fallback = [ { model_id:'default', name:'default' }, { model_id:'template', name:'template' } ];
+      let list = fallback;
+      try{
+        const r = await fetch('/api/query/providers', { credentials:'same-origin', cache:'no-store' });
+        const j = await r.json().catch(()=>({ providers: [] }));
+        if (j && Array.isArray(j.providers) && j.providers.length) list = j.providers;
+      }catch(_e){ /* use fallback */ }
+      try{
+        const saved = localStorage.getItem('HEY_OMAR_MODEL_ID') || 'default';
+        if (modelSel){
+          modelSel.innerHTML = list.map(p=>`<option value="${String(p.model_id)}">${String(p.name||p.model_id)}</option>`).join('');
+          // Select saved if present, else default
+          const hasSaved = list.some(p=> String(p.model_id)===String(saved));
+          modelSel.value = hasSaved ? saved : (list[0] ? String(list[0].model_id) : 'default');
+        }
+        st.modelId = (modelSel && modelSel.value) ? String(modelSel.value) : (saved || 'default');
+      }catch(_e){ st.modelId = 'default'; }
+      if (modelSel){ modelSel.addEventListener('change', ()=>{
+        try{ const v = String(modelSel.value||'default'); localStorage.setItem('HEY_OMAR_MODEL_ID', v); st.modelId = v; }catch(_e){ st.modelId = String(modelSel.value||'default'); }
+      }); }
+    })();
     if (deepToggle){ st.deepAnswer = !!deepToggle.checked; deepToggle.addEventListener('change', ()=>{ st.deepAnswer = !!deepToggle.checked; }); } else { st.deepAnswer = false; }
     // Start queries only on actual click/Enter
   if (askBtn){ askBtn.addEventListener('click', ()=> runAsk(container)); }
@@ -126,7 +161,14 @@
       try { window.dispatchEvent(new CustomEvent('heyomar:query-start', { detail: { container, type: 'ask', ts: Date.now() } })); } catch(_e){}
       if (btn) { btn.disabled = true; btn.textContent = 'Asking…'; }
       if (status) status.textContent = 'Asking over notes…';
-  if (box) { box.style.display=''; box.setAttribute('aria-busy','true'); box.innerHTML = box.innerHTML || ''; box.innerHTML += `<div class="hey-chat-q" style="margin:8px 0; color:var(--paper-contrast);"><strong>Q:</strong> ${escHtml(text)}</div>`; }
+  if (box) {
+        box.style.display=''; box.setAttribute('aria-busy','true');
+        let clearedIntro=false;
+        try{ if (box.getAttribute('data-hey-intro')==='1'){ box.innerHTML=''; box.removeAttribute('data-hey-intro'); clearedIntro=true; } }catch(_e){}
+        if (!clearedIntro && box.innerHTML && box.innerHTML.trim()){ box.innerHTML += renderDivider(fmtNow()); }
+        box.innerHTML = box.innerHTML || '';
+        box.innerHTML += `<div class="hey-chat-q" style="margin:8px 0; color:var(--paper-contrast);"><strong>Q:</strong> ${escHtml(text)}</div>`;
+      }
 
       // Render immediate structured data for: "show me ..." (intent) and dot-phrases, but do NOT short-circuit the QA request.
       let hadImmediate = false;
@@ -210,6 +252,7 @@
       }
 
   const body = { ...baseBody };
+    try{ const st2=ensureState(container); if (st2 && st2.modelId) body.model_id = st2.modelId; }catch(_e){}
       if (structuredSections) body.structured_sections = structuredSections;
   // deep_answer deprecated; do not send
 
@@ -217,7 +260,7 @@
       const Api = window.Api || {};
       // Kick off early RAG results to render list of notes before the final answer
       let ragEarly = null;
-      try { ragEarly = await (Api.ragResults ? Api.ragResults(replaced, body) : Promise.resolve(null)); } catch(_e){ ragEarly = null; }
+  try { ragEarly = await (Api.ragResults ? Api.ragResults(replaced, body) : Promise.resolve(null)); } catch(_e){ ragEarly = null; }
       if (box && ragEarly && Array.isArray(ragEarly.results) && ragEarly.results.length){
         const listHtml = renderRagList(ragEarly.results);
         box.style.display=''; box.innerHTML = (box.innerHTML||'') + listHtml; hadImmediate = true;
@@ -292,11 +335,19 @@
       try { window.dispatchEvent(new CustomEvent('heyomar:query-start', { detail: { container, type: 'summary', ts: Date.now() } })); } catch(_e){}
   if (btn) { btn.disabled = true; btn.textContent = 'Summarizing…'; }
   if (status) status.textContent = 'Summarizing patient…';
-  if (box) { box.style.display=''; box.setAttribute('aria-busy','true'); box.innerHTML = box.innerHTML || ''; box.innerHTML += `<div class=\"hey-chat-q\" style=\"margin:8px 0; color:var(--paper-contrast);\"><strong>Q:</strong> Summary of patient</div>`; }
+  if (box) {
+        box.style.display=''; box.setAttribute('aria-busy','true');
+        let clearedIntro=false;
+        try{ if (box.getAttribute('data-hey-intro')==='1'){ box.innerHTML=''; box.removeAttribute('data-hey-intro'); clearedIntro=true; } }catch(_e){}
+        if (!clearedIntro && box.innerHTML && box.innerHTML.trim()){ box.innerHTML += renderDivider(fmtNow()); }
+        box.innerHTML = box.innerHTML || '';
+        box.innerHTML += `<div class=\"hey-chat-q\" style=\"margin:8px 0; color:var(--paper-contrast);\"><strong>Q:</strong> Summary of patient</div>`;
+      }
       // Use backend summary mode with optional local override
       const Api = window.Api || {};
       const override = (function(){ try { return localStorage.getItem('SUMMARY_PROMPT_OVERRIDE') || ''; } catch(_e){ return ''; } })();
-      const body = { mode: 'summary' };
+  const body = { mode: 'summary' };
+  try{ const st2=ensureState(container); if (st2 && st2.modelId) body.model_id = st2.modelId; }catch(_e){}
       if (override && override.trim()) body.prompt_override = override.trim();
       // Early RAG results
       try{
@@ -460,7 +511,7 @@
 
   async function resetChat(container){
     const Api = window.Api || {};
-    try{ await (Api.resetQueryHistory ? Api.resetQueryHistory() : Promise.resolve()); }catch(_e){}
+  try{ const st=ensureState(container); const extra = st && st.modelId ? { model_id: st.modelId } : {}; await (Api.resetQueryHistory ? Api.resetQueryHistory(extra) : Promise.resolve()); }catch(_e){}
     try{
       const box = container.querySelector('.hey-answer-box'); if (box){ box.innerHTML=''; box.style.display='none'; }
       const st = ensureState(container); if (st){ st.lastMatches = []; }
@@ -582,6 +633,7 @@
       'Tip: You can also use dot-phrases in text: `.labs/a1c:last`, `.labs/a1c:all`, `.vitals/14`, `.orders:status=current,type=labs,days=14`.'
     ].join('\n');
     try{ box.innerHTML = mdToHtml(md); }catch(_e){ box.textContent = md; }
+    try{ box.setAttribute('data-hey-intro','1'); }catch(_e){}
     box.style.display = '';
   }
 

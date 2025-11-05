@@ -282,6 +282,7 @@
 
   // Right side helpers (from explore/right_sidebar.js)
   function titleCase(str){ if(!str||typeof str!=='string') return str; return str.toLowerCase().replace(/\b([a-z])(\w*)/g,(m,a,b)=>a.toUpperCase()+b); }
+  function stripParenCodes(str){ try{ return String(str||'').replace(/\s*\([^)]*\)\s*/g,' ').replace(/\s{2,}/g,' ').trim(); }catch(_e){ return str; } }
   function renderAllergies(listEl, allergies){ if(!allergies||!allergies.length){ listEl.innerHTML='<li class="vital-empty">No allergies on file</li>'; return; } for(const a of allergies){ const li=document.createElement('li'); li.style.cursor='pointer'; const name=titleCase(a.substance||'Allergy'); const crit=a.criticality? ` (${titleCase(String(a.criticality))})` : ''; li.textContent = name + crit; li.addEventListener('click', (e)=>{ e.stopPropagation(); const rows=[]; const recorded = a.recordedDate || a.enteredDate; if(recorded) rows.push(`Recorded: ${fmtDateOnly(recorded)}`); if(a.onsetDateTime||a.onset) rows.push(`Onset: ${fmtDateOnly(a.onsetDateTime||a.onset)}`); if(a.lastOccurrence) rows.push(`Last Occurrence: ${fmtDate(a.lastOccurrence)}`); if(a.clinicalStatus||a.status) rows.push(`Status: ${a.clinicalStatus||a.status}`); if(a.verificationStatus) rows.push(`Verification: ${a.verificationStatus}`); const cats=((a.category||[]).join(', ')); if(cats) rows.push(`Category: ${cats}`); const rx=(a.reactions||[]).flatMap(r=> (r.manifestations||[])); if(Array.isArray(a.reactions) && a.reactions.length && (!rx||!rx.length)){ rows.push('Reactions: '+a.reactions.join('; ')); } else if(rx&&rx.length){ rows.push('Reactions: '+rx.join('; ')); } togglePopover(li, name, rows); }); listEl.appendChild(li); } }
   function medStatusBucket(m){ const s=(m.status||'').toLowerCase(); if(s.includes('discont')||s.includes('stopp')) return 'discontinued'; const now=new Date(); if(s.includes('expired')) return 'expired'; if(m.endDate){ const ed=new Date(m.endDate); if(ed && ed<now) return 'expired'; } if(s.includes('active')) return 'active'; if(s.includes('pending')) return 'pending'; return 'other'; }
   function medDetailRows(m){ const rows=[]; if(m.medClass) rows.push(`Class: ${m.medClass}`); if(m.status) rows.push(`Status: ${titleCase(m.status)}`); if(m.dose) rows.push(`Dose: ${m.dose}`); if(m.route) rows.push(`Route: ${m.route}`); if(m.frequency) rows.push(`Frequency: ${m.frequency}`); if(m.sig) rows.push(`Sig: ${m.sig}`); if(m.startDate) rows.push(`Start: ${fmtDateOnly(m.startDate)}`); if(m.lastFilled) rows.push(`Last Filled: ${fmtDateOnly(m.lastFilled)}`); if(m.endDate) rows.push(`End: ${fmtDateOnly(m.endDate)}`); return rows; }
@@ -292,9 +293,11 @@
     return { count: recent.length };
   }
   function isDiabetesProblem(p){ return /diabetes/i.test((p.name||p.problem||'').toString()); }
-  async function renderProblems(listEl, problems, meds){
+  async function renderProblems(listEl, problems, meds, opts){
+    opts = opts || {};
+    const activeOnly = !!opts.activeOnly;
     if(!problems||!problems.length){
-      listEl.innerHTML='<li class="vital-empty">No problems listed</li>';
+      listEl.innerHTML = `<li class="vital-empty">${activeOnly ? 'No active problems' : 'No problems listed'}</li>`;
       return { count:0 };
     }
     const active=[], inactive=[];
@@ -303,14 +306,15 @@
       const isActive = s.includes('active') && !s.includes('inactive') && !s.includes('resolved');
       (isActive? active:inactive).push(p);
     }
-    const ordered=active.concat(inactive);
+    const ordered = activeOnly ? active : active.concat(inactive);
+    if(!ordered.length){ listEl.innerHTML='<li class="vital-empty">No active problems</li>'; return { count: 0 }; }
     for(const p of ordered){
       const li=document.createElement('li');
       li.style.cursor='pointer';
-      const name=titleCase((p.name||p.problem||'Problem'));
+      const name=titleCase(stripParenCodes(p.name||p.problem||'Problem'));
       const sTxt=(p.status||'').toString().toLowerCase();
       const isAct = sTxt.includes('active') && !sTxt.includes('inactive') && !sTxt.includes('resolved');
-      const status=isAct? '':' (Inactive)';
+      const status = (!activeOnly && !isAct) ? ' (Inactive)' : '';
       li.textContent = name + status;
       li.addEventListener('click', async (e)=>{
         e.stopPropagation();
@@ -598,7 +602,7 @@
       return { det, ul, sum };
     }
 
-  const probs = makeSection('Active Problems'); probs.det.open=true; const pr = Array.isArray(data&&data.problems)? data.problems : []; renderProblems(probs.ul, pr, (data&&data.medications)||[]).then(res=>{ try{ const activeCount = (pr||[]).filter(p=>{ const s=(p.status||'').toString().toLowerCase(); return s.includes('active') && !s.includes('inactive') && !s.includes('resolved'); }).length; probs.sum.textContent = `Active Problems (${activeCount})`; }catch(_e){ probs.sum.textContent = `Active Problems`; } }); wrap.appendChild(probs.det);
+  const probs = makeSection('Active Problems'); probs.det.open=true; const pr = Array.isArray(data&&data.problems)? data.problems : []; renderProblems(probs.ul, pr, (data&&data.medications)||[], { activeOnly: true }).then(res=>{ try{ const activeCount = (pr||[]).filter(p=>{ const s=(p.status||'').toString().toLowerCase(); return s.includes('active') && !s.includes('inactive') && !s.includes('resolved'); }).length; probs.sum.textContent = `Active Problems (${activeCount})`; }catch(_e){ probs.sum.textContent = `Active Problems`; } }); wrap.appendChild(probs.det);
 
   const algs = makeSection('Allergies'); algs.det.open=true; const algList = Array.isArray(data&&data.allergies)? data.allergies : []; renderAllergies(algs.ul, algList); algs.sum.textContent = `Allergies (${algList.length})`; wrap.appendChild(algs.det);
 

@@ -106,3 +106,20 @@ def reset_chat():
         return jsonify({ 'status': 'ok' })
     except Exception as e:
         return jsonify({ 'error': str(e) }), 500
+
+@bp.get('/providers')
+def providers():
+    """List available query model providers. Returns minimal metadata (no PHI)."""
+    try:
+        models = []
+        for mid, prov in _registry.models.items():
+            try:
+                name = getattr(prov, 'name', str(mid))
+                models.append({ 'model_id': str(mid), 'name': str(name) })
+            except Exception:
+                models.append({ 'model_id': str(mid), 'name': str(mid) })
+        # Ensure deterministic order: default first, then alphabetical by model_id
+        models.sort(key=lambda m: (0 if m.get('model_id')=='default' else 1, m.get('model_id') or ''))
+        return jsonify({ 'providers': models })
+    except Exception as e:
+        return jsonify({ 'providers': [], 'error': str(e) })
