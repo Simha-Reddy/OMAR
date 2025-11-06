@@ -36,7 +36,16 @@ def ask():
             return jsonify({ 'error': 'Missing query' }), 400
         model = _registry.get(model_id)
         # Pass 'query' to the model; models are responsible for RAG + preface composition
-        result = model.answer({ 'query': query, 'patient': patient, 'session': vista_ctx, 'mode': (data.get('mode') or ''), 'prompt_override': (data.get('prompt_override') or ''), 'prompt_template': (data.get('prompt_template') or '') })
+        result = model.answer({
+            'query': query,
+            'patient': patient,
+            'session': vista_ctx,
+            'mode': (data.get('mode') or ''),
+            'prompt_override': (data.get('prompt_override') or ''),
+            'prompt_template': (data.get('prompt_template') or ''),
+            # Pass through optional structured sections assembled on the client (e.g., DotPhrases expansions)
+            'structured_sections': (data.get('structured_sections') or '')
+        })
         try:
             # Minimal diagnostics for debugging: do not include PHI
             chunks_cnt = len(result.get('citations') or []) if isinstance(result, dict) else -1

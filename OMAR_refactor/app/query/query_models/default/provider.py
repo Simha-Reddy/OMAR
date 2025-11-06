@@ -11,6 +11,7 @@ from .services.rag import (
     build_bm25_index,
     hybrid_search,
 )
+from .services.rag_store import store as rag_store
 
 class DefaultQueryModelImpl:
     model_id = 'default'
@@ -92,6 +93,7 @@ class DefaultQueryModelImpl:
         patient = payload.get('patient')  # optional dict expected to contain DFN/localId
         sess = payload.get('session') or {}
         mode = str(payload.get('mode') or '').strip().lower()
+        structured_sections = (payload.get('structured_sections') or '').strip()
         if not query:
             return { 'answer': '', 'citations': [], 'model_id': self.model_id }
 
@@ -111,35 +113,174 @@ class DefaultQueryModelImpl:
         gateway = VistaApiXGateway(station=station, duz=duz)
         top_chunks: List[Dict[str, Any]] = []
         if dfn:
-            cached = self._get_cached(str(dfn))
-            chunks: List[Dict[str, Any]] = []
-            bm25: Dict[str, Any] | None = None
-            if cached and (cached.get('chunks')):
-                chunks = list(cached.get('chunks') or [])
-                bm25 = cached.get('bm25')  # type: ignore
-            else:
-                chunks = self._build_chunks_from_document_index(str(dfn))
-                bm25 = build_bm25_index(chunks) if chunks else None
-                if chunks and bm25:
-                    self._set_cached(str(dfn), chunks, bm25)
-            # Retrieval uses raw user query
-            if chunks and bm25:
-                # Precompute tag boosts per chunk if a policy is provided (or summary mode)
-                try:
-                    from .services.title_tagging import score_for_title, DEFAULT_TAG_POLICY
-                    tag_policy = payload.get('tag_policy') or ({**DEFAULT_TAG_POLICY} if mode == 'summary' else None)
-                    if tag_policy:
-                        for ch in chunks:
-                            ttl = ch.get('title_nat') or ch.get('title') or ''
+            # Prefer the RagStore path, which supports optional embeddings and the embedding policy (recent 100 progress + all DS/consult/radiology)
+            used_rag_store = False
+            try:
+                # Ensure index exists and apply embedding policy opportunistically
+                st = rag_store.status(str(dfn))
+                if not (st.get('indexed') and int(st.get('chunks', 0)) > 0):
+                    # Fetch documents with text so chunking/excerpts are available
+                    vpr_docs = gateway.get_vpr_domain(str(dfn), domain='document', params={'text': '1'})
+                    rag_store.ensure_index(str(dfn), vpr_docs)
+                    # Apply embedding policy automatically when possible
+                    try:
+                        rag_store.embed_docs_policy(str(dfn), vpr_docs)
+                    except Exception:
+                        pass
+                else:
+                    # If already indexed but lexical-only, try to upgrade vectors per policy
+                    try:
+                        if bool(st.get('lexical_only', True)):
+                            # We need a VPR payload for policy selection
+                            vpr_docs = gateway.get_vpr_domain(str(dfn), domain='document', params={'text': '1'})
+                            rag_store.embed_docs_policy(str(dfn), vpr_docs)
+                    except Exception:
+                        pass
+                # Retrieve using store (hybrid with vectors when present)
+                # Optional multi-query rewrites + RRF fusion remain valuable on top of hybrid
+                def _gen_rewrites(q: str) -> list[str]:
+                    try:
+                        prompt = (
+                            "Rewrite the following clinical question into 3 to 4 diverse retrieval queries that capture synonyms, abbreviations, and alternative phrasings.\n"
+                            "Return each on its own line without numbering.\n\nQuestion: " + q
+                        )
+                        txt = llm.chat(prompt) or ''
+                        lines = [s.strip('- ').strip() for s in str(txt).splitlines() if s.strip()]
+                        uniq: list[str] = []
+                        seen: set[str] = set()
+                        for s in lines:
+                            k = s.lower()
+                            if k and k not in seen:
+                                seen.add(k)
+                                uniq.append(s)
+                            if len(uniq) >= 4:
+                                break
+                        base = [q]
+                        for s in uniq:
+                            if s.lower() != q.lower():
+                                base.append(s)
+                        return base[:4]
+                    except Exception:
+                        return [q]
+
+                rewrites: list[str] = _gen_rewrites(query) if mode != 'summary' else [query]
+                runs: list[list[Dict[str, Any]]] = []
+                K_PER = 12
+                for rq in rewrites:
+                    try:
+                        res = rag_store.retrieve(str(dfn), rq, top_k=K_PER)
+                        if res:
+                            runs.append(res)
+                    except Exception:
+                        continue
+                if not runs:
+                    top_chunks = []
+                elif len(runs) == 1:
+                    top_chunks = runs[0][:12]
+                else:
+                    # Reciprocal Rank Fusion (RRF)
+                    k_rrf = 60.0
+                    scores: dict[int, float] = {}
+                    idx_map: dict[int, Dict[str, Any]] = {}
+                    for run in runs:
+                        for r, m in enumerate(run, start=1):
                             try:
-                                ch['tag_boost'] = float(score_for_title(ttl, tag_policy))
+                                key = id(m)
+                                if key not in idx_map:
+                                    idx_map[key] = m
+                                scores[key] = scores.get(key, 0.0) + 1.0 / (k_rrf + r)
                             except Exception:
-                                ch['tag_boost'] = 0.0
-                except Exception:
-                    pass
-                top_chunks = hybrid_search(query, chunks, vectors=None, bm25_index=bm25, top_k=12)
-            else:
-                top_chunks = []
+                                continue
+                    ordered = sorted(scores.items(), key=lambda kv: kv[1], reverse=True)
+                    fused = [idx_map[k] for k, _ in ordered]
+                    top_chunks = fused[:12]
+                used_rag_store = True
+            except Exception:
+                used_rag_store = False
+
+            if not used_rag_store:
+                # Fallback to in-model cache + keyword-only DocumentSearchIndex
+                cached = self._get_cached(str(dfn))
+                chunks: List[Dict[str, Any]] = []
+                bm25: Dict[str, Any] | None = None
+                if cached and (cached.get('chunks')):
+                    chunks = list(cached.get('chunks') or [])
+                    bm25 = cached.get('bm25')  # type: ignore
+                else:
+                    chunks = self._build_chunks_from_document_index(str(dfn))
+                    bm25 = build_bm25_index(chunks) if chunks else None
+                    if chunks and bm25:
+                        self._set_cached(str(dfn), chunks, bm25)
+                if chunks and bm25:
+                    try:
+                        from .services.title_tagging import score_for_title, DEFAULT_TAG_POLICY
+                        tag_policy = payload.get('tag_policy') or ({**DEFAULT_TAG_POLICY} if mode == 'summary' else None)
+                        if tag_policy:
+                            for ch in chunks:
+                                ttl = ch.get('title_nat') or ch.get('title') or ''
+                                try:
+                                    ch['tag_boost'] = float(score_for_title(ttl, tag_policy))
+                                except Exception:
+                                    ch['tag_boost'] = 0.0
+                    except Exception:
+                        pass
+                    def _gen_rewrites(q: str) -> list[str]:
+                        try:
+                            prompt = (
+                                "Rewrite the following clinical question into 3 to 4 diverse retrieval queries that capture synonyms, abbreviations, and alternative phrasings.\n"
+                                "Return each on its own line without numbering.\n\nQuestion: " + q
+                            )
+                            txt = llm.chat(prompt) or ''
+                            lines = [s.strip('- ').strip() for s in str(txt).splitlines() if s.strip()]
+                            uniq: list[str] = []
+                            seen: set[str] = set()
+                            for s in lines:
+                                k = s.lower()
+                                if k and k not in seen:
+                                    seen.add(k)
+                                    uniq.append(s)
+                                if len(uniq) >= 4:
+                                    break
+                            base = [q]
+                            for s in uniq:
+                                if s.lower() != q.lower():
+                                    base.append(s)
+                            return base[:4]
+                        except Exception:
+                            return [q]
+
+                    rewrites: list[str] = _gen_rewrites(query) if mode != 'summary' else [query]
+                    runs: list[list[Dict[str, Any]]] = []
+                    K_PER = 12
+                    for rq in rewrites:
+                        try:
+                            res = hybrid_search(rq, chunks, vectors=None, bm25_index=bm25, top_k=K_PER)
+                            if res:
+                                runs.append(res)
+                        except Exception:
+                            continue
+                    if not runs:
+                        top_chunks = []
+                    elif len(runs) == 1:
+                        top_chunks = runs[0][:12]
+                    else:
+                        k_rrf = 60.0
+                        scores: dict[int, float] = {}
+                        idx_map: dict[int, Dict[str, Any]] = {}
+                        for run in runs:
+                            for r, m in enumerate(run, start=1):
+                                try:
+                                    key = id(m)
+                                    if key not in idx_map:
+                                        idx_map[key] = m
+                                    scores[key] = scores.get(key, 0.0) + 1.0 / (k_rrf + r)
+                                except Exception:
+                                    continue
+                        ordered = sorted(scores.items(), key=lambda kv: kv[1], reverse=True)
+                        fused = [idx_map[k] for k, _ in ordered]
+                        top_chunks = fused[:12]
+                else:
+                    top_chunks = []
         else:
             # Fallback: ad-hoc RAG on provided documents (empty by default)
             vpr_docs = {'data': {'items': []}}
@@ -280,7 +421,7 @@ class DefaultQueryModelImpl:
         except Exception:
             preface = ''
 
-        # 3b) Compose compact system instruction and final prompt with context excerpts
+    # 3b) Compose compact system instruction and final prompt with context excerpts
         # Select system prompt: summary mode override, explicit override, else default
         system = ''
         try:
@@ -333,6 +474,13 @@ class DefaultQueryModelImpl:
             hdr = f"### Source: (Excerpt {ex}{', Date: ' + dt if dt else ''}{', Title: ' + ttl if ttl else ''})"
             context_blobs.append(hdr + "\n" + (c.get('text') or '')[:1600])
         context = "\n\n".join(context_blobs)
+        # Attach optional structured sections (e.g., DotPhrases expansions) similar to original pipeline
+        structured_block = ''
+        try:
+            if structured_sections:
+                structured_block = "\n\nStructured data (requested):\n" + structured_sections
+        except Exception:
+            structured_block = ''
         # Include short chat history (prior Q&A) for continuity
         prior_block = ''
         try:
@@ -353,7 +501,11 @@ class DefaultQueryModelImpl:
             prior_block = ''
 
         augmented_query = (preface + query) if preface else query
-        final_prompt = f"{system}\n\nQuestion: \"{augmented_query}\"\n\n{(prior_block + '\n\n') if prior_block else ''}Below are excerpts from the chart:\n{context}"
+        final_prompt = (
+            f"{system}\n\nQuestion: \"{augmented_query}\"\n\n"
+            f"{(prior_block + '\n\n') if prior_block else ''}Below are excerpts from the chart:\n{context}"
+            f"{structured_block}"
+        )
         answer_text = llm.chat(final_prompt)
 
         # 4) Prepare citations list
@@ -402,20 +554,44 @@ class DefaultQueryModelImpl:
             dfn = ''
         if not dfn:
             return { 'results': [] }
-        cached = self._get_cached(str(dfn))
-        chunks: List[Dict[str, Any]] = []
-        bm25: Dict[str, Any] | None = None
-        if cached and (cached.get('chunks')):
-            chunks = list(cached.get('chunks') or [])
-            bm25 = cached.get('bm25')  # type: ignore
-        else:
-            chunks = self._build_chunks_from_document_index(str(dfn))
-            bm25 = build_bm25_index(chunks) if chunks else None
-            if chunks and bm25:
-                self._set_cached(str(dfn), chunks, bm25)
-        if not (chunks and bm25):
-            return { 'results': [] }
-        top_chunks = hybrid_search(query, chunks, vectors=None, bm25_index=bm25, top_k=12)
+        # Prefer RagStore retrieval (uses embeddings when available)
+        top_chunks: List[Dict[str, Any]] = []
+        used_rag_store = False
+        try:
+            st = rag_store.status(str(dfn))
+            if not (st.get('indexed') and int(st.get('chunks', 0)) > 0):
+                # Build minimal index from documents (ask for text for chunking)
+                station = '500'
+                duz = '983'
+                try:
+                    sess = payload.get('session') or {}
+                    station = str(sess.get('station') or station)
+                    duz = str(sess.get('duz') or duz)
+                except Exception:
+                    pass
+                gw = VistaApiXGateway(station=station, duz=duz)
+                vpr_docs = gw.get_vpr_domain(str(dfn), domain='document', params={'text': '1'})
+                rag_store.ensure_index(str(dfn), vpr_docs)
+            top_chunks = rag_store.retrieve(str(dfn), query, top_k=12) or []
+            used_rag_store = True
+        except Exception:
+            used_rag_store = False
+
+        if not used_rag_store:
+            cached = self._get_cached(str(dfn))
+            chunks: List[Dict[str, Any]] = []
+            bm25: Dict[str, Any] | None = None
+            if cached and (cached.get('chunks')):
+                chunks = list(cached.get('chunks') or [])
+                bm25 = cached.get('bm25')  # type: ignore
+            else:
+                chunks = self._build_chunks_from_document_index(str(dfn))
+                bm25 = build_bm25_index(chunks) if chunks else None
+                if chunks and bm25:
+                    self._set_cached(str(dfn), chunks, bm25)
+            if not (chunks and bm25):
+                return { 'results': [] }
+            top_chunks = hybrid_search(query, chunks, vectors=None, bm25_index=bm25, top_k=12)
         # Group by note
         by_note: Dict[str, Dict[str, Any]] = {}
         for ch in top_chunks:

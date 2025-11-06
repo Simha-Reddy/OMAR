@@ -31,6 +31,7 @@
       return s ? ('?'+s) : '';
     }catch(_e){ return ''; }
   }
+
   async function apiQuick(domain, params){
     // Prefer unified Api.quick; fallback to legacy /quick/patient/*
     try{
@@ -75,21 +76,42 @@
       }).join('\n');
     }catch(_e){ return 'None'; }
   }
+  // Normalize problem records coming from various backends
+  function _normProblem(p){
+    try{
+      const name = (p?.name || p?.problem || p?.text || p?.display || '').toString().trim();
+      const statusRaw = (p?.status || '').toString().toLowerCase();
+      let active;
+      if (typeof p?.active === 'boolean') active = !!p.active;
+      else if (statusRaw) active = ['active','a','current'].includes(statusRaw);
+      else active = true;
+      const recorded = (p?.recordedDate || p?.enteredDate || p?.onsetDate || '').toString();
+      const updated = (p?.updatedDate || '').toString();
+      const provider = (p?.provider || '').toString();
+      const clinic = (p?.clinic || '').toString();
+      return { name, active, status: statusRaw || (active?'active':'inactive'), recordedDate: recorded, updatedDate: updated, provider, clinic, comments: p?.comments };
+    }catch(_e){ return { name:'', active:false, status:'', recordedDate:'', updatedDate:'', provider:'', clinic:'' }; }
+  }
   function fmtProblems(arr, activeOnly){
-    try{ const a = Array.isArray(arr)? (activeOnly? arr.filter(p=>p&&p.active):arr) : [];
+    try{
+      const src = Array.isArray(arr)? arr:[];
+      const norm = src.map(_normProblem);
+      const a = activeOnly ? norm.filter(p=>p && p.active) : norm;
       if(!a.length) return activeOnly ? 'No active problems' : 'None';
       return a.map(p=> `- ${p && p.name ? String(p.name) : 'Unknown'}${(p && p.active===false)?' (inactive)':''}`).join('\n');
     }catch(_e){ return 'None'; }
   }
   function fmtProblemsDetailed(arr, activeOnly){
     try{
-      const a = Array.isArray(arr)? (activeOnly? arr.filter(p=>p&&p.active):arr) : [];
+      const src = Array.isArray(arr)? arr:[];
+      const norm = src.map(_normProblem);
+      const a = activeOnly ? norm.filter(p=>p && p.active) : norm;
       if(!a.length) return activeOnly ? 'No active problems' : 'None';
       const lines = [];
       for(const p of a){
         const name = p?.name ? String(p.name).trim() : 'Unknown';
         const status = (p?.status || (p?.active===false ? 'inactive' : 'active') || '').toString().toLowerCase();
-        const recorded = (p?.recordedDate || p?.enteredDate || p?.onsetDate || '').toString();
+        const recorded = (p?.recordedDate || '').toString();
         const updated = (p?.updatedDate || '').toString();
         const prov = (p?.provider || '').toString();
         const clinic = (p?.clinic || '').toString();
@@ -109,8 +131,37 @@
   }
   function fmtVitalsTable(vitals){
     try{
+      const toObj = (arr)=>{
+        const v={ bloodPressure:[], heartRate:[], pulse:[], respiratoryRate:[], oxygenSaturation:[], temperature:[], weight:[], height:[], bmi:[] };
+        (Array.isArray(arr)?arr:[]).forEach(r=>{
+          const dt = r?.effectiveDateTime || r?.takenDate || r?.date || '';
+          const type = String(r?.type||'').toUpperCase();
+          const unit = r?.unit || r?.units || '';
+          const val = (r && (r.value!=null ? r.value : r.latest||r.reading||r.val)) ?? '';
+          if (type.includes('BLOOD PRESSURE') || type==='BP'){
+            let sys=null, dia=null; const m=String(val).match(/(\d{2,3})\s*\/\s*(\d{2,3})/); if(m){ sys=parseInt(m[1],10); dia=parseInt(m[2],10);} v.bloodPressure.push({ effectiveDateTime: dt, systolic: sys, diastolic: dia, unit: unit||'mmHg' });
+          } else if (type.includes('PULSE OX') || type.includes('OXYGEN') || type.includes('SPO2')){
+            v.oxygenSaturation.push({ effectiveDateTime: dt, value: val, unit: unit||'%' });
+          } else if (type.includes('RESP')){
+            v.respiratoryRate.push({ effectiveDateTime: dt, value: val, unit: unit||'/min' });
+          } else if (type.includes('PULSE') || type.includes('HEART')){
+            v.pulse.push({ effectiveDateTime: dt, value: val, unit: unit||'/min' });
+            v.heartRate.push({ effectiveDateTime: dt, value: val, unit: unit||'/min' });
+          } else if (type.includes('TEMP')){
+            v.temperature.push({ effectiveDateTime: dt, value: val, unit: unit||'F' });
+          } else if (type.includes('WEIGHT')){
+            v.weight.push({ effectiveDateTime: dt, value: val, unit: unit||'lb' });
+          } else if (type.includes('HEIGHT')){
+            v.height.push({ effectiveDateTime: dt, value: val, unit: unit||'in' });
+          } else if (type.includes('BMI')){
+            v.bmi.push({ effectiveDateTime: dt, value: val, unit: unit||'' });
+          }
+        });
+        return v;
+      };
       const rows=[]; const add=(date,type,value,unit)=>{ const d=date? String(date).slice(0,10):''; rows.push({date:d,type:String(type||''),value:String(value??''),unit:String(unit||'')}); };
-      const safe=(x)=> Array.isArray(x)? x:[]; const v=vitals||{};
+      const safe=(x)=> Array.isArray(x)? x:[]; let v=vitals||{};
+      if (Array.isArray(vitals)) v = toObj(vitals);
       safe(v.bloodPressure).forEach(rec=>{ const dt=rec?.effectiveDateTime; const sys=rec?.systolic; const dia=rec?.diastolic; const unit=rec?.unit||'mmHg'; if(sys!=null && dia!=null) add(dt,'BP',`${sys}/${dia}`,unit); });
       [['heartRate','HR'],['pulse','Pulse'],['respiratoryRate','RR'],['oxygenSaturation','SpO2'],['temperature','Temp'],['weight','Weight'],['height','Height'],['bmi','BMI']].forEach(([key,label])=>{
         safe(v[key]).forEach(rec=>{ const dt=rec?.effectiveDateTime; const val=(rec&&(rec.value!=null ? rec.value : rec.latest||rec.reading||rec.val)) ?? ''; const unit=(rec&&(rec.unit||rec.units)); add(dt,label,val,unit); });
@@ -124,7 +175,7 @@
   }
   function fmtLabsTable(labs){
     try{
-      const arr=Array.isArray(labs)? labs.slice():[]; const normDate=(r)=> (r && (r.resulted||r.collected||r.date||''));
+      const arr=Array.isArray(labs)? labs.slice():[]; const normDate=(r)=> (r && (r.resulted||r.observedDate||r.collected||r.date||''));
       arr.sort((a,b)=> (normDate(a)<normDate(b)?1:(normDate(a)>normDate(b)?-1:0)));
       if(!arr.length) return 'No labs found';
       const header='| Date | Test | Result | Units | Abn |\n|---|---|---|---|---|';
@@ -161,7 +212,11 @@
 
   // Token resolver
   async function resolveToken(tok){
-    const t = String(tok||'').trim().toLowerCase();
+    let t = String(tok||'').trim().toLowerCase();
+    // Aliases: allow singulars or variants
+    if (t.startsWith('problem')) t = t.replace(/^problems?/, 'problems');
+    if (t.startsWith('medication')) t = t.replace(/^medications?/, 'meds');
+    if (t.startsWith('med/')) t = t.replace(/^med\//, 'meds/');
     try{
       // name
       if (t === 'name' || t === 'patient'){
@@ -169,29 +224,13 @@
         let full = '';
         if (j && j.demographics){
           const d = j.demographics;
-          // Try multiple shapes: Name, name, first/last
           full = d.Name || d.name || [d.firstName, d.lastName].filter(Boolean).join(' ').trim();
-          // If we see LAST,FIRST format, flip to First Last
           if (full && /,/.test(full)){
             const parts = String(full).split(',');
             const last = parts[0].trim();
             const first = parts.slice(1).join(',').trim();
             if (first && last) full = `${first} ${last}`;
           }
-        }
-        if (!full){
-          const s = await getJson('/session_data');
-          try{
-            const ent = s?.patient_record?.entry || [];
-            const pat = ent.find(e=> e?.resource?.resourceType==='Patient');
-            const nm = pat?.resource?.name?.[0];
-            if(nm){
-              const given=(nm.given||[]).join(' ');
-              const fam=nm.family||'';
-              full=[given,fam].filter(Boolean).join(' ').trim();
-            }
-            full = full || '';
-          }catch(_e){}
         }
         return full || '';
       }
@@ -203,11 +242,6 @@
           const d = j?.demographics || {};
           dob = d.DOB_ISO || d.DOB || d.dob || '';
         }catch(_e){}
-        if (!dob){
-          const s = await getJson('/session_data');
-          try{ const ent = s?.patient_record?.entry || []; const pat = ent.find(e=> e?.resource?.resourceType==='Patient'); dob = pat?.resource?.birthDate || ''; }catch(_e){}
-        }
-        // Normalize MMM DD,YYYY to ISO if needed
         if (dob && /[A-Z]{3}\s+\d{1,2},\s?\d{4}/i.test(dob)){
           try{
             const m = dob.match(/([A-Z]{3})\s+(\d{1,2}),\s?(\d{4})/i);
@@ -222,13 +256,8 @@
       }
       // age
       if (t === 'age'){
-        // Prefer DOB from demographics
         let dob = '';
         try{ const j = await apiQuick('demographics'); const d = j?.demographics||{}; dob = d.DOB_ISO || d.DOB || d.dob || ''; }catch(_e){}
-        if (!dob){
-          const s = await getJson('/session_data');
-          try{ const ent = s?.patient_record?.entry || []; const pat = ent.find(e=> e?.resource?.resourceType==='Patient'); dob = pat?.resource?.birthDate || ''; }catch(_e){}
-        }
         if (!dob) return '';
         try{
           const today=new Date(); const birth=new Date(dob); let age=today.getFullYear()-birth.getFullYear(); const m=today.getMonth()-birth.getMonth(); if(m<0 || (m===0 && today.getDate()<birth.getDate())) age--; return String(age);
@@ -238,14 +267,12 @@
       if (t === 'phone'){
         const j = await apiQuick('demographics');
         const d = j?.demographics || {};
-        // Collect possible keys case-insensitively
         const entries = Object.entries(d);
         const byKey = (needleArr)=>{
           const low = (s)=> String(s||'').toLowerCase();
           for (const [k,v] of entries){ if (needleArr.some(n=> low(k).includes(n))) { if (v) return String(v).trim(); } }
           return '';
         };
-        // Prefer cell/mobile
         let phone = byKey(['cell','mobile']);
         if (!phone) phone = byKey(['phone (mobile)','mphone']);
         if (!phone) phone = byKey(['home phone','residence phone']);
@@ -254,9 +281,9 @@
       }
       // medications
       if (t === 'meds/active' || t === 'medications/active'){
-        const j = await apiQuick('medications', { status: 'ACTIVE+PENDING' });
-        const meds = j?.medications || j?.items || []; // tolerate alt shapes
-        return fmtMeds(meds.filter(m=> String(m.status||'active').toLowerCase()==='active'));
+        let j = await apiQuick('medications', { status: 'ACTIVE+PENDING' });
+        let meds = j?.medications || j?.items || [];
+        return fmtMeds(meds.filter(m=> String(m.status||m.current_status||'active').toLowerCase().includes('active')));
       }
       if (t === 'meds' || t === 'medications'){
         const j = await apiQuick('medications');
@@ -288,11 +315,6 @@
         if (start) qs.set('start', start);
         if (end) qs.set('end', end);
         let meds = (await apiQuick('medications', Object.fromEntries(qs)))?.medications || [];
-        // Fallback to FHIR session if quick endpoint unavailable
-        if (!Array.isArray(meds) || !meds.length){
-          const f = await getJson('/fhir/meds?status='+(status==='ACTIVE+PENDING'?'active':''));
-          meds = f?.medications || [];
-        }
         const nf = String(nameFilter||'').trim().toLowerCase();
         if (nf){ meds = meds.filter(m => String(m?.name||'').toLowerCase().includes(nf)); }
         return fmtMeds(meds);
@@ -305,10 +327,6 @@
         // Pull wide window from quick endpoint (10 years)
         const j = await apiQuick('medications', { status:'ALL', days:3650 });
         let meds = j?.medications || j?.items || [];
-        if (!Array.isArray(meds) || !meds.length){
-          const f = await getJson('/fhir/meds');
-          meds = f?.medications || [];
-        }
         const q = name.toLowerCase();
         let best = null, bestLabel = '';
         function asDate(x){ try{ if(!x) return null; const d=new Date(String(x)); return isNaN(d.getTime())? null : d; }catch(_e){ return null; } }
@@ -324,7 +342,7 @@
       // problems
       if (t === 'problems' || t === 'problems/active'){
         const j = await apiQuick('problems', t.endsWith('/active') ? { status:'active' } : {});
-        const probs = j?.problems || [];
+        const probs = Array.isArray(j) ? j : (j?.problems || j?.items || []);
         return fmtProblems(probs, t.endsWith('/active'));
       }
       if (t === 'problems/details' || t === 'problems/active/details' || t === 'problems/detailed' || t === 'problems/active/detailed'){
@@ -339,7 +357,7 @@
         const active = segs.includes('active') || segs.includes('current');
         const detailed = segs.includes('detailed') || segs.includes('details') || segs.includes('detail');
         const j = await apiQuick('problems', Object.assign({}, active?{status:'active'}:{}, detailed?{detail:1}:{}) );
-        const probs = j?.problems || [];
+        const probs = Array.isArray(j) ? j : (j?.problems || j?.items || []);
         return detailed ? fmtProblemsDetailed(probs, active) : fmtProblems(probs, active);
       }
       // vitals
@@ -349,7 +367,7 @@
         if(days != null){ const now=new Date(); const startDt=new Date(now); startDt.setDate(now.getDate()-Math.max(0,days)); start = startDt.toISOString().slice(0,10); end = now.toISOString().slice(0,10); }
         const qs = new URLSearchParams(); if(start) qs.set('start', start); if(end) qs.set('end', end);
         const j = await apiQuick('vitals', Object.fromEntries(qs));
-        const vitals = j?.vitals || {};
+        const vitals = Array.isArray(j) ? j : (j?.vitals || j?.items || {});
         const md = fmtVitalsTable(vitals);
         return { markdown: md, replace: md };
       }
@@ -397,16 +415,7 @@
         if(since && !start) start = since; if(start) qs.set('start', start); if(end) qs.set('end', end);
         if(allParam!=null) qs.set('all', String(allParam));
   const j = await apiQuick('labs', Object.fromEntries(qs));
-        let labs = j?.labs || [];
-        // Client-side filter when specific tests requested
-        if (filters.length){
-          const wants = filters.map(f=> String(f).toLowerCase());
-          labs = labs.filter(rec=>{
-            const test = String(rec?.test||'').toLowerCase();
-            const loinc = String(rec?.loinc||'').toLowerCase();
-            return wants.some(w=> test.includes(w) || (loinc && loinc.includes(w)) );
-          });
-        }
+        let labs = Array.isArray(j) ? j : (j?.labs || j?.items || []);
         // If mode is 'last', select the latest per test key
         if (mode === 'last'){
           const normDate=(r)=> (r && (r.resulted||r.collected||r.date||'')) || '';

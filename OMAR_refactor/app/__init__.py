@@ -164,9 +164,9 @@ def create_app():
         query_bp = None
     # RAG API removed in favor of in-model retrieval via /api/query
     rag_bp = None
-    # Scribe API (optional until implemented)
+    # Scribe API (audio ingestion/transcription)
     try:
-        from .blueprints.scribe_api import bp as scribe_bp
+        from .scribe.blueprints.scribe_api import bp as scribe_bp
     except Exception:
         scribe_bp = None
     # Scribe Note/Chat endpoints (frontend expects /scribe/* without /api prefix)

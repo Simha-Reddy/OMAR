@@ -4,6 +4,7 @@ from flask import Blueprint, jsonify, current_app, request
 from ..services.patient_service import PatientService
 from ..gateways.vista_api_x_gateway import VistaApiXGateway
 from ..services import transforms as T
+from app.services.loinc_index import LoincIndex
 from app.query.query_models.default.services.rag_store import store as rag_store
 try:
     # Prefer absolute-style import first to satisfy some analyzers
@@ -371,26 +372,115 @@ def demographics_quick(dfn: str):
         return jsonify({'error': str(e)}), 500
 
 @bp.get('/<dfn>/quick/meds')
+@bp.get('/<dfn>/quick/medications')  # alias to match frontend calls
 def medications_quick(dfn: str):
     svc = _get_patient_service()
     try:
         vpr = svc.get_vpr_raw(dfn, 'meds')
         quick = svc.get_medications_quick(dfn)
-        if (request.args.get('includeRaw','0').lower() in ('1','true','yes','on')) and isinstance(quick, list):
-            # Attach raw for each item when possible (1:1 best-effort by index)
-            raw_items = []
+
+        # Optional filtering: status, days/start/end, name
+        status_raw = (request.args.get('status') or 'ALL').strip().upper()
+        # Normalize status filter to a set of allowed quick statuses
+        status_map = {
+            'ACTIVE': {'active'},
+            'PENDING': {'pending'},
+            'ACTIVE+PENDING': {'active', 'pending', 'new', 'hold'},
+            'CURRENT': {'active', 'pending'},
+            'ALL': None,
+        }
+        allowed_status = status_map.get(status_raw, None)
+
+        # Date range: support days (relative), start, end in common formats
+        from datetime import datetime, timezone, timedelta
+        def _to_iso(x):
             try:
-                raw_items = T._get_nested_items(vpr)  # type: ignore
+                return T._parse_any_datetime_to_iso(x)  # type: ignore
             except Exception:
+                return None
+        now = datetime.now(timezone.utc)
+        start_iso = None
+        end_iso = None
+        days = None
+        try:
+            d = request.args.get('days')
+            if d is not None:
+                di = int(str(d).strip() or '0')
+                if di and di > 0:
+                    days = di
+        except Exception:
+            days = None
+        if days:
+            start_iso = (now - timedelta(days=days)).isoformat().replace('+00:00','Z')
+            end_iso = now.isoformat().replace('+00:00','Z')
+        s_arg = request.args.get('start')
+        e_arg = request.args.get('end')
+        if s_arg:
+            s_parsed = _to_iso(s_arg)
+            if s_parsed:
+                start_iso = s_parsed
+        if e_arg:
+            e_parsed = _to_iso(e_arg)
+            if e_parsed:
+                end_iso = e_parsed
+
+        name_filter = (request.args.get('name') or '').strip().lower()
+
+        def _in_date_range(item):
+            if not (start_iso or end_iso):
+                return True
+            try:
+                sd = item.get('startDate')
+                ed = item.get('endDate')
+                # Default to startDate when endDate missing
+                cand = _to_iso(ed) or _to_iso(sd)
+                if not cand:
+                    return False
+                if start_iso and cand < start_iso:
+                    return False
+                if end_iso and cand > end_iso:
+                    return False
+                return True
+            except Exception:
+                return True
+
+        def _status_ok(item):
+            if not allowed_status:
+                return True
+            s = (item.get('status') or '').strip().lower()
+            return s in allowed_status
+
+        def _name_ok(item):
+            if not name_filter:
+                return True
+            n = (item.get('name') or '').strip().lower()
+            return name_filter in n
+
+        # Apply filters when requested
+        if isinstance(quick, list):
+            filtered = [q for q in quick if _status_ok(q) and _in_date_range(q) and _name_ok(q)]
+        else:
+            filtered = quick
+
+        include_raw_requested = request.args.get('includeRaw','0').lower() in ('1','true','yes','on')
+        if include_raw_requested and isinstance(filtered, list):
+            # Best effort: only attach _raw when no filters applied to preserve index alignment
+            filters_applied = (allowed_status is not None) or bool(days) or bool(start_iso) or bool(end_iso) or bool(name_filter)
+            if not filters_applied:
                 raw_items = []
-            out = []
-            for idx, q in enumerate(quick):
-                obj = dict(q)
-                if idx < len(raw_items):
-                    obj['_raw'] = raw_items[idx]
-                out.append(obj)
-            quick = out
-        return jsonify(quick)
+                try:
+                    raw_items = T._get_nested_items(vpr)  # type: ignore
+                except Exception:
+                    raw_items = []
+                out = []
+                for idx, q in enumerate(filtered):
+                    obj = dict(q)
+                    if idx < len(raw_items):
+                        obj['_raw'] = raw_items[idx]
+                    out.append(obj)
+                filtered = out
+        # For compatibility with frontend dot-phrases, wrap in { medications: [...] }
+        return jsonify({ 'medications': filtered if isinstance(filtered, list) else (filtered or []) })
     except Exception as e:
         return jsonify({'error': str(e)}), 500
 
@@ -401,20 +491,101 @@ def labs_quick(dfn: str):
     try:
         vpr = svc.get_vpr_raw(dfn, 'labs')
         quick = svc.get_labs_quick(dfn)
-        if (request.args.get('includeRaw','0').lower() in ('1','true','yes','on')) and isinstance(quick, list):
-            raw_items = []
+
+        # Server-side filters: names (comma-separated), days, start, end
+        names_raw = (request.args.get('names') or '').strip()
+        name_tokens = [s.strip() for s in names_raw.split(',') if s.strip()] if names_raw else []
+
+        from datetime import datetime, timezone, timedelta
+        def _to_iso(x):
             try:
-                raw_items = T._get_nested_items(vpr)  # type: ignore
+                return T._parse_any_datetime_to_iso(x)  # type: ignore
             except Exception:
+                return None
+        now = datetime.now(timezone.utc)
+        start_iso = None
+        end_iso = None
+        # days → relative range
+        days = None
+        try:
+            d = request.args.get('days')
+            if d is not None:
+                di = int(str(d).strip() or '0')
+                if di and di > 0:
+                    days = di
+        except Exception:
+            days = None
+        if days:
+            start_iso = (now - timedelta(days=days)).isoformat().replace('+00:00','Z')
+            end_iso = now.isoformat().replace('+00:00','Z')
+        s_arg = request.args.get('start')
+        e_arg = request.args.get('end')
+        if s_arg:
+            s_parsed = _to_iso(s_arg)
+            if s_parsed:
+                start_iso = s_parsed
+        if e_arg:
+            e_parsed = _to_iso(e_arg)
+            if e_parsed:
+                end_iso = e_parsed
+
+        def _date_ok(item):
+            if not (start_iso or end_iso):
+                return True
+            try:
+                # quick labs include observedDate/resulted as ISO; fallback to observed/collected
+                cand = item.get('observedDate') or item.get('resulted') or item.get('collected') or item.get('date')
+                iso = _to_iso(cand) or cand
+                if not iso:
+                    return False
+                if start_iso and iso < start_iso:
+                    return False
+                if end_iso and iso > end_iso:
+                    return False
+                return True
+            except Exception:
+                return True
+
+        # LOINC-aware name/code filtering
+        loinc_idx = LoincIndex.load()
+        if isinstance(quick, list):
+            quick = loinc_idx.annotate_labs(quick)
+        codes_set, substrings_set = loinc_idx.resolve_tokens(name_tokens)
+        def _name_ok(item):
+            if not name_tokens:
+                return True
+            try:
+                test = (item.get('test') or item.get('name') or item.get('display') or '').strip()
+                code = (item.get('loinc') or item.get('code') or item.get('typeCode') or '').strip().lower()
+                if code and code in codes_set:
+                    return True
+                key = ''.join(ch.lower() if ch.isalnum() else ' ' for ch in test).strip()
+                return any(w in key for w in substrings_set)
+            except Exception:
+                return True
+
+        filtered = quick
+        filters_applied = bool(name_tokens) or bool(days) or bool(start_iso) or bool(end_iso)
+        if isinstance(quick, list) and filters_applied:
+            filtered = [q for q in quick if _date_ok(q) and _name_ok(q)]
+
+        include_raw_requested = request.args.get('includeRaw','0').lower() in ('1','true','yes','on')
+        if include_raw_requested and isinstance(filtered, list):
+            # Only attach _raw when no filters are applied to preserve index alignment
+            if not filters_applied:
                 raw_items = []
-            out = []
-            for idx, q in enumerate(quick):
-                obj = dict(q)
-                if idx < len(raw_items):
-                    obj['_raw'] = raw_items[idx]
-                out.append(obj)
-            quick = out
-        return jsonify(quick)
+                try:
+                    raw_items = T._get_nested_items(vpr)  # type: ignore
+                except Exception:
+                    raw_items = []
+                out = []
+                for idx, q in enumerate(filtered):
+                    obj = dict(q)
+                    if idx < len(raw_items):
+                        obj['_raw'] = raw_items[idx]
+                    out.append(obj)
+                filtered = out
+        return jsonify(filtered)
     except Exception as e:
         return jsonify({'error': str(e)}), 500
 
@@ -1155,7 +1326,10 @@ def problems_quick(dfn: str):
         vpr = svc.get_vpr_raw(dfn, 'problems')
         quick = svc.get_problems_quick(dfn)
         include_raw = request.args.get('includeRaw','0').lower() in ('1','true','yes','on')
+        # Accept detail=1 as alias for includeComments=1 (frontend convenience)
         include_comments = request.args.get('includeComments','0').lower() in ('1','true','yes','on')
+        if not include_comments:
+            include_comments = request.args.get('detail','0').lower() in ('1','true','yes','on')
         status_filter = (request.args.get('status') or 'all').strip().lower()  # 'active' | 'inactive' | 'all'
         if (include_raw or include_comments or status_filter != 'all') and isinstance(quick, list):
             raw_items = []
