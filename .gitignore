@@ -1,3 +1,9 @@
+# Ignore refactor scripts (removed from repo per request)
+OMAR_refactor/scripts/
+OMAR_refactor/examples/
+OMAR_refactor/tests/
+OMAR_refactor/archives/
+
 # Root-level .gitignore that keeps only specific folders in the repo
 # Strategy: ignore everything, then whitelist the allowed folders and the .gitignore itself.
 

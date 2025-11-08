@@ -11,6 +11,7 @@ except Exception:
     xmltodict = None  # soft dependency; validated at runtime
 
 from .data_gateway import DataGateway, GatewayError
+from .vpr_xml_parser import parse_vpr_results_xml, DOMAIN_TAGS
 
 
 # ---- Minimal Vista RPC client adapted for OMAR_refactor ----
@@ -354,12 +355,68 @@ class VistaSocketGateway(DataGateway):
         return self.get_vpr_domain(dfn, domain='patient')
 
     def get_vpr_domain(self, dfn: str, domain: str, params: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:  # type: ignore[override]
+        """Fetch a single domain via VPR GET PATIENT DATA (XML).
+
+        Strategy:
+        1. Prefer the native positional parameter signature (DFN, TYPE, START, STOP, MAX, ITEM, FILTER list)
+           because the RPC definition (Vivian site 8994-2917) expects ordered literals.
+        2. If the positional call yields a <results> domain section, parse with parse_vpr_results_xml.
+        3. Fallback to legacy namedArray invocation then normalize with _normalize_vpr_xml_to_items.
+        """
         self.connect()
+        # Map internal domain name to TYPE value (RPC expects semicolon-delimited kinds). For single domain we send one.
+        type_map = {
+            'patient': 'demographics',
+            'med': 'meds',
+            'lab': 'labs',
+            'vital': 'vitals',
+            'document': 'documents',
+            'image': 'images',
+            'procedure': 'procedures',
+            'visit': 'visits',
+            'problem': 'problems',
+            'allergy': 'reactions',
+        }
+        type_val = type_map.get(domain)
+        positional_params: List[Any] = [str(dfn)]
+        if type_val:
+            positional_params.append(type_val)
+        # Optional future: map params keys start/stop/max/item/filter -> append in order. Presently only support start/stop/max.
+        if params and isinstance(params, dict):
+            # START (3rd), STOP (4th), MAX (5th), ITEM (6th) - maintain order by placeholders if earlier ones missing.
+            start = params.get('start') or params.get('START')
+            stop = params.get('stop') or params.get('STOP')
+            max_items = params.get('max') or params.get('MAX')
+            item_id = params.get('item') or params.get('ITEM')
+            # Append respecting sequence; blank values become '' to preserve positional alignment only when later params used.
+            if any(v is not None for v in (start, stop, max_items, item_id)):
+                positional_params.append(str(start) if start else '')
+                positional_params.append(str(stop) if stop else '')
+                positional_params.append(str(max_items) if max_items else '')
+                positional_params.append(str(item_id) if item_id else '')
+            # FILTER list unsupported here; would require list param structure; leave for future.
+        self._logger.info('VistaSocketGateway', f"Invoking VPR GET PATIENT DATA (positional) for domain '{domain}' TYPE='{type_val}' (DFN {dfn})")
+        raw_xml_positional = ''
+        try:
+            raw_xml_positional = self._client.call_in_context(self.vpr_context, 'VPR GET PATIENT DATA', positional_params)
+            parsed_results = parse_vpr_results_xml(raw_xml_positional, domain=domain)
+            if parsed_results.get('items'):  # Successful domain parse
+                return self._wrap_domain_response(domain, dfn, parsed_results)
+        except Exception as e:
+            self._logger.error('VistaSocketGateway', f"Positional domain call failed: {e}")
+        # Fallback: namedArray approach used previously
         named = self._vpr_named_array(dfn, domain=domain, params=params)
-        # JLV WEB SERVICES + VPR GET PATIENT DATA returns XML by default
-        self._logger.info('VistaSocketGateway', f"Invoking VPR GET PATIENT DATA for domain '{domain}' in context '{self.vpr_context}' (DFN {dfn})")
+        self._logger.info('VistaSocketGateway', f"Fallback namedArray invocation for domain '{domain}' (DFN {dfn})")
         raw_xml = self._client.call_in_context(self.vpr_context, 'VPR GET PATIENT DATA', [ { 'namedArray': named } ])
-        return _normalize_vpr_xml_to_items(raw_xml)
+        # Try results parser second time (some deployments may still return <results>)
+        try:
+            parsed_results_2 = parse_vpr_results_xml(raw_xml, domain=domain)
+            if parsed_results_2.get('items'):
+                return self._wrap_domain_response(domain, dfn, parsed_results_2)
+        except Exception:
+            pass
+        legacy = _normalize_vpr_xml_to_items(raw_xml)
+        return self._wrap_domain_response(domain, dfn, legacy)
 
     def get_vpr_fullchart(self, dfn: str, params: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
         """Aggregate common domains to emulate fullchart when JSON endpoint is unavailable.
@@ -377,3 +434,63 @@ class VistaSocketGateway(DataGateway):
             except Exception:
                 continue
         return {'items': items}
+
+    # ---- Internal helpers ----
+    def _wrap_domain_response(self, domain: str, dfn: str, parsed: Dict[str, Any]) -> Dict[str, Any]:
+        """Return a structure closer to the VPR GET PATIENT DATA JSON domain envelope while
+        preserving backward compatibility with existing transforms.
+
+        JSON VPR domain (vista-api-x) roughly provides:
+            { 'apiVersion': '1.01', 'params': {...}, 'data': { 'updated': 'TS', 'totalItems': N, 'items': [...] } }
+
+        Our socket XML path currently returns just { 'items': [...], 'meta': {...} }.
+        To enable drop-in parity we synthesize a minimal superset:
+            {
+              'items': [...],                 # existing transform fast-path
+              'meta': {...},                  # original meta (version, timeZone, domain, total)
+              'data': {
+                  'totalItems': N,
+                  'items': [...],
+                  'version': meta.version?,   # surfaced for troubleshooting
+                  'timeZone': meta.timeZone?  # surfaced for troubleshooting
+              }
+            }
+
+        We intentionally omit apiVersion/params/systemId since they are transport-specific; these can
+        be added later if needed for strict diffing. Keeping root 'items' ensures no callers break.
+        """
+        try:
+            items = []
+            if isinstance(parsed, dict):
+                items = parsed.get('items') or []
+                if not isinstance(items, list):
+                    items = []
+            meta = parsed.get('meta') if isinstance(parsed, dict) else None
+            if not isinstance(meta, dict):
+                meta = {}
+            total = meta.get('total')
+            if not isinstance(total, int):
+                total = len(items)
+            data_block: Dict[str, Any] = {
+                'totalItems': total,
+                'items': items,
+            }
+            # surface version/timeZone if present (non-standard but helpful)
+            for k in ('version','timeZone','updated'):
+                if meta.get(k) and k not in data_block:
+                    data_block[k] = meta.get(k)
+            # Provide domain hint for debugging
+            if meta.get('domain') is None and domain:
+                meta['domain'] = domain
+            # Provide patient hint if absent
+            if 'dfn' not in meta:
+                meta['dfn'] = str(dfn)
+            wrapped = {
+                'items': items,  # legacy consumers
+                'meta': meta,
+                'data': data_block,
+            }
+            return wrapped
+        except Exception:
+            # Best-effort fallback: return original parsed
+            return parsed

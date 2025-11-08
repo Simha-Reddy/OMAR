@@ -25,29 +25,15 @@ Summary table
 
 (Keep this table alphabetically sorted by RPC Name. Do not edit the rows manually; run the auto-sync script below.)
 
-Auto-sync this table
---------------------
+Maintaining this table
+----------------------
 
-This repository includes a helper script that scans the codebase for RPC usages and regenerates the summary table above between the markers RPC_TABLE_START/END.
+Previously, this document referenced a helper script under `OMAR_refactor/scripts/` to auto-generate the table. The scripts folder has been removed from the repository and is now ignored.
 
-How to run (Windows PowerShell):
+If you need to regenerate or audit this inventory:
 
-1) Preferred: use the embedded Python in `OMAR_refactor/python/`.
-	- From the repo root:
-	  - `& "OMAR_refactor/python/python.exe" OMAR_refactor/scripts/update_rpc_inventory.py`
-
-2) Or use your active Python:
-	- `python OMAR_refactor/scripts/update_rpc_inventory.py`
-
-What it does:
-- Finds `gateway.call_rpc(context=..., rpc=...)` calls and `call_in_context(..., 'RPC NAME', ...)` patterns
-- Detects `VPR GET PATIENT DATA JSON` and `VPR GET PATIENT DATA` usages in gateways
-- Merges with any existing Purpose text in the current table so custom descriptions are preserved
-- Writes the updated, alphabetically-sorted table back into this document
-
-Notes:
-- Purpose text for newly detected RPCs defaults to `-` until you edit it here; the script will preserve your changes next runs.
-- Contexts may be literals (e.g., `OR CPRS GUI CHART`) or inferred (e.g., `JLV WEB SERVICES` for socket VPR XML).
+- Option A (manual): skim usages of `gateway.call_rpc(context=..., rpc=...)` and `call_in_context(..., 'RPC NAME', ...)` in the codebase and update the table between `RPC_TABLE_START/END` markers.
+- Option B (tooling later): we can add a minimal, sanitized tool under `docs/tools/` in a future PR if automated refresh is desired.
 
 Detailed sections
 -----------------
@@ -62,9 +48,9 @@ Detailed sections
 
 ### VPR GET PATIENT DATA
 - Context: `JLV WEB SERVICES` (socket mode). Override via `VISTA_VPR_XML_CONTEXT` if site differs.
-- Gateway: `VistaSocketGateway.get_vpr_domain()` (calls `_client.call_in_context(...)` with namedArray)
-- Parameters: same named array as JSON variant: `{ patientId: DFN, domain: <domain?>, ...filters }`
-- Response: raw XML; parsed by `xmltodict` and normalized to `{ "items": [ ... ] }` in `_normalize_vpr_xml_to_items()`.
+- Gateway: `VistaSocketGateway.get_vpr_domain()` (positional DFN, TYPE domain; falls back to namedArray when needed)
+- Parameters: positional for domain-limited calls: `DFN, TYPE[, START, STOP, MAX, ITEM, FILTER]`; namedArray fallback when necessary.
+- Response: raw XML in `<results>` shape; parsed by `parse_vpr_results_xml` and wrapped to provide `data.items/totalItems` plus root `items` for transforms.
 - Usage sites: all socket-mode patient domain fetches and `get_vpr_fullchart()` aggregation.
 
 ### ORQPT DEFAULT PATIENT LIST
