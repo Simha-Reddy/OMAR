@@ -2,7 +2,7 @@ from __future__ import annotations
 import os
 import time
 from flask import Blueprint, jsonify, request
-from ..gateways.vista_api_x_gateway import VistaApiXGateway
+from ..gateways.factory import get_gateway
 
 # Exposes the classic OMAR patient search endpoints at the root path
 # - GET  /vista_default_patient_list
@@ -43,8 +43,8 @@ def _unwrap_vax_raw(raw_val):
             return ''
 
 
-def _get_vista_gateway() -> VistaApiXGateway:
-    """Construct VistaApiXGateway using station/duz from session or defaults.
+def _get_vista_gateway():
+    """Return active gateway (demo or socket). In demo mode, station/duz are passed to vista-api-x.
     Allows optional query overrides (?station=...&duz=...).
     """
     from flask import session as flask_session
@@ -56,7 +56,7 @@ def _get_vista_gateway() -> VistaApiXGateway:
         flask_session['duz'] = str(duz_arg)
     station = str(flask_session.get('station') or os.getenv('DEFAULT_STATION','500'))
     duz = str(flask_session.get('duz') or os.getenv('DEFAULT_DUZ','983'))
-    return VistaApiXGateway(station=station, duz=duz)
+    return get_gateway(station=station, duz=duz)
 
 
 @bp.get('/vista_default_patient_list')
@@ -65,8 +65,8 @@ def vista_default_patient_list():
     Response shape mirrors original OMAR: { patients: [...], context, count, timestamp, user: {duz,name,division} }
     """
     gw = _get_vista_gateway()
-    # Try multiple contexts for broader compatibility as in legacy implementation
-    context_candidates = ['OR CPRS GUI CHART', 'JLV WEB SERVICES']
+    # Use only CPRS context for patient list in both demo and socket modes
+    context_candidates = ['OR CPRS GUI CHART']
     try:
         last_err: Exception | None = None
         for ctx in context_candidates:
@@ -134,8 +134,8 @@ def vista_patient_search():
     Returns: { matches: [{dfn,name,raw}], context, rpc, hasMore, nextCursor }
     """
     gw = _get_vista_gateway()
-    # Try multiple common ORWPT contexts for broader compatibility
-    context_candidates = ['OR CPRS GUI CHART', 'JLV WEB SERVICES']
+    # Use only CPRS context for patient search in both demo and socket modes
+    context_candidates = ['OR CPRS GUI CHART']
     data = request.get_json(silent=True) or {}
     raw_q = str(data.get('query') or '')
     # Normalize: remove exactly one space right after the first comma

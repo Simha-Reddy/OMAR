@@ -184,6 +184,11 @@ def create_app():
         from .blueprints.session_api import bp as session_state_bp
     except Exception:
         session_state_bp = None
+    # Auth/site selector API
+    try:
+        from .blueprints.auth_api import bp as auth_bp
+    except Exception:
+        auth_bp = None
     # Archive API
     try:
         from .blueprints.archive_api import bp as archive_bp
@@ -206,6 +211,8 @@ def create_app():
         app.register_blueprint(cprs_bp, url_prefix='/api/cprs')
     if session_state_bp is not None:
         app.register_blueprint(session_state_bp, url_prefix='/api/session')
+    if auth_bp is not None:
+        app.register_blueprint(auth_bp)
     if archive_bp is not None:
         app.register_blueprint(archive_bp, url_prefix='/api/archive')
 

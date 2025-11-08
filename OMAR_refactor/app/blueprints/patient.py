@@ -2,7 +2,7 @@ from __future__ import annotations
 import os
 from flask import Blueprint, jsonify, current_app, request
 from ..services.patient_service import PatientService
-from ..gateways.vista_api_x_gateway import VistaApiXGateway
+from ..gateways.factory import get_gateway
 from ..services import transforms as T
 from app.services.loinc_index import LoincIndex
 from app.query.query_models.default.services.rag_store import store as rag_store
@@ -17,12 +17,11 @@ bp = Blueprint('patient_api', __name__)
 # Very small composition for now; later use DI container
 
 def _get_patient_service() -> PatientService:
-    """Build PatientService with station/duz bound to session when available.
-    If query params include station/duz, persist them into session; otherwise use persisted values.
-    Defaults: station=500, duz=983 (dev).
+    """Build PatientService using the active gateway mode.
+    - In demo mode, honor station/duz from query or session for vista-api-x.
+    - In socket mode, station/duz are ignored; connections are per-session via login.
     """
     from flask import session as flask_session
-    # Persist station/duz from query if provided
     sta_arg = request.args.get('station')
     duz_arg = request.args.get('duz')
     if sta_arg:
@@ -31,7 +30,7 @@ def _get_patient_service() -> PatientService:
         flask_session['duz'] = str(duz_arg)
     station = str(flask_session.get('station') or os.getenv('DEFAULT_STATION','500'))
     duz = str(flask_session.get('duz') or os.getenv('DEFAULT_DUZ','983'))
-    gw = VistaApiXGateway(station=station, duz=duz)
+    gw = get_gateway(station=station, duz=duz)
     return PatientService(gateway=gw)
 
 
@@ -278,7 +277,7 @@ def sensitive_check(dfn: str):
                 return ''
 
     try:
-        gw = VistaApiXGateway()
+        gw = get_gateway()
         context = 'OR CPRS GUI CHART'
         raw = gw.call_rpc(context=context, rpc='DG SENSITIVE RECORD ACCESS', parameters=[{'string': str(dfn)}], json_result=False, timeout=30)  # type: ignore[attr-defined]
         text = _unwrap_vax_raw(raw).strip()

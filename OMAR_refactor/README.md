@@ -8,6 +8,24 @@ While functional now, OMAR is a framework, not a final product. It's intended to
 
 ---
 
+## Docs index
+
+- Architecture and backend
+  - docs/backend_app_structure.md — Flask app structure and request flow
+  - docs/gateways.md — Data gateway modes (vista-api-x HTTP vs VistA Socket)
+  - docs/rpc_inventory.md — RPCs used (socket and HTTP), parameters and results
+- Query subsystem (Hey OMAR)
+  - docs/query_subsystem_overview.md — Endpoints and model discovery
+  - docs/query_model_template.md — Template for building a new provider
+- Scribe subsystem
+  - docs/scribe_subsystem.md — Audio ingestion, transcription, and note drafting
+- Frontend
+  - docs/frontend_structure.md — JS modules, workspace, and tabs
+  - docs/frontend_libraries.md — Static JS libraries
+- Integrations and policies
+  - docs/smart_on_fhir_integration.md — Future SMART on FHIR plan
+  - docs/tag_policy.md — Title tag policy and boosts
+
 ## Quick plain-language overview (for clinicians)
 
 What OMAR does for you:
@@ -66,16 +84,22 @@ Project layout (important folders)
 - `OMAR_refactor/static/` — front-end JavaScript, CSS, images. Look under `static/js/workspace/modules/` for tab modules like `heyomar.js` and `snapshot.js`.
 - `OMAR_refactor/templates/` — HTML templates and prompt templates used by the backend.
 - `OMAR_refactor/app/query/query_models/` — Hey OMAR providers live here. See `default/` for the built-in model and `template_model/` for a copyable starting point (with its own README).
-- `OMAR_refactor/app/gateways/` - Connection to VistA via vista-api-x
+- `OMAR_refactor/app/gateways/` - Gateway implementations
+  - `vista_api_x_gateway.py` (DEMO HTTP)
+  - `vista_socket_gateway.py` (Broker socket via JLV XML)
+  - `factory.py` (runtime selection based on login)
 - `OMAR_refactor/static/js/note.js` — browser-side audio capture (NoteRecorder) used by the Note (scribe) tab.
 - `requirements.txt` — Python dependencies for the environment used to run OMAR.
 
 How patient data is obtained
 
-- Current gateway: vista-api-x ("Vista API X"). OMAR calls this API as the single entry point for patient data instead of talking to VistA directly.
-- vista-api-x brokers VistA RPCs OMAR invokes its endpoints to fetch the VPR bundle ("GET PATIENT DATA JSON") and TIU document content.
-- The returned VPR JSON (encounters, meds, labs, document refs) is consumed directly by OMAR_refactor. Lightweight mapping to UI-friendly shapes is handled in `OMAR_refactor/app/services/transforms.py` (e.g., demographics, medications, labs, vitals, notes) for Snapshot/Explore/Hey OMAR.
-- TIU documents (notes) are retrieved via vista-api-x and indexed for search. Each chunk keeps metadata such as note id, local title, nationalTitle (if available), author, timestamp, and stable excerpt index.
+- Two modes:
+  - DEMO (vista-api-x): fetches VPR JSON via HTTP; used when the landing page selects DEMO.
+  - Socket (Broker): connects directly to VistA; uses JLV WEB SERVICES + `VPR GET PATIENT DATA` (XML) per-domain and normalizes it to a JSON-like shape consumed by the same transforms. Login with ACCESS/VERIFY via `/api/login`.
+- The returned VPR payload (JSON in DEMO, XML→normalized lists in Socket) feeds transforms in `app/services/transforms.py` (demographics, meds, labs, vitals, notes, etc.).
+- TIU documents are included in VPR (domain `document`); text may be requested with `text=1` where supported.
+
+See `docs/gateways.md` for environment variables and operational details.
 
 Privacy note about patient data
 

@@ -1,6 +1,6 @@
 from __future__ import annotations
 from flask import Blueprint, jsonify
-from ..gateways.vista_api_x_gateway import VistaApiXGateway
+from ..gateways.factory import get_gateway
 
 bp = Blueprint('cprs_api', __name__)
 
@@ -39,7 +39,7 @@ def cprs_sync_top():
     Response: { ok: bool, dfn: str, name: str, raw: str }
     """
     try:
-        gw = VistaApiXGateway()
+        gw = get_gateway()
         raw = gw.call_rpc(context='OR CPRS GUI CHART', rpc='ORWPT TOP', parameters=[], json_result=False, timeout=30)
         text = _unwrap_vax_raw(raw).strip()
         dfn = ''

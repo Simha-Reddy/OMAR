@@ -22,6 +22,9 @@
 /OMAR_refactor/.venv
 /OMAR_refactor/.venv/**
 
+# Ignore cipher.txt file inside OMAR_refactor
+/OMAR_refactor/cipher.txt
+
 # Ignore bundled/portable Python runtime inside OMAR_refactor
 /OMAR_refactor/python
 /OMAR_refactor/python/**
