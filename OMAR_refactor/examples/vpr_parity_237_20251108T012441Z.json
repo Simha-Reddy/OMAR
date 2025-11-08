@@ -1,0 +1,128 @@
+{
+  "dfn": "237",
+  "station": "500",
+  "duz": "983",
+  "generatedAt": "2025-11-08T01:24:41.088488Z",
+  "domains": [
+    {
+      "domain": "patient",
+      "count_json": 0,
+      "count_xml": 0,
+      "missing_in_xml": 0,
+      "missing_in_json": 0,
+      "json_only_fields": [
+        "ERROR: Failed to parse VPR XML: not well-formed (invalid token): line 1, column 0"
+      ],
+      "xml_only_fields": [],
+      "common_field_mismatch_samples": []
+    },
+    {
+      "domain": "med",
+      "count_json": 0,
+      "count_xml": 0,
+      "missing_in_xml": 0,
+      "missing_in_json": 0,
+      "json_only_fields": [
+        "ERROR: Failed to parse VPR XML: not well-formed (invalid token): line 1, column 0"
+      ],
+      "xml_only_fields": [],
+      "common_field_mismatch_samples": []
+    },
+    {
+      "domain": "lab",
+      "count_json": 0,
+      "count_xml": 0,
+      "missing_in_xml": 0,
+      "missing_in_json": 0,
+      "json_only_fields": [
+        "ERROR: Failed to parse VPR XML: not well-formed (invalid token): line 1, column 0"
+      ],
+      "xml_only_fields": [],
+      "common_field_mismatch_samples": []
+    },
+    {
+      "domain": "vital",
+      "count_json": 0,
+      "count_xml": 0,
+      "missing_in_xml": 0,
+      "missing_in_json": 0,
+      "json_only_fields": [
+        "ERROR: Failed to parse VPR XML: not well-formed (invalid token): line 1, column 0"
+      ],
+      "xml_only_fields": [],
+      "common_field_mismatch_samples": []
+    },
+    {
+      "domain": "document",
+      "count_json": 0,
+      "count_xml": 0,
+      "missing_in_xml": 0,
+      "missing_in_json": 0,
+      "json_only_fields": [
+        "ERROR: Failed to parse VPR XML: not well-formed (invalid token): line 1, column 0"
+      ],
+      "xml_only_fields": [],
+      "common_field_mismatch_samples": []
+    },
+    {
+      "domain": "image",
+      "count_json": 0,
+      "count_xml": 0,
+      "missing_in_xml": 0,
+      "missing_in_json": 0,
+      "json_only_fields": [
+        "ERROR: Failed to parse VPR XML: not well-formed (invalid token): line 1, column 0"
+      ],
+      "xml_only_fields": [],
+      "common_field_mismatch_samples": []
+    },
+    {
+      "domain": "procedure",
+      "count_json": 0,
+      "count_xml": 0,
+      "missing_in_xml": 0,
+      "missing_in_json": 0,
+      "json_only_fields": [
+        "ERROR: Failed to parse VPR XML: not well-formed (invalid token): line 1, column 0"
+      ],
+      "xml_only_fields": [],
+      "common_field_mismatch_samples": []
+    },
+    {
+      "domain": "visit",
+      "count_json": 0,
+      "count_xml": 0,
+      "missing_in_xml": 0,
+      "missing_in_json": 0,
+      "json_only_fields": [
+        "ERROR: Failed to parse VPR XML: not well-formed (invalid token): line 1, column 0"
+      ],
+      "xml_only_fields": [],
+      "common_field_mismatch_samples": []
+    },
+    {
+      "domain": "problem",
+      "count_json": 0,
+      "count_xml": 0,
+      "missing_in_xml": 0,
+      "missing_in_json": 0,
+      "json_only_fields": [
+        "ERROR: Failed to parse VPR XML: not well-formed (invalid token): line 1, column 0"
+      ],
+      "xml_only_fields": [],
+      "common_field_mismatch_samples": []
+    },
+    {
+      "domain": "allergy",
+      "count_json": 0,
+      "count_xml": 0,
+      "missing_in_xml": 0,
+      "missing_in_json": 0,
+      "json_only_fields": [
+        "ERROR: Failed to parse VPR XML: not well-formed (invalid token): line 1, column 0"
+      ],
+      "xml_only_fields": [],
+      "common_field_mismatch_samples": []
+    }
+  ]
+}
