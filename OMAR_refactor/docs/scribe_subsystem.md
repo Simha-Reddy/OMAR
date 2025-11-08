@@ -1,6 +1,8 @@
 Scribe subsystem (audio transcription + note drafting)
 =====================================================
 
+Last updated: 2025-11-07
+
 This was formerly `app/scribe/README.md`. Centralized here for consistency.
 
 Overview

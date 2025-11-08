@@ -1,5 +1,7 @@
 # SMART on FHIR integration (CDS Console)
 
+Last updated: 2025-11-07
+
 This note summarizes how to run OMAR_refactor as a SMART-on-FHIR app inside the VA Clinical Decision Support (CDS) Console ("smart-on-fhir-container"). It’s based on the Console’s README (added under `Helpful Resources/README_for_CDS_SMART_on_FHIR_app_compliance.md`) and OMAR_refactor’s architecture.
 
 ## How the Console launches apps

@@ -1,5 +1,7 @@
 # National Title Tag Policy: Overview, Tuning, and Trade‑offs
 
+Last updated: 2025-11-07
+
 This document explains how note "tagging" works in the refactored OMAR retrieval pipeline, how to configure the tag policy, and the pros/cons of using it.
 
 ## What it does

@@ -1,5 +1,7 @@
 # Gateways: vista-api-x (DEMO) and VistA Socket
 
+Last updated: 2025-11-07
+
 This refactor supports two backend gateway modes:
 
 - DEMO (HTTP): Uses vista-api-x over HTTPS. No ACCESS/VERIFY required.

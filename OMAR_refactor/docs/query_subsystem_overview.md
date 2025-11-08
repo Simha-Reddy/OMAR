@@ -1,6 +1,8 @@
 Query subsystem overview (Hey OMAR)
 ===================================
 
+Last updated: 2025-11-07
+
 Migrated from `app/query/README.md`.
 
 Endpoint

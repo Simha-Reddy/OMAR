@@ -1,6 +1,8 @@
 Frontend structure overview
 ===========================
 
+Last updated: 2025-11-07
+
 Migrated from `static/README.md` to centralize documentation.
 
 Structure

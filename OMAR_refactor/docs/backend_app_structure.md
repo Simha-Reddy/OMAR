@@ -1,6 +1,8 @@
 Backend application structure (Flask `app/` package)
 ====================================================
 
+Last updated: 2025-11-07
+
 This former `app/README.md` described the layered backend architecture. It is preserved here unchanged (except path references) so all technical docs live under `docs/`.
 
 High-level layout

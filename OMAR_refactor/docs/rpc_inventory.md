@@ -1,22 +1,53 @@
 RPC Inventory (Socket and HTTP VistA Calls)
 ==========================================
 
+Last updated: 2025-11-07
+
 This document lists every VistA RPC invoked directly or via vista-api-x within OMAR_refactor.
 Top list: RPC name | Context(s) | Purpose.
 Below: detailed sections with parameters, response parsing, and usage sites.
 
-Plain list (summary)
---------------------
-- VPR GET PATIENT DATA JSON | LHS RPC CONTEXT | Fetch patient domain or full chart (JSON variant; DEMO mode)
-- VPR GET PATIENT DATA | JLV WEB SERVICES | Fetch patient domain (XML variant; socket mode)
-- ORQPT DEFAULT PATIENT LIST | OR CPRS GUI CHART | Default patient list for user
-- ORWU USERINFO | OR CPRS GUI CHART | Minimal user DUZ/name/division info
-- ORWPT LAST5 | OR CPRS GUI CHART | Patient lookup by LAST5
-- ORWPT LIST ALL | OR CPRS GUI CHART | Patient name prefix search with paging
-- ORWPT TOP | OR CPRS GUI CHART | Currently selected CPRS patient (sync)
-- DG SENSITIVE RECORD ACCESS | OR CPRS GUI CHART | Sensitive record access check
+Summary table
+-------------
 
-(Keep this summary alphabetically sorted by RPC name; add new RPCs above with same format.)
+<!-- RPC_TABLE_START -->
+| RPC Name                     | Context(s)            | Purpose                                                     |
+|------------------------------|-----------------------|-------------------------------------------------------------|
+| DG SENSITIVE RECORD ACCESS   | OR CPRS GUI CHART     | Sensitive record access check; returns status/message       |
+| ORQPT DEFAULT PATIENT LIST   | OR CPRS GUI CHART     | Default patient list for user                               |
+| ORWU USERINFO                | OR CPRS GUI CHART     | Minimal user DUZ/name/division info                         |
+| ORWPT LAST5                  | OR CPRS GUI CHART     | Patient lookup by LAST5 token                               |
+| ORWPT LIST ALL               | OR CPRS GUI CHART     | Patient name prefix search with paging                      |
+| ORWPT TOP                    | OR CPRS GUI CHART     | Currently selected CPRS patient (sync)                      |
+| VPR GET PATIENT DATA         | JLV WEB SERVICES      | Fetch patient domain (XML variant; socket mode)             |
+| VPR GET PATIENT DATA JSON    | LHS RPC CONTEXT       | Fetch patient domain or full chart (JSON; DEMO HTTP mode)   |
+<!-- RPC_TABLE_END -->
+
+(Keep this table alphabetically sorted by RPC Name. Do not edit the rows manually; run the auto-sync script below.)
+
+Auto-sync this table
+--------------------
+
+This repository includes a helper script that scans the codebase for RPC usages and regenerates the summary table above between the markers RPC_TABLE_START/END.
+
+How to run (Windows PowerShell):
+
+1) Preferred: use the embedded Python in `OMAR_refactor/python/`.
+	- From the repo root:
+	  - `& "OMAR_refactor/python/python.exe" OMAR_refactor/scripts/update_rpc_inventory.py`
+
+2) Or use your active Python:
+	- `python OMAR_refactor/scripts/update_rpc_inventory.py`
+
+What it does:
+- Finds `gateway.call_rpc(context=..., rpc=...)` calls and `call_in_context(..., 'RPC NAME', ...)` patterns
+- Detects `VPR GET PATIENT DATA JSON` and `VPR GET PATIENT DATA` usages in gateways
+- Merges with any existing Purpose text in the current table so custom descriptions are preserved
+- Writes the updated, alphabetically-sorted table back into this document
+
+Notes:
+- Purpose text for newly detected RPCs defaults to `-` until you edit it here; the script will preserve your changes next runs.
+- Contexts may be literals (e.g., `OR CPRS GUI CHART`) or inferred (e.g., `JLV WEB SERVICES` for socket VPR XML).
 
 Detailed sections
 -----------------

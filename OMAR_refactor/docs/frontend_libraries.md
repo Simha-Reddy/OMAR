@@ -1,6 +1,8 @@
 Static JavaScript libraries
 ===========================
 
+Last updated: 2025-11-07
+
 Migrated from `static/lib/README.md`.
 
 Available libraries

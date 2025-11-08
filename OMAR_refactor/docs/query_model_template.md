@@ -1,6 +1,8 @@
 Query model template (RAG baseline)
 ===================================
 
+Last updated: 2025-11-07
+
 Formerly `app/query/query_models/template_model/README.md`.
 
 Purpose
