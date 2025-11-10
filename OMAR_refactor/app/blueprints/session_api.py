@@ -127,5 +127,13 @@ def purge_state():
 		store.pop((uid, pid), None)
 	else:
 		r.delete(_state_key(uid, pid))
+	try:
+		from ..gateways.factory import get_gateway
+		gw = get_gateway()
+		clear_fn = getattr(gw, 'clear_patient_cache', None)
+		if callable(clear_fn):
+			clear_fn(pid)
+	except Exception:
+		pass
 	return jsonify({'ok': True})
 

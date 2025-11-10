@@ -1,0 +1,8 @@
+TODO:
+[x] Inspect current patient sync flow in data_gateway and socket gateway implementations.
+[x] Verify application context selection per RPC before invoking VistA socket.
+[x] Confirm initial socket login uses OR CPRS GUI CHART prior to per-call context swaps.
+[x] Update Socket_VPR_Test to capture raw XML from VPR GET PATIENT DATA into examples folder.
+[x] Add fallback VPR context handling in Socket_VPR_Test for sites lacking JLV WEB SERVICES.
+[ ] Compare XML parser expectations vs raw socket payloads to identify wrapper assumptions.
+[ ] Document findings and propose fixes for incorrect responses.

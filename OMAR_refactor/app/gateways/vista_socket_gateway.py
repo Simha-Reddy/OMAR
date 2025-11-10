@@ -1,14 +1,32 @@
 from __future__ import annotations
 
+import copy
 import json
 import os
 import socket
 import threading
 import time
+from collections import OrderedDict
 from datetime import datetime, timezone
-from typing import Any, Dict, List, Optional, Set
+from typing import Any, Dict, List, Optional, Set, Tuple
 
 from .data_gateway import DataGateway, GatewayError
+
+
+def _env_int(name: str, default: int) -> int:
+	try:
+		value = int(str(os.getenv(name, str(default))).strip() or default)
+		return value
+	except Exception:
+		return default
+
+
+_SOCKET_IDLE_MAX_SECONDS = max(30, _env_int("VISTA_SOCKET_IDLE_SECONDS", 300))
+_DOMAIN_CACHE_TTL = max(5, _env_int("VISTA_VPR_CACHE_TTL", 120))
+_DOMAIN_CACHE_SIZE = max(4, _env_int("VISTA_VPR_CACHE_SIZE", 12))
+_PATIENT_LIST_TTL = max(5, _env_int("VISTA_PATIENT_LIST_TTL", 30))
+_PATIENT_SEARCH_TTL = max(5, _env_int("VISTA_PATIENT_SEARCH_TTL", 20))
+_PATIENT_SEARCH_CACHE_SIZE = max(4, _env_int("VISTA_PATIENT_SEARCH_CACHE_SIZE", 24))
 
 
 class _VistaRPCLogger:
@@ -87,6 +105,10 @@ class _VistaRPCClient:
 		self.sock: Optional[socket.socket] = None
 		self._lock = threading.RLock()
 		self._terminator = chr(4)
+		self._last_used = time.monotonic()
+		self._heartbeat_interval = 0
+		self._heartbeat_stop = threading.Event()
+		self._heartbeat_thread: Optional[threading.Thread] = None
 
 	@classmethod
 	def _get_cipher(cls) -> List[str]:
@@ -151,7 +173,12 @@ class _VistaRPCClient:
 				chunks.append(chunk[:-1])
 				break
 			chunks.append(chunk)
-		return "".join(chunks)
+		message = "".join(chunks)
+		self._mark_used()
+		return message
+
+	def _mark_used(self) -> None:
+		self._last_used = time.monotonic()
 
 	def connect(self) -> None:
 		with self._lock:
@@ -169,6 +196,7 @@ class _VistaRPCClient:
 			time.sleep(0.25)
 			self.logger.info("VistaRPC", f"connected to {self.host}:{self.port}")
 			self._handshake()
+			self._mark_used()
 
 	def _handshake(self) -> None:
 		if not self.sock:
@@ -227,6 +255,7 @@ class _VistaRPCClient:
 		return False, reply_enc
 
 	def close(self) -> None:
+		self.stop_heartbeat()
 		with self._lock:
 			if not self.sock:
 				return
@@ -275,6 +304,63 @@ class _VistaRPCClient:
 				if _normalize_context_error(result):
 					raise GatewayError("context re-establish failed")
 			return result
+
+	def ensure_connected(self, max_idle_seconds: int = 300) -> None:
+		if max_idle_seconds <= 0:
+			return
+		if not self.sock:
+			self.connect()
+			return
+		elapsed = time.monotonic() - self._last_used
+		if elapsed < max_idle_seconds:
+			return
+		try:
+			self.call_in_context(self.context or "", "XUS GET USER INFO", [])
+		except Exception:
+			self.logger.info("VistaRPC", "ensure_connected ping failed; reconnecting")
+			self.connect()
+
+	def start_heartbeat(self, interval: int) -> None:
+		if interval <= 0:
+			self.stop_heartbeat()
+			return
+		self._heartbeat_interval = int(interval)
+		if self._heartbeat_thread and self._heartbeat_thread.is_alive():
+			return
+		self._heartbeat_stop.clear()
+
+		def _loop() -> None:
+			while not self._heartbeat_stop.wait(self._heartbeat_interval):
+				try:
+					if not self.sock:
+						self.connect()
+						continue
+					since_last = time.monotonic() - self._last_used
+					if since_last < (self._heartbeat_interval * 1.5):
+						continue
+					self.call_in_context(self.context or "", "XUS GET USER INFO", [])
+				except Exception as exc:
+					try:
+						self.logger.info("VistaRPC", f"heartbeat detected issue: {exc}")
+					except Exception:
+						pass
+					try:
+						self.connect()
+					except Exception:
+						continue
+
+		self._heartbeat_thread = threading.Thread(target=_loop, name="VistaRPCHeartbeat", daemon=True)
+		self._heartbeat_thread.start()
+
+	def stop_heartbeat(self) -> None:
+		self._heartbeat_stop.set()
+		thread = self._heartbeat_thread
+		self._heartbeat_thread = None
+		if thread and thread.is_alive():
+			try:
+				thread.join(timeout=2.0)
+			except Exception:
+				pass
 
 
 def _fileman_to_iso(value: Any) -> Optional[str]:
@@ -698,9 +784,15 @@ class VistaSocketGateway(DataGateway):
 		self.logger = _VistaRPCLogger()
 		self._client = self._build_client()
 		self._connected = False
+		self._site_key = f"{self.host}:{self.port}"
+		self._cache_lock = threading.RLock()
+		self._domain_cache: "OrderedDict[Tuple[str, str, str, str], Tuple[float, Dict[str, Any]]]" = OrderedDict()
+		self._patient_list_cache: Optional[Tuple[float, Any]] = None
+		self._patient_search_cache: "OrderedDict[str, Tuple[float, Any]]" = OrderedDict()
+		self._cacheable_domains = {"patient", "med", "lab", "vital", "problem", "allergy"}
 
 	def _build_client(self) -> _VistaRPCClient:
-		return _VistaRPCClient(
+		client = _VistaRPCClient(
 			host=self.host,
 			port=self.port,
 			access=self.access,
@@ -708,6 +800,148 @@ class VistaSocketGateway(DataGateway):
 			context=self.default_context,
 			logger=self.logger,
 		)
+		interval_raw = os.getenv("VISTA_HEARTBEAT_INTERVAL", "60")
+		try:
+			interval = int(str(interval_raw).strip() or "60")
+		except Exception:
+			interval = 60
+		if interval > 0:
+			client.start_heartbeat(interval)
+		return client
+
+	def _clear_caches(self) -> None:
+		with self._cache_lock:
+			self._domain_cache.clear()
+			self._patient_list_cache = None
+			self._patient_search_cache.clear()
+
+	def clear_patient_cache(self, dfn: Optional[str] = None) -> None:
+		with self._cache_lock:
+			if dfn is None:
+				self._domain_cache.clear()
+				return
+			dfn_str = str(dfn)
+			remove: List[Tuple[str, str, str, str]] = [key for key in self._domain_cache if key[1] == dfn_str]
+			for key in remove:
+				self._domain_cache.pop(key, None)
+
+	def _domain_cache_key(self, dfn: str, domain: str, params: Optional[Dict[str, Any]]) -> Tuple[str, str, str, str]:
+		signature = ""
+		if params:
+			try:
+				signature = json.dumps(params, sort_keys=True, separators=(",", ":"))
+			except Exception:
+				try:
+					signature = str(sorted(params.items()))
+				except Exception:
+					signature = str(params)
+		return (self._site_key, str(dfn), domain, signature)
+
+	def _domain_cache_get(self, key: Optional[Tuple[str, str, str, str]]) -> Optional[Dict[str, Any]]:
+		if key is None:
+			return None
+		now = time.monotonic()
+		with self._cache_lock:
+			entry = self._domain_cache.get(key)
+			if not entry:
+				return None
+			ts, payload = entry
+			if (now - ts) > _DOMAIN_CACHE_TTL:
+				self._domain_cache.pop(key, None)
+				return None
+			self._domain_cache.move_to_end(key)
+			return copy.deepcopy(payload)
+
+	def _domain_cache_store(self, key: Optional[Tuple[str, str, str, str]], payload: Dict[str, Any]) -> None:
+		if key is None:
+			return
+		with self._cache_lock:
+			self._domain_cache[key] = (time.monotonic(), copy.deepcopy(payload))
+			self._domain_cache.move_to_end(key)
+			while len(self._domain_cache) > _DOMAIN_CACHE_SIZE:
+				self._domain_cache.popitem(last=False)
+
+	def _params_disable_cache(self, params: Optional[Dict[str, Any]]) -> bool:
+		if not params:
+			return False
+		text_flag = str(params.get("text", "")).strip().lower()
+		if text_flag in {"1", "true", "yes"}:
+			return True
+		return False
+
+	def _domain_cache_produce(
+		self,
+		key: Optional[Tuple[str, str, str, str]],
+		producer,
+	) -> Dict[str, Any]:
+		cached = self._domain_cache_get(key)
+		if cached is not None:
+			return cached
+		payload = producer()
+		self._domain_cache_store(key, payload)
+		return payload
+
+	def _rpc_cache_key(self, rpc: str, parameters: Optional[List[Dict[str, Any]]]) -> str:
+		if not parameters:
+			return f"{rpc}|"
+		try:
+			return f"{rpc}|{json.dumps(parameters, sort_keys=True, separators=(",", ":"))}"
+		except Exception:
+			return f"{rpc}|{str(parameters)}"
+
+	def _get_cached_rpc(
+		self,
+		context: str,
+		rpc: str,
+		parameters: Optional[List[Dict[str, Any]]],
+		json_result: bool,
+	) -> Optional[Any]:
+		if json_result:
+			return None
+		if context != self.default_context:
+			return None
+		now = time.monotonic()
+		if rpc == "ORQPT DEFAULT PATIENT LIST" and not parameters:
+			with self._cache_lock:
+				if self._patient_list_cache and (now - self._patient_list_cache[0]) <= _PATIENT_LIST_TTL:
+					return self._patient_list_cache[1]
+				return None
+		if rpc in {"ORWPT LAST5", "ORWPT LIST ALL"}:
+			key = self._rpc_cache_key(rpc, parameters)
+			with self._cache_lock:
+				entry = self._patient_search_cache.get(key)
+				if not entry:
+					return None
+				ts, payload = entry
+				if (now - ts) > _PATIENT_SEARCH_TTL:
+					self._patient_search_cache.pop(key, None)
+					return None
+				self._patient_search_cache.move_to_end(key)
+				return payload
+		return None
+
+	def _store_cached_rpc(
+		self,
+		context: str,
+		rpc: str,
+		parameters: Optional[List[Dict[str, Any]]],
+		json_result: bool,
+		payload: Any,
+	) -> None:
+		if json_result or context != self.default_context:
+			return
+		now = time.monotonic()
+		if rpc == "ORQPT DEFAULT PATIENT LIST" and not parameters:
+			with self._cache_lock:
+				self._patient_list_cache = (now, payload)
+			return
+		if rpc in {"ORWPT LAST5", "ORWPT LIST ALL"}:
+			key = self._rpc_cache_key(rpc, parameters)
+			with self._cache_lock:
+				self._patient_search_cache[key] = (now, payload)
+				self._patient_search_cache.move_to_end(key)
+				while len(self._patient_search_cache) > _PATIENT_SEARCH_CACHE_SIZE:
+					self._patient_search_cache.popitem(last=False)
 
 	def _reset_client(self) -> None:
 		try:
@@ -717,6 +951,7 @@ class VistaSocketGateway(DataGateway):
 		self._client = self._build_client()
 		self._connected = False
 		self.logger.info("VistaRPC", "client reset after authentication failure")
+		self._clear_caches()
 
 	def connect(self) -> None:
 		if self._connected:
@@ -732,12 +967,14 @@ class VistaSocketGateway(DataGateway):
 				self._connected = True
 			else:
 				raise
+		self._client.ensure_connected(max_idle_seconds=_SOCKET_IDLE_MAX_SECONDS)
 
 	def close(self) -> None:
 		try:
 			self._client.close()
 		finally:
 			self._connected = False
+		self._clear_caches()
 
 	def call_rpc(
 		self,
@@ -749,6 +986,9 @@ class VistaSocketGateway(DataGateway):
 		timeout: int = 60,
 	) -> Any:  # type: ignore[override]
 		self.connect()
+		cached = self._get_cached_rpc(context, rpc, parameters, json_result)
+		if cached is not None:
+			return cached
 		params: List[Any] = []
 		for entry in parameters or []:
 			if "string" in entry:
@@ -775,6 +1015,7 @@ class VistaSocketGateway(DataGateway):
 				raw = self._client.call_in_context(context, rpc, params)
 			else:
 				raise
+		self._store_cached_rpc(context, rpc, parameters, json_result, raw)
 		if json_result:
 			try:
 				return json.loads(raw)
@@ -793,36 +1034,51 @@ class VistaSocketGateway(DataGateway):
 	) -> Dict[str, Any]:  # type: ignore[override]
 		self.connect()
 		domain = domain.lower()
+		cache_key: Optional[Tuple[str, str, str, str]] = None
+		if domain in self._cacheable_domains and not self._params_disable_cache(params):
+			cache_key = self._domain_cache_key(dfn, domain, params)
 		if domain == "patient":
-			raw = self._client.call_in_context(self.default_context, "ORWPT PTINQ", [str(dfn)])
-			item = _parse_orwpt_ptinq(raw, dfn)
-			return _wrap_items("patient", dfn, [item])
+			def _load_patient() -> Dict[str, Any]:
+				raw = self._client.call_in_context(self.default_context, "ORWPT PTINQ", [str(dfn)])
+				item = _parse_orwpt_ptinq(raw, dfn)
+				return _wrap_items("patient", dfn, [item])
+			return self._domain_cache_produce(cache_key, _load_patient)
 		if domain in ("med", "meds", "medication"):
-			raw = self._client.call_in_context(self.default_context, "ORWPS ACTIVE", [str(dfn)])
-			items = _parse_orwps_active(raw)
-			return _wrap_items("med", dfn, items)
+			def _load_med() -> Dict[str, Any]:
+				raw = self._client.call_in_context(self.default_context, "ORWPS ACTIVE", [str(dfn)])
+				items = _parse_orwps_active(raw)
+				return _wrap_items("med", dfn, items)
+			return self._domain_cache_produce(cache_key, _load_med)
 		if domain in ("lab", "labs"):
-			raw = self._client.call_in_context(self.default_context, "ORWCV LAB", [str(dfn)])
-			items = _parse_orwcv_lab(raw)
-			return _wrap_items("lab", dfn, items)
+			def _load_lab() -> Dict[str, Any]:
+				raw = self._client.call_in_context(self.default_context, "ORWCV LAB", [str(dfn)])
+				items = _parse_orwcv_lab(raw)
+				return _wrap_items("lab", dfn, items)
+			return self._domain_cache_produce(cache_key, _load_lab)
 		if domain in ("vital", "vitals"):
-			start = params.get("start") if params else None
-			stop = params.get("stop") if params else None
-			fm_start = _iso_to_fileman(start) or ""
-			fm_stop = _iso_to_fileman(stop) or ""
-			raw = self._client.call_in_context(self.default_context, "ORQQVI VITALS", [str(dfn), fm_start, fm_stop])
-			items = _parse_orqqvi_vitals(raw)
-			return _wrap_items("vital", dfn, items)
+			def _load_vital() -> Dict[str, Any]:
+				start = params.get("start") if params else None
+				stop = params.get("stop") if params else None
+				fm_start = _iso_to_fileman(start) or ""
+				fm_stop = _iso_to_fileman(stop) or ""
+				raw = self._client.call_in_context(self.default_context, "ORQQVI VITALS", [str(dfn), fm_start, fm_stop])
+				items = _parse_orqqvi_vitals(raw)
+				return _wrap_items("vital", dfn, items)
+			return self._domain_cache_produce(cache_key, _load_vital)
 		if domain in ("document", "documents", "notes"):
 			return self._get_document_domain(dfn, params=params)
 		if domain in ("problem", "problems"):
-			raw = self._client.call_in_context(self.default_context, "ORQQPL PROBLEM LIST", [str(dfn)])
-			items = _parse_orqqpl_problem_list(raw)
-			return _wrap_items("problem", dfn, items)
+			def _load_problem() -> Dict[str, Any]:
+				raw = self._client.call_in_context(self.default_context, "ORQQPL PROBLEM LIST", [str(dfn)])
+				items = _parse_orqqpl_problem_list(raw)
+				return _wrap_items("problem", dfn, items)
+			return self._domain_cache_produce(cache_key, _load_problem)
 		if domain in ("allergy", "allergies"):
-			raw = self._client.call_in_context(self.default_context, "ORQQAL LIST", [str(dfn)])
-			items = _parse_orqqal_allergies(raw)
-			return _wrap_items("allergy", dfn, items)
+			def _load_allergy() -> Dict[str, Any]:
+				raw = self._client.call_in_context(self.default_context, "ORQQAL LIST", [str(dfn)])
+				items = _parse_orqqal_allergies(raw)
+				return _wrap_items("allergy", dfn, items)
+			return self._domain_cache_produce(cache_key, _load_allergy)
 		return _wrap_items(domain, dfn, [])
 
 	def get_vpr_fullchart(

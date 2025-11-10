@@ -1,0 +1,5 @@
+TODO:
+1. [x] Inspect examples/vpr_5555555.xml to understand raw VPR XML structure from socket call.
+2. [x] Compare parsed output from VistaSocketGateway.get_vpr_domain with expected API gateway shape for key domains (patient aligns; others pending spot checks).
+3. [x] Adjust socket gateway parsing/wrapping to align envelope/meta/items structure with vista-api-x responses.
+4. Add regression tests or scripts to validate transformations against sample XML.

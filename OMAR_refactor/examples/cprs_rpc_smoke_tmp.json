@@ -1,0 +1,204 @@
+{
+  "host": "vista.puget-sound.med.va.gov",
+  "port": 19212,
+  "context": "OR CPRS GUI CHART",
+  "dfn": "7666361",
+  "namePrefix": "SCRUG",
+  "last5": "S2025",
+  "timestamp": "2025-11-09T23:57:51Z",
+  "tests": [
+    {
+      "rpc": "ORWU USERINFO",
+      "description": "Baseline user info",
+      "params": [],
+      "ok": true,
+      "lineCount": 1,
+      "elapsedMs": 40.1,
+      "preview": [
+        "178330^REDDY,LAXMINARSIMHA D^3^1^1^3^0^900^300^1^1^0^PUGET-SOUND.MED.VA.GOV^1058^30^6^0^^1^0^^1^0^663^^1^1^1390950^0"
+      ]
+    },
+    {
+      "rpc": "ORQPT DEFAULT PATIENT LIST",
+      "description": "Default patient list",
+      "params": [],
+      "ok": true,
+      "lineCount": 13,
+      "elapsedMs": 42.0,
+      "preview": [
+        "7484907^BELCHER,DAVID E^Cl SEA ^Nov 03, 2025@15:00^(B6175)^9/2/1956^12695^3251103.15^OPT",
+        "71410^CURTIS,WILLIAM K^Cl SEA ^Nov 03, 2025@10:30^(C7037)^2/1/1955^12695^3251103.103^OPT",
+        "138143^JACKSON,JOSEPH^Cl SEA ^Nov 03, 2025@10:00^(J1011)^12/14/1960^12695^3251103.1^OPT"
+      ]
+    },
+    {
+      "rpc": "ORWPT LIST ALL",
+      "description": "Patient search for prefix 'SCRUG'",
+      "params": [
+        "SCRUF~",
+        "1"
+      ],
+      "ok": true,
+      "lineCount": 44,
+      "elapsedMs": 40.3,
+      "preview": [
+        "105067^SCRUGGS,C C^^^^SCRUGGS,C C",
+        "7709539^SCRUGGS,CHRISTOPHER E^^^^SCRUGGS,CHRISTOPHER E",
+        "108239^SCRUGGS,CLAUDETTE M^^^^HILL,CLAUDETTE MARIE"
+      ]
+    },
+    {
+      "rpc": "ORWPT LAST5",
+      "description": "Patient search by LAST5 'S2025'",
+      "params": [
+        "S2025"
+      ],
+      "ok": true,
+      "lineCount": 7,
+      "elapsedMs": 40.0,
+      "preview": [
+        "61472^SIEKAWITCH,CLARENCE P^2270513^536202025",
+        "76881^SANDURS,MARGARET^2091214^261072025",
+        "7213057^SUTHERLAND,A M^2440105^537402025"
+      ]
+    },
+    {
+      "rpc": "ORWPT PTINQ",
+      "description": "Patient demographics (PTINQ)",
+      "params": [
+        "7666361"
+      ],
+      "ok": true,
+      "lineCount": 86,
+      "elapsedMs": 355.2,
+      "preview": [
+        "ZZTEST PATIENT,FIVE;(CHRISTY) 000-00-5755 FEB 5,1946",
+        "=============================================================================",
+        "Residential Address:                   Mailing Address:"
+      ]
+    },
+    {
+      "rpc": "ORWPS ACTIVE",
+      "description": "Active medications",
+      "params": [
+        "7666361"
+      ],
+      "ok": true,
+      "lineCount": 595,
+      "elapsedMs": 103.0,
+      "preview": [
+        "~OP^23751549R;O^BRIEF,PROTECTION PLUS SMALL #MSC33255^^3260510^5^^^107046816^ACTIVE^3250509^30^88^^^3250509^^30",
+        "BRIEF,PROTECTION PLUS SMALL #MSC33255  Qty: 88 for 30 days",
+        "\\ Sig: USE ONE PAIR    FIVE TIMES A DAY AS NEEDED FOR INCONTINENCE/LEAKAGE"
+      ]
+    },
+    {
+      "rpc": "ORWCV LAB",
+      "description": "Recent labs",
+      "params": [
+        "7666361"
+      ],
+      "ok": true,
+      "lineCount": 140,
+      "elapsedMs": 69.0,
+      "preview": [
+        "109275099;1^HCG QUAL, STAT URINE URINE,SPOT STAT SP LB #443572^3251105.184^COMPLETE",
+        "109170873;1^LABCORP MISCELLANEOUS TEST RED (SERUM) SP^3251030.110921^COMPLETE",
+        "109170882;1^UW MISCELLANEOUS TEST GOLD (SERUM) SP^3251030.110921^COMPLETE"
+      ]
+    },
+    {
+      "rpc": "ORQQVI VITALS",
+      "description": "Vitals without date window",
+      "params": [
+        "7666361",
+        "",
+        ""
+      ],
+      "ok": true,
+      "lineCount": 10,
+      "elapsedMs": 43.4,
+      "preview": [
+        "68159097^T^98.8^3250923.103911^98.8 F^(37.1 C)^TEMPORAL",
+        "68159098^P^80^3250923.103911^80^^",
+        "68159099^R^11^3250923.103911^11^^"
+      ]
+    },
+    {
+      "rpc": "ORQQPL PROBLEM LIST",
+      "description": "Problem list",
+      "params": [
+        "7666361"
+      ],
+      "ok": true,
+      "lineCount": 18,
+      "elapsedMs": 54.6,
+      "preview": [
+        "17",
+        "2968554^A^History of mechanical heart valve replacement (SCT 33711000119109)^Z95.2^^3250324^^^P^12464;SEA PH PACT COE 4 PROV^C^75014;GILL,SHARON K^^^0^3250324^^^^10D",
+        "2968555^A^History of heart valve recipient (SCT 161667004)^Z95.2^^3250324^^^P^12464;SEA PH PACT COE 4 PROV^C^75014;GILL,SHARON K^^^0^3250324^^^^10D"
+      ]
+    },
+    {
+      "rpc": "ORQQAL LIST",
+      "description": "Allergies list",
+      "params": [
+        "7666361"
+      ],
+      "ok": true,
+      "lineCount": 1,
+      "elapsedMs": 40.0,
+      "preview": [
+        "350694^NAPROXEN^^RASH"
+      ]
+    },
+    {
+      "rpc": "TIU DOCUMENTS BY CONTEXT",
+      "description": "Document headers",
+      "params": [
+        "3",
+        "1",
+        "7666361",
+        "-1",
+        "-1",
+        "0",
+        "25",
+        "D",
+        "1",
+        "0",
+        "1",
+        ""
+      ],
+      "ok": true,
+      "lineCount": 27,
+      "elapsedMs": 42.7,
+      "preview": [
+        "82670242^TOXIC EXPOSURE SCREEN (TES) NAVIGATOR CONTACT NOTE^3251028.1053^ZZTEST PATIENT, FIVE  (Z5755)^389191;GINNA M LEON-MARTINEZ;LEON-MARTINEZ,GINNA M^AML SWS TES NAV 1^completed^Visit: 10/28/25;3251028.105206^        ;^^0^^^1^",
+        "82670190^TOXIC EXPOSURE SCREEN (TES) NAVIGATOR CONTACT NOTE^3251028.1052^ZZTEST PATIENT, FIVE  (Z5755)^389191;GINNA M LEON-MARTINEZ;LEON-MARTINEZ,GINNA M^AML SWS TES NAV 1^completed^Visit: 10/28/25;3251028.105206^        ;^^0^^^1^",
+        "82602573^CHAPLAIN NOTE^3251023.1319^ZZTEST PATIENT, FIVE  (Z5755)^919238;BRIAN J HALEY;HALEY,BRIAN J^AML PEX CHAPLAIN IND 45^completed^Visit: 10/23/25;3251023.1319^        ;^^0^^^1^"
+      ],
+      "documentIds": [
+        "82670242",
+        "82670190",
+        "82602573",
+        "82602228",
+        "82530918"
+      ]
+    },
+    {
+      "rpc": "TIU GET RECORD TEXT",
+      "description": "Document text for 82670242",
+      "params": [
+        "82670242"
+      ],
+      "ok": true,
+      "lineCount": 9,
+      "elapsedMs": 41.3,
+      "preview": [
+        "LOCAL TITLE: TOXIC EXPOSURE SCREEN (TES) NAVIGATOR CONTACT NOTE",
+        "STANDARD TITLE: COMMUNICATION REPORT OF CONTACT",
+        "DATE OF NOTE: OCT 28, 2025@10:53     ENTRY DATE: OCT 28, 2025@10:53:32"
+      ]
+    }
+  ]
+}
