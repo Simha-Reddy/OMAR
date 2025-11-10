@@ -84,31 +84,31 @@ class PatientService:
         return map_vpr_patient_to_quick_demographics(vpr)
 
     # --- Medications ---
-    def get_medications_quick(self, dfn: str):
-        vpr = self.gateway.get_vpr_domain(dfn, domain=self.domain_alias['meds'])
+    def get_medications_quick(self, dfn: str, params: dict | None = None):
+        vpr = self.gateway.get_vpr_domain(dfn, domain=self.domain_alias['meds'], params=params)
         return vpr_to_quick_medications(vpr)
 
     # --- Labs ---
-    def get_labs_quick(self, dfn: str):
-        vpr = self.gateway.get_vpr_domain(dfn, domain=self.domain_alias['labs'])
+    def get_labs_quick(self, dfn: str, params: dict | None = None):
+        vpr = self.gateway.get_vpr_domain(dfn, domain=self.domain_alias['labs'], params=params)
         return vpr_to_quick_labs(vpr)
 
     # --- Vitals ---
-    def get_vitals_quick(self, dfn: str):
-        vpr = self.gateway.get_vpr_domain(dfn, domain=self.domain_alias['vitals'])
+    def get_vitals_quick(self, dfn: str, params: dict | None = None):
+        vpr = self.gateway.get_vpr_domain(dfn, domain=self.domain_alias['vitals'], params=params)
         return vpr_to_quick_vitals(vpr)
 
     # --- Notes ---
-    def get_notes_quick(self, dfn: str):
-        vpr = self.gateway.get_vpr_domain(dfn, domain=self.domain_alias['notes'])
+    def get_notes_quick(self, dfn: str, params: dict | None = None):
+        vpr = self.gateway.get_vpr_domain(dfn, domain=self.domain_alias['notes'], params=params)
         return vpr_to_quick_notes(vpr)
 
     # --- Documents (unified) ---
-    def get_documents_quick(self, dfn: str):
+    def get_documents_quick(self, dfn: str, params: dict | None = None):
         """Unified documents quick list from VPR 'documents' domain.
         Uses the document-centric notes transform.
         """
-        vpr = self.gateway.get_vpr_domain(dfn, domain=self.domain_alias['document'])
+        vpr = self.gateway.get_vpr_domain(dfn, domain=self.domain_alias['document'], params=params)
         return vpr_to_quick_notes(vpr)
 
     def get_document_texts(self, dfn: str, doc_ids: list[str]) -> Dict[str, list[str]]:
@@ -116,28 +116,28 @@ class PatientService:
         return self.gateway.get_document_texts(dfn, doc_ids)
 
     # --- Radiology ---
-    def get_radiology_quick(self, dfn: str):
-        vpr = self.gateway.get_vpr_domain(dfn, domain=self.domain_alias['radiology'])
+    def get_radiology_quick(self, dfn: str, params: dict | None = None):
+        vpr = self.gateway.get_vpr_domain(dfn, domain=self.domain_alias['radiology'], params=params)
         return vpr_to_quick_radiology(vpr)
 
     # --- Procedures ---
-    def get_procedures_quick(self, dfn: str):
-        vpr = self.gateway.get_vpr_domain(dfn, domain=self.domain_alias['procedures'])
+    def get_procedures_quick(self, dfn: str, params: dict | None = None):
+        vpr = self.gateway.get_vpr_domain(dfn, domain=self.domain_alias['procedures'], params=params)
         return vpr_to_quick_procedures(vpr)
 
     # --- Encounters ---
-    def get_encounters_quick(self, dfn: str):
-        vpr = self.gateway.get_vpr_domain(dfn, domain=self.domain_alias['encounters'])
+    def get_encounters_quick(self, dfn: str, params: dict | None = None):
+        vpr = self.gateway.get_vpr_domain(dfn, domain=self.domain_alias['encounters'], params=params)
         return vpr_to_quick_encounters(vpr)
 
     # --- Problems ---
-    def get_problems_quick(self, dfn: str):
-        vpr = self.gateway.get_vpr_domain(dfn, domain=self.domain_alias['problems'])
+    def get_problems_quick(self, dfn: str, params: dict | None = None):
+        vpr = self.gateway.get_vpr_domain(dfn, domain=self.domain_alias['problems'], params=params)
         return vpr_to_quick_problems(vpr)
 
     # --- Allergies ---
-    def get_allergies_quick(self, dfn: str):
-        vpr = self.gateway.get_vpr_domain(dfn, domain=self.domain_alias['allergies'])
+    def get_allergies_quick(self, dfn: str, params: dict | None = None):
+        vpr = self.gateway.get_vpr_domain(dfn, domain=self.domain_alias['allergies'], params=params)
         return vpr_to_quick_allergies(vpr)
 
     # Raw VPR passthrough

@@ -416,7 +416,13 @@ def _iso_to_fileman(value: Any) -> Optional[str]:
 		return None
 
 
-def _wrap_items(domain: str, dfn: str, items: List[Dict[str, Any]], meta: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+def _wrap_items(
+    domain: str,
+    dfn: str,
+    items: List[Dict[str, Any]],
+    meta: Optional[Dict[str, Any]] = None,
+    raw_text: Optional[str] = None,
+) -> Dict[str, Any]:
 	payload = [item for item in items if isinstance(item, dict)]
 	meta_block = meta.copy() if isinstance(meta, dict) else {}
 	meta_block.setdefault("domain", domain)
@@ -426,11 +432,14 @@ def _wrap_items(domain: str, dfn: str, items: List[Dict[str, Any]], meta: Option
 		"totalItems": len(payload),
 		"items": payload,
 	}
-	return {
+	out = {
 		"items": payload,
 		"meta": meta_block,
 		"data": data,
 	}
+	if raw_text is not None:
+		out["raw"] = raw_text
+	return out
 
 
 def _parse_orwpt_ptinq(raw: str, dfn: str) -> Dict[str, Any]:
@@ -869,6 +878,16 @@ class VistaSocketGateway(DataGateway):
 			return True
 		return False
 
+	@staticmethod
+	def _raw_flag(params: Optional[Dict[str, Any]]) -> bool:
+		try:
+			if not params:
+				return False
+			val = str(params.get("raw", "")).strip().lower()
+			return val in {"1", "true", "yes", "on"}
+		except Exception:
+			return False
+
 	def _domain_cache_produce(
 		self,
 		key: Optional[Tuple[str, str, str, str]],
@@ -1038,24 +1057,28 @@ class VistaSocketGateway(DataGateway):
 		if domain in self._cacheable_domains and not self._params_disable_cache(params):
 			cache_key = self._domain_cache_key(dfn, domain, params)
 		if domain == "patient":
+			include_raw = self._raw_flag(params)
 			def _load_patient() -> Dict[str, Any]:
 				raw = self._client.call_in_context(self.default_context, "ORWPT PTINQ", [str(dfn)])
 				item = _parse_orwpt_ptinq(raw, dfn)
-				return _wrap_items("patient", dfn, [item])
+				return _wrap_items("patient", dfn, [item], raw_text=raw if include_raw else None)
 			return self._domain_cache_produce(cache_key, _load_patient)
 		if domain in ("med", "meds", "medication"):
+			include_raw = self._raw_flag(params)
 			def _load_med() -> Dict[str, Any]:
 				raw = self._client.call_in_context(self.default_context, "ORWPS ACTIVE", [str(dfn)])
 				items = _parse_orwps_active(raw)
-				return _wrap_items("med", dfn, items)
+				return _wrap_items("med", dfn, items, raw_text=raw if include_raw else None)
 			return self._domain_cache_produce(cache_key, _load_med)
 		if domain in ("lab", "labs"):
+			include_raw = self._raw_flag(params)
 			def _load_lab() -> Dict[str, Any]:
 				raw = self._client.call_in_context(self.default_context, "ORWCV LAB", [str(dfn)])
 				items = _parse_orwcv_lab(raw)
-				return _wrap_items("lab", dfn, items)
+				return _wrap_items("lab", dfn, items, raw_text=raw if include_raw else None)
 			return self._domain_cache_produce(cache_key, _load_lab)
 		if domain in ("vital", "vitals"):
+			include_raw = self._raw_flag(params)
 			def _load_vital() -> Dict[str, Any]:
 				start = params.get("start") if params else None
 				stop = params.get("stop") if params else None
@@ -1063,21 +1086,24 @@ class VistaSocketGateway(DataGateway):
 				fm_stop = _iso_to_fileman(stop) or ""
 				raw = self._client.call_in_context(self.default_context, "ORQQVI VITALS", [str(dfn), fm_start, fm_stop])
 				items = _parse_orqqvi_vitals(raw)
-				return _wrap_items("vital", dfn, items)
+				return _wrap_items("vital", dfn, items, raw_text=raw if include_raw else None)
 			return self._domain_cache_produce(cache_key, _load_vital)
 		if domain in ("document", "documents", "notes"):
-			return self._get_document_domain(dfn, params=params)
+			include_raw = self._raw_flag(params)
+			return self._get_document_domain(dfn, params=params, include_raw=include_raw)
 		if domain in ("problem", "problems"):
+			include_raw = self._raw_flag(params)
 			def _load_problem() -> Dict[str, Any]:
 				raw = self._client.call_in_context(self.default_context, "ORQQPL PROBLEM LIST", [str(dfn)])
 				items = _parse_orqqpl_problem_list(raw)
-				return _wrap_items("problem", dfn, items)
+				return _wrap_items("problem", dfn, items, raw_text=raw if include_raw else None)
 			return self._domain_cache_produce(cache_key, _load_problem)
 		if domain in ("allergy", "allergies"):
+			include_raw = self._raw_flag(params)
 			def _load_allergy() -> Dict[str, Any]:
 				raw = self._client.call_in_context(self.default_context, "ORQQAL LIST", [str(dfn)])
 				items = _parse_orqqal_allergies(raw)
-				return _wrap_items("allergy", dfn, items)
+				return _wrap_items("allergy", dfn, items, raw_text=raw if include_raw else None)
 			return self._domain_cache_produce(cache_key, _load_allergy)
 		return _wrap_items(domain, dfn, [])
 
@@ -1155,7 +1181,7 @@ class VistaSocketGateway(DataGateway):
 				ids.append(val_str.split("-")[-1])
 		return ids
 
-	def _get_document_domain(self, dfn: str, params: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+	def _get_document_domain(self, dfn: str, params: Optional[Dict[str, Any]] = None, include_raw: bool = False) -> Dict[str, Any]:
 		settings = params or {}
 		start = settings.get("start")
 		stop = settings.get("stop")
@@ -1285,5 +1311,5 @@ class VistaSocketGateway(DataGateway):
 			"status": settings.get("status"),
 			"contextId": str(context_id),
 		}
-		return _wrap_items("document", dfn, items, meta)
+		return _wrap_items("document", dfn, items, meta, raw_text=raw if include_raw else None)
 

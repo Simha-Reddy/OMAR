@@ -170,7 +170,8 @@
           const end = b.getAttribute('data-end');
           let url = '';
           if (kind === 'quick') {
-            url = `/api/patient/${encodeURIComponent(dfn)}/quick/${end}`;
+            const params = new URLSearchParams({ raw: '1' });
+            url = `/api/patient/${encodeURIComponent(dfn)}/quick/${end}?${params.toString()}`;
           } else if (kind === 'vpr') {
             url = end === 'demographics'
               ? `/api/patient/${encodeURIComponent(dfn)}/demographics`

@@ -26,6 +26,10 @@ def settings():
 def archive():
     return render_template('archive.html')
 
+@bp.route('/endpoints')
+def endpoints():
+    return render_template('endpoints.html')
+
 @bp.route('/exit')
 def exit_page():
     return render_template('exit.html')

@@ -38,30 +38,30 @@ def _get_patient_service() -> PatientService:
 
 # Per-domain allowlists for pass-through filters
 _ALLOWED: dict[str, tuple[str, ...]] = {
-    'meds': ('start','stop','max','id','uid','vaType'),
-    'labs': ('start','stop','max','id','uid','category','nowrap'),
-    'vitals': ('start','stop','max','id','uid'),
-    'documents': ('start','stop','max','id','uid','status','category','text','nowrap'),
-    'radiology': ('start','stop','max','id','uid'),
-    'procedures': ('start','stop','max','id','uid'),
-    'encounters': ('start','stop','max','id','uid'),
-    'problems': ('max','id','uid','status'),
-    'allergies': ('start','stop','max','id','uid'),
+    'meds': ('start','stop','max','id','uid','vaType','raw'),
+    'labs': ('start','stop','max','id','uid','category','nowrap','raw'),
+    'vitals': ('start','stop','max','id','uid','raw'),
+    'documents': ('start','stop','max','id','uid','status','category','text','nowrap','raw'),
+    'radiology': ('start','stop','max','id','uid','raw'),
+    'procedures': ('start','stop','max','id','uid','raw'),
+    'encounters': ('start','stop','max','id','uid','raw'),
+    'problems': ('max','id','uid','status','raw'),
+    'allergies': ('start','stop','max','id','uid','raw'),
     # Additional VPR domains
-    'appointment': ('start','stop','max','id','uid'),
-    'order': ('start','stop','max','id','uid'),
-    'consult': ('start','stop','max','id','uid','nowrap'),
-    'immunization': ('start','stop','max','id','uid'),
-    'cpt': ('start','stop','max','id','uid'),
-    'exam': ('start','stop','max','id','uid'),
-    'education': ('start','stop','max','id','uid'),
-    'factor': ('start','stop','max','id','uid'),
-    'pov': ('start','stop','max','id','uid'),
-    'skin': ('start','stop','max','id','uid'),
-    'obs': ('start','stop','max','id','uid'),
-    'ptf': ('start','stop','max','id','uid'),
-    'surgery': ('start','stop','max','id','uid'),
-    'image': ('start','stop','max','id','uid'),
+    'appointment': ('start','stop','max','id','uid','raw'),
+    'order': ('start','stop','max','id','uid','raw'),
+    'consult': ('start','stop','max','id','uid','nowrap','raw'),
+    'immunization': ('start','stop','max','id','uid','raw'),
+    'cpt': ('start','stop','max','id','uid','raw'),
+    'exam': ('start','stop','max','id','uid','raw'),
+    'education': ('start','stop','max','id','uid','raw'),
+    'factor': ('start','stop','max','id','uid','raw'),
+    'pov': ('start','stop','max','id','uid','raw'),
+    'skin': ('start','stop','max','id','uid','raw'),
+    'obs': ('start','stop','max','id','uid','raw'),
+    'ptf': ('start','stop','max','id','uid','raw'),
+    'surgery': ('start','stop','max','id','uid','raw'),
+    'image': ('start','stop','max','id','uid','raw'),
 }
 
 def _collect_for(domain_key: str, *extra: str) -> dict:
@@ -340,6 +340,27 @@ def _collect_params(*keys: str) -> dict:
                     out['stop'] = e_fm
     return out
 
+
+def _raw_requested() -> bool:
+    try:
+        return str(request.args.get('raw', '')).strip().lower() in ('1','true','yes','on')
+    except Exception:
+        return False
+
+
+def _json_with_optional_raw(payload, vpr_payload, *, list_label: str | None = None):
+    if not _raw_requested():
+        return jsonify(payload)
+    raw_text = None
+    if isinstance(vpr_payload, dict):
+        raw_text = vpr_payload.get('raw')
+    if isinstance(payload, dict):
+        body = dict(payload)
+        body['raw'] = raw_text
+        return jsonify(body)
+    key = list_label or 'result'
+    return jsonify({key: payload, 'raw': raw_text})
+
 @bp.get('/<dfn>/demographics')
 def demographics(dfn: str):
     svc = _get_patient_service()
@@ -353,7 +374,9 @@ def demographics(dfn: str):
 def demographics_quick(dfn: str):
     svc = _get_patient_service()
     try:
-        vpr = svc.get_vpr_raw(dfn, 'patient')
+        raw_requested = _raw_requested()
+        raw_params = {'raw': '1'} if raw_requested else None
+        vpr = svc.get_vpr_raw(dfn, 'patient', params=raw_params)
         quick = svc.get_demographics_quick(dfn)
         if (request.args.get('includeRaw','0').lower() in ('1','true','yes','on')):
             # Attach first raw item for traceability
@@ -366,7 +389,7 @@ def demographics_quick(dfn: str):
             if isinstance(quick, dict):
                 quick = dict(quick)
                 quick['_raw'] = item
-        return jsonify(quick)
+        return _json_with_optional_raw(quick, vpr)
     except Exception as e:
         return jsonify({'error': str(e)}), 500
 
@@ -375,8 +398,10 @@ def demographics_quick(dfn: str):
 def medications_quick(dfn: str):
     svc = _get_patient_service()
     try:
-        vpr = svc.get_vpr_raw(dfn, 'meds')
-        quick = svc.get_medications_quick(dfn)
+        raw_requested = _raw_requested()
+        raw_params = {'raw': '1'} if raw_requested else None
+        vpr = svc.get_vpr_raw(dfn, 'meds', params=raw_params)
+        quick = svc.get_medications_quick(dfn, params=raw_params)
 
         # Optional filtering: status, days/start/end, name
         status_raw = (request.args.get('status') or 'ALL').strip().upper()
@@ -478,8 +503,8 @@ def medications_quick(dfn: str):
                         obj['_raw'] = raw_items[idx]
                     out.append(obj)
                 filtered = out
-        # For compatibility with frontend dot-phrases, wrap in { medications: [...] }
-        return jsonify({ 'medications': filtered if isinstance(filtered, list) else (filtered or []) })
+        payload = {'medications': filtered if isinstance(filtered, list) else (filtered or [])}
+        return _json_with_optional_raw(payload, vpr)
     except Exception as e:
         return jsonify({'error': str(e)}), 500
 
@@ -488,8 +513,10 @@ def medications_quick(dfn: str):
 def labs_quick(dfn: str):
     svc = _get_patient_service()
     try:
-        vpr = svc.get_vpr_raw(dfn, 'labs')
-        quick = svc.get_labs_quick(dfn)
+        raw_requested = _raw_requested()
+        raw_params = {'raw': '1'} if raw_requested else None
+        vpr = svc.get_vpr_raw(dfn, 'labs', params=raw_params)
+        quick = svc.get_labs_quick(dfn, params=raw_params)
 
         # Server-side filters: names (comma-separated), days, start, end
         names_raw = (request.args.get('names') or '').strip()
@@ -568,8 +595,8 @@ def labs_quick(dfn: str):
         if isinstance(quick, list) and filters_applied:
             filtered = [q for q in quick if _date_ok(q) and _name_ok(q)]
 
-        include_raw_requested = request.args.get('includeRaw','0').lower() in ('1','true','yes','on')
-        if include_raw_requested and isinstance(filtered, list):
+        include_raw_items = request.args.get('includeRaw','0').lower() in ('1','true','yes','on')
+        if include_raw_items and isinstance(filtered, list):
             # Only attach _raw when no filters are applied to preserve index alignment
             if not filters_applied:
                 raw_items = []
@@ -584,7 +611,7 @@ def labs_quick(dfn: str):
                         obj['_raw'] = raw_items[idx]
                     out.append(obj)
                 filtered = out
-        return jsonify(filtered)
+        return _json_with_optional_raw(filtered, vpr, list_label='labs')
     except Exception as e:
         return jsonify({'error': str(e)}), 500
 
@@ -592,8 +619,10 @@ def labs_quick(dfn: str):
 def vitals_quick(dfn: str):
     svc = _get_patient_service()
     try:
-        vpr = svc.get_vpr_raw(dfn, 'vitals')
-        quick = svc.get_vitals_quick(dfn)
+        raw_requested = _raw_requested()
+        raw_params = {'raw': '1'} if raw_requested else None
+        vpr = svc.get_vpr_raw(dfn, 'vitals', params=raw_params)
+        quick = svc.get_vitals_quick(dfn, params=raw_params)
         if (request.args.get('includeRaw','0').lower() in ('1','true','yes','on')) and isinstance(quick, list):
             raw_items = []
             try:
@@ -607,7 +636,7 @@ def vitals_quick(dfn: str):
                     obj['_raw'] = raw_items[idx]
                 out.append(obj)
             quick = out
-        return jsonify(quick)
+        return _json_with_optional_raw(quick, vpr, list_label='vitals')
     except Exception as e:
         return jsonify({'error': str(e)}), 500
 
@@ -615,8 +644,10 @@ def vitals_quick(dfn: str):
 def notes_quick(dfn: str):
     svc = _get_patient_service()
     try:
-        vpr = svc.get_vpr_raw(dfn, 'notes')
-        quick = svc.get_notes_quick(dfn)
+        raw_requested = _raw_requested()
+        raw_params = {'raw': '1'} if raw_requested else None
+        vpr = svc.get_vpr_raw(dfn, 'notes', params=raw_params)
+        quick = svc.get_notes_quick(dfn, params=raw_params)
         include_raw = request.args.get('includeRaw','0').lower() in ('1','true','yes','on')
         include_text = request.args.get('includeText','0').lower() in ('1','true','yes','on')
         include_enc = request.args.get('includeEncounter','0').lower() in ('1','true','yes','on')
@@ -643,7 +674,7 @@ def notes_quick(dfn: str):
                             obj['encounter'] = enc
                 out.append(obj)
             quick = out
-        return jsonify(quick)
+        return _json_with_optional_raw(quick, vpr, list_label='notes')
     except Exception as e:
         return jsonify({'error': str(e)}), 500
 
@@ -661,10 +692,14 @@ def documents_quick(dfn: str):
     """
     svc = _get_patient_service()
     try:
+        raw_requested = _raw_requested()
         # Fetch raw and quick lists
         # Request text to enable RAG chunking immediately
-        vpr = svc.get_vpr_raw(dfn, 'document', params={'text': '1'})
-        quick_list = svc.get_documents_quick(dfn)
+        doc_params = {'text': '1'}
+        if raw_requested:
+            doc_params['raw'] = '1'
+        vpr = svc.get_vpr_raw(dfn, 'document', params=doc_params)
+        quick_list = svc.get_documents_quick(dfn, params=dict(doc_params))
 
         # Proactively build keyword index if not present (lazy in search too)
         try:
@@ -744,7 +779,8 @@ def documents_quick(dfn: str):
 
         # No background embedding; RAG uses the keyword index's in-memory texts
 
-        return jsonify(out if (include_raw or include_text or include_enc or class_filters or type_filters) else quick_list)
+        result = out if (include_raw or include_text or include_enc or class_filters or type_filters) else quick_list
+        return _json_with_optional_raw(result, vpr, list_label='documents')
     except Exception as e:
         return jsonify({'error': str(e)}), 500
 
@@ -913,8 +949,10 @@ def documents_search(dfn: str):
 def radiology_quick(dfn: str):
     svc = _get_patient_service()
     try:
-        vpr = svc.get_vpr_raw(dfn, 'radiology')
-        quick = svc.get_radiology_quick(dfn)
+        raw_requested = _raw_requested()
+        raw_params = {'raw': '1'} if raw_requested else None
+        vpr = svc.get_vpr_raw(dfn, 'radiology', params=raw_params)
+        quick = svc.get_radiology_quick(dfn, params=raw_params)
         include_raw = request.args.get('includeRaw','0').lower() in ('1','true','yes','on')
         include_text = request.args.get('includeText','0').lower() in ('1','true','yes','on')
         include_enc = request.args.get('includeEncounter','0').lower() in ('1','true','yes','on')
@@ -941,7 +979,7 @@ def radiology_quick(dfn: str):
                             obj['encounter'] = enc
                 out.append(obj)
             quick = out
-        return jsonify(quick)
+        return _json_with_optional_raw(quick, vpr, list_label='radiology')
     except Exception as e:
         return jsonify({'error': str(e)}), 500
 
@@ -1062,8 +1100,10 @@ def vitals_list_envelope(dfn: str):
 def procedures_quick(dfn: str):
     svc = _get_patient_service()
     try:
-        vpr = svc.get_vpr_raw(dfn, 'procedures')
-        quick = svc.get_procedures_quick(dfn)
+        raw_requested = _raw_requested()
+        raw_params = {'raw': '1'} if raw_requested else None
+        vpr = svc.get_vpr_raw(dfn, 'procedures', params=raw_params)
+        quick = svc.get_procedures_quick(dfn, params=raw_params)
         include_raw = request.args.get('includeRaw','0').lower() in ('1','true','yes','on')
         include_text = request.args.get('includeText','0').lower() in ('1','true','yes','on')
         include_enc = request.args.get('includeEncounter','0').lower() in ('1','true','yes','on')
@@ -1090,7 +1130,7 @@ def procedures_quick(dfn: str):
                             obj['encounter'] = enc
                 out.append(obj)
             quick = out
-        return jsonify(quick)
+        return _json_with_optional_raw(quick, vpr, list_label='procedures')
     except Exception as e:
         return jsonify({'error': str(e)}), 500
 
@@ -1098,8 +1138,10 @@ def procedures_quick(dfn: str):
 def encounters_quick(dfn: str):
     svc = _get_patient_service()
     try:
-        vpr = svc.get_vpr_raw(dfn, 'encounters')
-        quick = svc.get_encounters_quick(dfn)
+        raw_requested = _raw_requested()
+        raw_params = {'raw': '1'} if raw_requested else None
+        vpr = svc.get_vpr_raw(dfn, 'encounters', params=raw_params)
+        quick = svc.get_encounters_quick(dfn, params=raw_params)
         if (request.args.get('includeRaw','0').lower() in ('1','true','yes','on')) and isinstance(quick, list):
             raw_items = []
             try:
@@ -1113,7 +1155,7 @@ def encounters_quick(dfn: str):
                     obj['_raw'] = raw_items[idx]
                 out.append(obj)
             quick = out
-        return jsonify(quick)
+        return _json_with_optional_raw(quick, vpr, list_label='encounters')
     except Exception as e:
         return jsonify({'error': str(e)}), 500
 # Raw VPR domain passthrough
@@ -1300,8 +1342,10 @@ def documents_default_vpr(dfn: str):
 def problems_quick(dfn: str):
     svc = _get_patient_service()
     try:
-        vpr = svc.get_vpr_raw(dfn, 'problems')
-        quick = svc.get_problems_quick(dfn)
+        raw_requested = _raw_requested()
+        raw_params = {'raw': '1'} if raw_requested else None
+        vpr = svc.get_vpr_raw(dfn, 'problems', params=raw_params)
+        quick = svc.get_problems_quick(dfn, params=raw_params)
         include_raw = request.args.get('includeRaw','0').lower() in ('1','true','yes','on')
         # Accept detail=1 as alias for includeComments=1 (frontend convenience)
         include_comments = request.args.get('includeComments','0').lower() in ('1','true','yes','on')
@@ -1342,7 +1386,7 @@ def problems_quick(dfn: str):
                         obj['comments'] = comments
                 out.append(obj)
             quick = out
-        return jsonify(quick)
+        return _json_with_optional_raw(quick, vpr, list_label='problems')
     except Exception as e:
         return jsonify({'error': str(e)}), 500
 
@@ -1350,8 +1394,10 @@ def problems_quick(dfn: str):
 def allergies_quick(dfn: str):
     svc = _get_patient_service()
     try:
-        vpr = svc.get_vpr_raw(dfn, 'allergies')
-        quick = svc.get_allergies_quick(dfn)
+        raw_requested = _raw_requested()
+        raw_params = {'raw': '1'} if raw_requested else None
+        vpr = svc.get_vpr_raw(dfn, 'allergies', params=raw_params)
+        quick = svc.get_allergies_quick(dfn, params=raw_params)
         if (request.args.get('includeRaw','0').lower() in ('1','true','yes','on')) and isinstance(quick, list):
             raw_items = []
             try:
@@ -1365,7 +1411,7 @@ def allergies_quick(dfn: str):
                     obj['_raw'] = raw_items[idx]
                 out.append(obj)
             quick = out
-        return jsonify(quick)
+        return _json_with_optional_raw(quick, vpr, list_label='allergies')
     except Exception as e:
         return jsonify({'error': str(e)}), 500
 
