@@ -111,6 +111,10 @@ class PatientService:
         vpr = self.gateway.get_vpr_domain(dfn, domain=self.domain_alias['document'])
         return vpr_to_quick_notes(vpr)
 
+    def get_document_texts(self, dfn: str, doc_ids: list[str]) -> Dict[str, list[str]]:
+        """Fetch full text for the requested TIU document identifiers."""
+        return self.gateway.get_document_texts(dfn, doc_ids)
+
     # --- Radiology ---
     def get_radiology_quick(self, dfn: str):
         vpr = self.gateway.get_vpr_domain(dfn, domain=self.domain_alias['radiology'])

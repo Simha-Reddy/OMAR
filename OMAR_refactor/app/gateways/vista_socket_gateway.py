@@ -1,496 +1,1033 @@
 from __future__ import annotations
+
+import json
 import os
 import socket
+import threading
 import time
-import json
-from typing import Any, Dict, Optional, Tuple, List
-
-try:
-    import xmltodict  # type: ignore
-except Exception:
-    xmltodict = None  # soft dependency; validated at runtime
+from datetime import datetime, timezone
+from typing import Any, Dict, List, Optional, Set
 
 from .data_gateway import DataGateway, GatewayError
-from .vpr_xml_parser import parse_vpr_results_xml, DOMAIN_TAGS
 
-
-# ---- Minimal Vista RPC client adapted for OMAR_refactor ----
 
 class _VistaRPCLogger:
-    def info(self, tag: str, msg: str):
-        try:
-            print(f"[INFO] {tag}: {msg}")
-        except Exception:
-            pass
-    def error(self, tag: str, msg: str):
-        try:
-            print(f"[ERROR] {tag}: {msg}")
-        except Exception:
-            pass
+	def info(self, tag: str, message: str) -> None:
+		try:
+			print(f"[{tag}] {message}")
+		except Exception:
+			pass
+
+	def error(self, tag: str, message: str) -> None:
+		try:
+			print(f"[{tag}] ERROR: {message}")
+		except Exception:
+			pass
 
 
-def _parse_cipher_blob(blob: str) -> Optional[List[str]]:
-    if not blob:
-        return None
-    txt = blob.strip()
-    # Try JSON list first
-    try:
-        data = json.loads(txt)
-        if isinstance(data, list) and all(isinstance(x, str) for x in data) and len(data) >= 2:
-            return data
-    except Exception:
-        pass
-    # Fallback newline rows
-    rows = [ln for ln in txt.replace('\r','').split('\n') if ln.strip()]
-    if len(rows) >= 2:
-        return rows
-    return None
+def _parse_cipher_blob(blob: str) -> List[str]:
+	text = (blob or "").strip()
+	if not text:
+		return []
+	if text.startswith("["):
+		try:
+			loaded = json.loads(text)
+			routes: List[str] = []
+			for entry in loaded or []:
+				value = str(entry).strip()
+				if value:
+					routes.append(value)
+			return routes
+		except Exception:
+			pass
+	rows: List[str] = []
+	for line in text.splitlines():
+		stripped = line.strip()
+		if stripped:
+			rows.append(stripped)
+	return rows
 
 
 def _load_cipher_from_env() -> List[str]:
-    path = os.getenv('VISTARPC_CIPHER_FILE')
-    if path and os.path.exists(path):
-        try:
-            with open(path, 'r', encoding='utf-8') as f:
-                parsed = _parse_cipher_blob(f.read())
-            if parsed:
-                return parsed
-        except Exception:
-            pass
-    blob = os.getenv('VISTARPC_CIPHER')
-    parsed = _parse_cipher_blob(blob or '')
-    if parsed:
-        return parsed
-    raise GatewayError('VISTARPC_CIPHER not configured. Set VISTARPC_CIPHER or VISTARPC_CIPHER_FILE to the cipher table.')
+	path = os.getenv("VISTARPC_CIPHER_FILE")
+	if path and os.path.exists(path):
+		try:
+			with open(path, "r", encoding="utf-8") as handle:
+				rows = _parse_cipher_blob(handle.read())
+			if rows:
+				return rows
+		except Exception as exc:
+			raise GatewayError(f"failed to read cipher file: {exc}")
+	blob = os.getenv("VISTARPC_CIPHER")
+	rows = _parse_cipher_blob(blob or "")
+	if rows:
+		return rows
+	raise GatewayError("VISTARPC_CIPHER not configured")
 
 
 class _VistaRPCClient:
-    CIPHER: Optional[List[str]] = None
+	CIPHER_TABLE: Optional[List[str]] = None
 
-    def __init__(self, host: str, port: int, access: str, verify: str, context: str, logger: Optional[_VistaRPCLogger] = None):
-        self.host = host
-        self.port = int(port)
-        self.access = access
-        self.verify = verify
-        self.context = context
-        self.sock: Optional[socket.socket] = None
-        self.logger = logger or _VistaRPCLogger()
-        self._end = chr(4)
+	def __init__(
+		self,
+		*,
+		host: str,
+		port: int,
+		access: str,
+		verify: str,
+		context: str,
+		logger: Optional[_VistaRPCLogger] = None,
+	) -> None:
+		self.host = host
+		self.port = int(port)
+		self.access = access
+		self.verify = verify
+		self.context = context
+		self.logger = logger or _VistaRPCLogger()
+		self.sock: Optional[socket.socket] = None
+		self._lock = threading.RLock()
+		self._terminator = chr(4)
 
-    # --- Wire protocol helpers (trimmed) ---
-    def _get_cipher(self) -> List[str]:
-        if not _VistaRPCClient.CIPHER:
-            _VistaRPCClient.CIPHER = _load_cipher_from_env()
-        return _VistaRPCClient.CIPHER  # type: ignore
+	@classmethod
+	def _get_cipher(cls) -> List[str]:
+		if cls.CIPHER_TABLE is None:
+			cls.CIPHER_TABLE = _load_cipher_from_env()
+		return cls.CIPHER_TABLE
 
-    def _encrypt(self, val: str) -> bytes:
-        import random
-        cipher = self._get_cipher()
-        ra = random.randint(0, len(cipher) - 1)
-        rb = random.randint(0, len(cipher) - 1)
-        while rb == ra or rb == 0:
-            rb = random.randint(0, len(cipher) - 1)
-        cra = cipher[ra]
-        crb = cipher[rb]
-        cval = chr(ra + 32)
-        for c in val:
-            idx = cra.find(c)
-            cval += (crb[idx] if idx != -1 else c)
-        cval += chr(rb + 32)
-        return cval.encode('utf-8')
+	def _encrypt(self, value: str) -> bytes:
+		import random
 
-    def _make_request(self, name: str, params: List[Any], is_command: bool = False) -> str:
-        proto = "[XWB]1130"
-        command = ("4" if is_command else ("2" + chr(1) + "1"))
-        namespec = chr(len(name)) + name
-        if not params:
-            params_spec = "54f"
-        else:
-            params_spec = "5"
-            for p in params:
-                s = json.dumps(p) if isinstance(p, dict) else str(p)
-                b = s.encode('utf-8')
-                params_spec += "0" + str(len(b)).zfill(3) + s
-            params_spec += "f"
-        return proto + command + namespec + params_spec + self._end
+		table = self._get_cipher()
+		left = random.randint(0, len(table) - 1)
+		right = random.randint(0, len(table) - 1)
+		while right == left or right == 0:
+			right = random.randint(0, len(table) - 1)
+		table_left = table[left]
+		table_right = table[right]
+		encrypted = chr(left + 32)
+		for char in value:
+			idx = table_left.find(char)
+			if idx == -1 or idx >= len(table_right):
+				encrypted += char
+			else:
+				encrypted += table_right[idx]
+		encrypted += chr(right + 32)
+		return encrypted.encode("utf-8")
 
-    def _read_to_end(self) -> str:
-        chunks: List[str] = []
-        while True:
-            if not self.sock:
-                raise OSError('socket not connected')
-            buf = self.sock.recv(256)
-            if not buf:
-                raise OSError('socket closed')
-            part = buf.decode('utf-8', errors='replace')
-            # Some Broker responses prefix one or two NULL (\x00) bytes.
-            # Previous logic stripped two bytes unconditionally when the first was NULL,
-            # which could truncate the first real character (e.g. 'J' in 'JLV WEB SERVICES').
-            # Fix: remove only the leading NULL bytes while preserving the first non-NULL.
-            if not chunks and part.startswith("\x00"):
-                if part.startswith("\x00\x00"):
-                    part = part[2:]  # double null prefix
-                else:
-                    part = part[1:]  # single null prefix
-            if part and part[-1] == self._end:
-                chunks.append(part[:-1])
-                break
-            chunks.append(part)
-        return ''.join(chunks)
+	@staticmethod
+	def _encode_param(value: Any) -> str:
+		if isinstance(value, dict):
+			return json.dumps(value)
+		return str(value)
 
-    def connect(self):
-        # Fresh socket each time
-        if self.sock:
-            try:
-                self.sock.close()
-            except Exception:
-                pass
-        self.sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        # Basic keepalive
-        try:
-            self.sock.setsockopt(socket.SOL_SOCKET, socket.SO_KEEPALIVE, 1)
-        except Exception:
-            pass
-        self.sock.connect((self.host, self.port))
-        self.logger.info('VistaRPC', f'Connected {self.host}:{self.port}')
-        # Handshake
-        tcp_params = [socket.gethostbyname(socket.gethostname()), "0", "FMQL"]
-        self.sock.send(self._make_request('TCPConnect', tcp_params, True).encode('utf-8'))
-        rep = self._read_to_end()
-        if 'accept' not in rep:
-            raise GatewayError(f'TCPConnect failed: {rep}')
-        # Signon setup
-        self.sock.send(self._make_request('XUS SIGNON SETUP', []).encode('utf-8'))
-        _ = self._read_to_end()
-        enc = self._encrypt(self.access + ';' + self.verify).decode()
-        self.sock.send(self._make_request('XUS AV CODE', [enc]).encode('utf-8'))
-        rep = self._read_to_end()
-        if 'Not a valid ACCESS CODE/VERIFY CODE pair' in rep:
-            raise GatewayError('Login failed: invalid ACCESS/VERIFY')
-        # default context (plaintext then encrypted fallback)
-        self.set_context(self.context)
+	def _build_frame(self, name: str, params: List[Any], command: bool = False) -> str:
+		proto = "[XWB]1130"
+		command_flag = "4" if command else ("2" + chr(1) + "1")
+		name_spec = chr(len(name)) + name
+		if not params:
+			param_spec = "54f"
+		else:
+			param_parts = ["5"]
+			for value in params:
+				encoded = self._encode_param(value)
+				raw = encoded.encode("utf-8")
+				param_parts.append("0" + str(len(raw)).zfill(3) + encoded)
+			param_parts.append("f")
+			param_spec = "".join(param_parts)
+		return proto + command_flag + name_spec + param_spec + self._terminator
 
-    def close(self):
-        try:
-            if self.sock:
-                try:
-                    self.sock.send('#BYE#'.encode('utf-8'))
-                except Exception:
-                    pass
-                self.sock.close()
-        finally:
-            self.sock = None
+	def _read_frame(self) -> str:
+		chunks: List[str] = []
+		while True:
+			if not self.sock:
+				raise GatewayError("socket not connected")
+			data = self.sock.recv(512)
+			if not data:
+				raise GatewayError("socket closed")
+			chunk = data.decode("utf-8", errors="replace")
+			if not chunks and chunk.startswith("\x00"):
+				chunk = chunk.lstrip("\x00")
+			if chunk.endswith(self._terminator):
+				chunks.append(chunk[:-1])
+				break
+			chunks.append(chunk)
+		return "".join(chunks)
 
-    def set_context(self, ctx: str):
-        if not self.sock:
-            raise OSError('socket not connected')
-        self.sock.send(self._make_request('XWB CREATE CONTEXT', [ctx]).encode('utf-8'))
-        rep = self._read_to_end()
-        if ('has not been created' in rep) or ('does not exist' in rep):
-            ectx = self._encrypt(ctx).decode()
-            self.sock.send(self._make_request('XWB CREATE CONTEXT', [ectx]).encode('utf-8'))
-            rep = self._read_to_end()
-            if ('has not been created' in rep) or ('does not exist' in rep):
-                raise GatewayError(f'Context failed: {rep}')
-        self.context = ctx
-        try:
-            self.logger.info('VistaRPC', f"Context set to '{ctx}'")
-        except Exception:
-            pass
+	def connect(self) -> None:
+		with self._lock:
+			if self.sock:
+				try:
+					self.sock.close()
+				except Exception:
+					pass
+			self.sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+			try:
+				self.sock.setsockopt(socket.SOL_SOCKET, socket.SO_KEEPALIVE, 1)
+			except Exception:
+				pass
+			self.sock.connect((self.host, self.port))
+			time.sleep(0.25)
+			self.logger.info("VistaRPC", f"connected to {self.host}:{self.port}")
+			self._handshake()
 
-    def invoke(self, name: str, params: List[Any]) -> str:
-        if not self.sock:
-            raise OSError('socket not connected')
-        self.sock.send(self._make_request(name, params, False).encode('utf-8'))
-        return self._read_to_end()
+	def _handshake(self) -> None:
+		if not self.sock:
+			raise GatewayError("socket not connected")
+		params = [socket.gethostbyname(socket.gethostname()), "0", "FMQL"]
+		self.sock.sendall(self._build_frame("TCPConnect", params, True).encode("utf-8"))
+		response = self._read_frame()
+		if "accept" not in response.lower():
+			raise GatewayError(f"TCPConnect failed: {response}")
+		self.sock.sendall(self._build_frame("XUS SIGNON SETUP", [], False).encode("utf-8"))
+		_ = self._read_frame()
+		pair = f"{self.access};{self.verify}"
+		secret = self._encrypt(pair).decode("utf-8")
+		self.sock.sendall(self._build_frame("XUS AV CODE", [secret], False).encode("utf-8"))
+		reply = self._read_frame()
+		if "Not a valid" in reply:
+			self.sock.sendall(self._build_frame("XUS AV CODE", [pair], False).encode("utf-8"))
+			reply = self._read_frame()
+			if "Not a valid" in reply:
+				raise GatewayError("invalid ACCESS/VERIFY pair")
+		if self.context:
+			ok, message = self._create_context(self.context)
+			if not ok:
+				raise GatewayError(f"context failed for '{self.context}': {message}")
+			self.logger.info("VistaRPC", f"context set to {self.context}")
 
-    def call_in_context(self, ctx: str, name: str, params: List[Any]) -> str:
-        cur = self.context
-        if ctx != cur:
-            self.set_context(ctx)
-        try:
-            return self.invoke(name, params)
-        finally:
-            if ctx != cur:
-                self.set_context(cur)
+	def _is_context_success(self, reply: str) -> bool:
+		if not reply:
+			return False
+		response = reply.strip()
+		if response.startswith("-1^"):
+			return False
+		lowered = response.lower()
+		if "application context has not been created" in lowered:
+			return False
+		if "does not exist" in lowered:
+			return False
+		return response == "1"
+
+	def _create_context(self, target: str) -> tuple[bool, str]:
+		if not target:
+			return False, "context name is empty"
+		if not self.sock:
+			raise GatewayError("socket not connected")
+		self.sock.sendall(self._build_frame("XWB CREATE CONTEXT", [target], False).encode("utf-8"))
+		reply_plain = self._read_frame()
+		if self._is_context_success(reply_plain):
+			self.context = target
+			return True, reply_plain
+		enc_target = self._encrypt(target).decode("utf-8")
+		self.sock.sendall(self._build_frame("XWB CREATE CONTEXT", [enc_target], False).encode("utf-8"))
+		reply_enc = self._read_frame()
+		if self._is_context_success(reply_enc):
+			self.context = target
+			return True, reply_enc
+		return False, reply_enc
+
+	def close(self) -> None:
+		with self._lock:
+			if not self.sock:
+				return
+			try:
+				self.sock.sendall("#BYE#".encode("utf-8"))
+			except Exception:
+				pass
+			try:
+				self.sock.close()
+			finally:
+				self.sock = None
+
+	def _set_context_locked(self, context: str) -> None:
+		if not self.sock:
+			raise GatewayError("socket not connected")
+		if context == self.context:
+			return
+		ok, message = self._create_context(context)
+		if not ok:
+			raise GatewayError(f"context switch failed: {message}")
+		self.logger.info("VistaRPC", f"context set to {context}")
+
+	def call(self, rpc: str, params: List[Any]) -> str:
+		with self._lock:
+			return self._invoke_locked(rpc, params)
+
+	def _invoke_locked(self, rpc: str, params: List[Any]) -> str:
+		if not self.sock:
+			raise GatewayError("socket not connected")
+		frame = self._build_frame(rpc, params, False)
+		self.sock.sendall(frame.encode("utf-8"))
+		return self._read_frame()
+
+	def call_in_context(self, context: str, rpc: str, params: List[Any]) -> str:
+		with self._lock:
+			if context != self.context:
+				self._set_context_locked(context)
+			result = self._invoke_locked(rpc, params)
+			if _normalize_context_error(result):
+				desired = context
+				self.logger.info("VistaRPC", "context dropped; reconnecting")
+				self.context = desired
+				self.connect()
+				self._set_context_locked(desired)
+				result = self._invoke_locked(rpc, params)
+				if _normalize_context_error(result):
+					raise GatewayError("context re-establish failed")
+			return result
 
 
-# ---- VistaSocketGateway ----
+def _fileman_to_iso(value: Any) -> Optional[str]:
+	try:
+		text = str(value or "").strip()
+		if not text:
+			return None
+		date_part, time_part = (text.split(".", 1) + [""])[:2]
+		if len(date_part) != 7 or not date_part.isdigit():
+			return None
+		year = int(date_part[:3]) + 1700
+		month = int(date_part[3:5])
+		day = int(date_part[5:7])
+		time_digits = "".join(ch for ch in time_part if ch.isdigit())
+		hour = int(time_digits[0:2]) if len(time_digits) >= 2 else 0
+		minute = int(time_digits[2:4]) if len(time_digits) >= 4 else 0
+		second = int(time_digits[4:6]) if len(time_digits) >= 6 else 0
+		stamp = datetime(year, month, day, hour, minute, second, tzinfo=timezone.utc)
+		return stamp.isoformat().replace("+00:00", "Z")
+	except Exception:
+		return None
 
-def _ensure_xml_lib():
-    if xmltodict is None:
-        raise GatewayError("xmltodict is required for socket gateway XML parsing. Add 'xmltodict' to requirements.")
+
+def _iso_to_fileman(value: Any) -> Optional[str]:
+	try:
+		text = str(value or "").strip()
+		if not text:
+			return None
+		if text.isdigit() and len(text) == 7:
+			return text
+		if "T" in text or "-" in text:
+			stamp = datetime.fromisoformat(text.replace("Z", "+00:00"))
+			date_part = f"{stamp.year - 1700:03d}{stamp.month:02d}{stamp.day:02d}"
+			if stamp.hour or stamp.minute or stamp.second:
+				return f"{date_part}.{stamp.hour:02d}{stamp.minute:02d}{stamp.second:02d}"
+			return date_part
+		digits = "".join(ch for ch in text if ch.isdigit())
+		if len(digits) >= 8:
+			year = int(digits[0:4])
+			month = int(digits[4:6])
+			day = int(digits[6:8])
+			date_part = f"{year - 1700:03d}{month:02d}{day:02d}"
+			if len(digits) >= 12:
+				hour = int(digits[8:10])
+				minute = int(digits[10:12])
+				if len(digits) >= 14:
+					second = int(digits[12:14])
+					return f"{date_part}.{hour:02d}{minute:02d}{second:02d}"
+				return f"{date_part}.{hour:02d}{minute:02d}"
+			return date_part
+		return None
+	except Exception:
+		return None
 
 
-def _normalize_vpr_xml_to_items(xml_text: str) -> Dict[str, Any]:
-    """Parse VPR XML text into a dict with an 'items' list compatible with transforms.
-    Strategy: xmltodict.parse -> look for data.items.item; coerce to list; return {'items': [...]}.
-    Leaves field names as-is (VPR XML uses camelCase names matching JSON schema).
-    """
-    _ensure_xml_lib()
-    try:
-        from typing import cast
-        xtd = cast(Any, xmltodict)
-        obj = xtd.parse(xml_text)
-    except Exception as e:
-        raise GatewayError(f'Failed to parse VPR XML: {e}')
-    # Navigate common VPR shape
-    # Expected: {'data': {'items': {'item': [ {...}, {...} ]}}}
-    d = obj
-    for k in ('data', 'Data'):
-        if k in d:
-            d = d[k]
-            break
-    else:
-        # fallback: return whole object as one item
-        return {'items': [obj]}
-    items = None
-    # Support both 'items' and 'Items'
-    if isinstance(d, dict):
-        itwrap = d.get('items') or d.get('Items')
-        if isinstance(itwrap, dict):
-            items = itwrap.get('item') or itwrap.get('Item')
-        elif isinstance(itwrap, list):
-            items = itwrap
-    # Coerce
-    if items is None:
-        items = []
-    if isinstance(items, dict):
-        items = [items]
-    # xmltodict returns OrderedDicts; we can cast to plain dicts recursively
-    def _to_plain(x):
-        if isinstance(x, dict):
-            return {k: _to_plain(v) for k, v in x.items()}
-        if isinstance(x, list):
-            return [ _to_plain(v) for v in x ]
-        return x
-    plain_items = _to_plain(items)
-    # Some VPR XML nests value under '@attr' or '#text'; prefer '#text' for simple nodes
-    def _flatten_special(dct: Any) -> Any:
-        if not isinstance(dct, dict):
-            return dct
-        out = {}
-        for k, v in dct.items():
-            if isinstance(v, dict) and '#text' in v and len(v) <= 2:
-                # keep attributes only if useful; primary is text value
-                out[k] = v['#text']
-            else:
-                out[k] = _flatten_special(v)
-        return out
-    plain_items = [ _flatten_special(it) for it in plain_items ]
-    return {'items': plain_items}
+def _wrap_items(domain: str, dfn: str, items: List[Dict[str, Any]], meta: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+	payload = [item for item in items if isinstance(item, dict)]
+	meta_block = meta.copy() if isinstance(meta, dict) else {}
+	meta_block.setdefault("domain", domain)
+	meta_block.setdefault("dfn", str(dfn))
+	meta_block.setdefault("total", len(payload))
+	data = {
+		"totalItems": len(payload),
+		"items": payload,
+	}
+	return {
+		"items": payload,
+		"meta": meta_block,
+		"data": data,
+	}
+
+
+def _parse_orwpt_ptinq(raw: str, dfn: str) -> Dict[str, Any]:
+	lines = [line.strip() for line in str(raw or "").replace("\r", "").split("\n") if line.strip()]
+	fields: Dict[str, Any] = {}
+	for line in lines:
+		if "^" in line:
+			parts = line.split("^")
+			key = parts[0].strip()
+			values = [segment.strip() for segment in parts[1:] if segment]
+			if key:
+				if len(values) == 1:
+					fields[key] = values[0]
+				else:
+					fields[key] = values
+		elif ":" in line:
+			key, value = [segment.strip() for segment in line.split(":", 1)]
+			if key and value and key not in fields:
+				fields[key] = value
+		elif ";" in line and any(token.isdigit() for token in line):
+			name_part = line.split(";", 1)[0].strip()
+			fields.setdefault("NAME", name_part)
+	full_name = fields.get("NAME") or fields.get("Patient") or ""
+	ssn = fields.get("SSN") or ""
+	dob_text = fields.get("DOB") or ""
+	gender = fields.get("Sex") or fields.get("Gender") or ""
+	dob_iso: Optional[str] = None
+	if dob_text:
+		try:
+			parsed = datetime.strptime(dob_text.replace(",", ""), "%b %d %Y")
+			dob_iso = parsed.date().isoformat()
+		except Exception:
+			try:
+				parsed = datetime.strptime(dob_text.upper(), "%b %d,%Y")
+				dob_iso = parsed.date().isoformat()
+			except Exception:
+				dob_iso = None
+	item: Dict[str, Any] = {
+		"localId": int(dfn) if str(dfn).isdigit() else str(dfn),
+		"fullName": full_name,
+		"ssn": ssn,
+		"dateOfBirth": dob_iso or dob_text,
+	}
+	if gender:
+		item["genderName"] = gender
+	if dob_iso:
+		item["birthDate"] = dob_iso
+	telecoms: List[Dict[str, Any]] = []
+	for key in ("Residence Number", "Temporary Phone", "Office Phone"):
+		value = fields.get(key)
+		if isinstance(value, str) and value.strip():
+			usage = "WP" if "Office" in key else "HP"
+			telecoms.append({"usageCode": usage, "telecom": value.strip()})
+	if telecoms:
+		item["telecoms"] = telecoms
+	address_lines = []
+	for key in ("Street Address", "City", "State", "Zip"):
+		value = fields.get(key)
+		if isinstance(value, str) and value.strip():
+			address_lines.append((key, value.strip()))
+	if address_lines:
+		addr: Dict[str, Any] = {}
+		for key, value in address_lines:
+			if key == "Street Address":
+				addr["streetLine1"] = value
+			elif key == "City":
+				addr["city"] = value
+			elif key == "State":
+				addr["stateProvince"] = value
+			elif key == "Zip":
+				addr["postalCode"] = value
+		item["addresses"] = [addr]
+	return item
+
+
+def _parse_orwps_active(raw: str) -> List[Dict[str, Any]]:
+	items: List[Dict[str, Any]] = []
+	lines = str(raw or "").splitlines()
+	current: Optional[Dict[str, Any]] = None
+	for line in lines:
+		stripped = line.strip()
+		if not stripped:
+			continue
+		if stripped.startswith("~"):
+			parts = stripped[1:].split("^")
+			if len(parts) < 3:
+				continue
+			current = {
+				"id": parts[0].strip(),
+				"display": parts[2].strip(),
+				"statusName": (parts[9].strip().lower() if len(parts) > 9 else "").title(),
+				"overallStart": _fileman_to_iso(parts[16]) if len(parts) > 16 else None,
+				"overallStop": _fileman_to_iso(parts[17]) if len(parts) > 17 else None,
+			}
+			current["name"] = current["display"]
+			if current.get("statusName"):
+				current["vaStatus"] = current["statusName"].upper()
+				current["status"] = current["statusName"]
+			if current["display"]:
+				items.append(current)
+		elif current and stripped.startswith("\\"):
+			if stripped.lower().startswith("\\ sig:"):
+				current["sig"] = stripped.split(":", 1)[-1].strip()
+			elif stripped.lower().startswith("\\indication:"):
+				current["indication"] = stripped.split(":", 1)[-1].strip()
+	return items
+
+
+def _parse_orwcv_lab(raw: str) -> List[Dict[str, Any]]:
+	items: List[Dict[str, Any]] = []
+	for line in str(raw or "").splitlines():
+		parts = [segment.strip() for segment in line.split("^")]
+		if len(parts) < 4 or not parts[0]:
+			continue
+		item: Dict[str, Any] = {
+			"id": parts[0],
+			"displayName": parts[1],
+			"result": parts[3] if parts[3] else parts[2],
+			"resulted": _fileman_to_iso(parts[2]),
+		}
+		if item["resulted"]:
+			item["observed"] = item["resulted"]
+		items.append(item)
+	return items
+
+
+_VITAL_TYPE_METADATA: Dict[str, Dict[str, Optional[str]]] = {
+	"BP": {"display": "Blood Pressure", "default_unit": "mmHg"},
+	"T": {"display": "Temperature", "default_unit": "F"},
+	"TEMP": {"display": "Temperature", "default_unit": "F"},
+	"P": {"display": "Pulse", "default_unit": "bpm"},
+	"HR": {"display": "Pulse", "default_unit": "bpm"},
+	"R": {"display": "Respiratory Rate", "default_unit": "breaths/min"},
+	"RR": {"display": "Respiratory Rate", "default_unit": "breaths/min"},
+	"WT": {"display": "Weight", "default_unit": "lbs"},
+	"WTKG": {"display": "Weight", "default_unit": "kg"},
+	"HT": {"display": "Height", "default_unit": "in"},
+	"HTCM": {"display": "Height", "default_unit": "cm"},
+	"PO2": {"display": "SpO2", "default_unit": "%"},
+	"POX": {"display": "SpO2", "default_unit": "%"},
+	"SP02": {"display": "SpO2", "default_unit": "%"},
+	"O2": {"display": "SpO2", "default_unit": "%"},
+	"PN": {"display": "Pain", "default_unit": None},
+	"PAIN": {"display": "Pain", "default_unit": None},
+	"BMI": {"display": "BMI", "default_unit": None},
+	"CG": {"display": "Girth", "default_unit": "cm"},
+}
+
+
+def _extract_vital_unit(raw_fragment: str, result: str) -> Optional[str]:
+	fragment = (raw_fragment or "").strip()
+	if not fragment:
+		return None
+	value = (result or "").strip()
+	if fragment == value:
+		return None
+	if value and fragment.startswith(value):
+		fragment = fragment[len(value):].strip()
+	if not fragment:
+		return None
+	tokens = [token.strip("() ") for token in fragment.split() if token.strip("() ")]
+	if not tokens:
+		return None
+	unit = tokens[-1]
+	if not unit or unit == value:
+		return None
+	if unit.lower() == "lb":
+		return "lbs"
+	return unit
+
+
+def _parse_orqqvi_vitals(raw: str) -> List[Dict[str, Any]]:
+	items: List[Dict[str, Any]] = []
+	for line in str(raw or "").splitlines():
+		parts = [segment.strip() for segment in line.split("^")]
+		if len(parts) < 4:
+			continue
+		vital_code = parts[1]
+		result = parts[2]
+		observed = _fileman_to_iso(parts[3])
+		metadata = _VITAL_TYPE_METADATA.get((vital_code or "").strip().upper(), {})
+		display_name = metadata.get("display") or vital_code
+		unit = None
+		if len(parts) > 4 and parts[4]:
+			unit = _extract_vital_unit(parts[4], result)
+		if not unit:
+			unit = metadata.get("default_unit")
+		item = {
+			"typeName": display_name,
+			"result": result,
+			"observed": observed,
+			"typeCode": vital_code,
+		}
+		if unit:
+			item["units"] = unit
+		if len(parts) > 6 and parts[6]:
+			item["location"] = parts[6]
+		items.append(item)
+	return items
+
+
+def _parse_orqqpl_problem_list(raw: str) -> List[Dict[str, Any]]:
+	results: List[Dict[str, Any]] = []
+	for line in str(raw or "").splitlines():
+		if "^" not in line:
+			continue
+		parts = [segment.strip() for segment in line.split("^")]
+		if not parts or not parts[0]:
+			continue
+		status_code = parts[1].upper() if len(parts) > 1 else ""
+		status = {
+			"A": "ACTIVE",
+			"I": "INACTIVE",
+			"E": "ENTERED IN ERROR",
+		}.get(status_code, status_code)
+		summary = parts[2] if len(parts) > 2 else ""
+		icd = parts[3] if len(parts) > 3 else ""
+		updated = _fileman_to_iso(parts[5]) if len(parts) > 5 else None
+		item = {
+			"localId": parts[0],
+			"problemText": summary,
+			"statusName": status,
+			"icdCode": icd,
+		}
+		if status:
+			item["status"] = status
+		if summary:
+			item["summary"] = summary
+		if updated:
+			item["updated"] = updated
+		results.append(item)
+	return results
+
+
+def _parse_orqqal_allergies(raw: str) -> List[Dict[str, Any]]:
+	items: List[Dict[str, Any]] = []
+	for line in str(raw or "").splitlines():
+		parts = [segment.strip() for segment in line.split("^")]
+		if len(parts) < 2 or not parts[0]:
+			continue
+		item = {
+			"localId": parts[0],
+			"summary": parts[1],
+			"statusName": parts[2] if len(parts) > 2 else "ACTIVE",
+		}
+		if item["summary"]:
+			item["name"] = item["summary"]
+		if item.get("statusName"):
+			item["status"] = item["statusName"]
+		items.append(item)
+	return items
+
+
+def _parse_tiu_documents(raw: str) -> List[Dict[str, Any]]:
+	items: List[Dict[str, Any]] = []
+	for line in str(raw or "").splitlines():
+		line = line.strip()
+		if not line or line.startswith("~") or "^" not in line:
+			continue
+		parts = [segment.strip() for segment in line.split("^")]
+		if not parts[0]:
+			continue
+		doc_id = parts[0]
+		local_title = parts[1] if len(parts) > 1 else ""
+		fileman_stamp = parts[2] if len(parts) > 2 else ""
+		author_blob = parts[4] if len(parts) > 4 else ""
+		location_name = parts[5] if len(parts) > 5 else ""
+		status_text = parts[6] if len(parts) > 6 else ""
+		encounter = parts[7] if len(parts) > 7 else ""
+		ref_iso = _fileman_to_iso(fileman_stamp)
+		author_display = author_blob
+		if author_blob and ";" in author_blob:
+			author_tokens = [token.strip() for token in author_blob.split(";") if token.strip()]
+			if len(author_tokens) >= 2:
+				author_display = author_tokens[1]
+			elif author_tokens:
+				author_display = author_tokens[-1]
+		status_clean = status_text.title() if status_text else None
+		item: Dict[str, Any] = {
+			"id": doc_id,
+			"localId": doc_id,
+			"localTitle": local_title,
+			"authorDisplayName": author_display,
+			"authorRaw": author_blob or None,
+			"locationName": location_name or None,
+			"statusName": status_clean,
+			"encounterName": encounter or None,
+		}
+		item["uid"] = f"urn:va:document:{doc_id}"
+		if ref_iso:
+			item["referenceDateTime"] = ref_iso
+		if status_clean:
+			item["status"] = status_clean.upper()
+		items.append(item)
+	return items
+
+
+def _normalize_context_error(text: str) -> bool:
+	message = str(text or "").strip()
+	if not message:
+		return False
+	# Vista sometimes prefixes status codes (for example "9" or "-1^") ahead of the message.
+	message_stripped = message.lstrip("0123456789^~ ")
+	lowered = message_stripped.lower()
+	if not lowered:
+		return False
+	if "application context has not been created" in lowered:
+		return True
+	if "context has not been created" in lowered:
+		return True
+	if "the context" in lowered and "does not exist" in lowered:
+		return True
+	return False
+
+
+def _normalize_doc_id(value: Any) -> str:
+	text = str(value or "").strip()
+	if not text:
+		return ""
+	lowered = text.lower()
+	if lowered.startswith("urn:va:document:"):
+		text = text.split(":", 2)[-1]
+	text = text.strip()
+	for sep in (":", ";"):
+		if sep in text:
+			tail = text.rsplit(sep, 1)[-1].strip()
+			if tail:
+				text = tail
+	if "-" in text:
+		tail = text.rsplit("-", 1)[-1].strip()
+		if tail.isdigit():
+			text = tail
+	return text.strip()
 
 
 class VistaSocketGateway(DataGateway):
-    """Gateway that calls VistA directly via the Broker socket.
-    For patient data, uses JLV WEB SERVICES context to call VPR GET PATIENT DATA (XML),
-    then normalizes to a JSON-like dict with 'items' to feed existing transforms.
-    For general CPRS flows (patient search, sensitive check), uses OR CPRS GUI CHART.
-    """
+	def __init__(
+		self,
+		*,
+		host: str,
+		port: int,
+		access: str,
+		verify: str,
+		default_context: Optional[str] = None,
+	) -> None:
+		self.host = host
+		self.port = int(port)
+		self.access = access
+		self.verify = verify
+		self.default_context = default_context or os.getenv("VISTA_DEFAULT_CONTEXT") or "OR CPRS GUI CHART"
+		self.logger = _VistaRPCLogger()
+		self._client = self._build_client()
+		self._connected = False
 
-    def __init__(self, *, host: str, port: int, access: str, verify: str,
-                 default_context: Optional[str] = None,
-                 vpr_context: Optional[str] = None):
-        self.host = host
-        self.port = int(port)
-        self.access = access
-        self.verify = verify
-        self.default_context = default_context or os.getenv('VISTA_DEFAULT_CONTEXT') or 'OR CPRS GUI CHART'
-        # JLV for VPR XML
-        self.vpr_context = vpr_context or 'JLV WEB SERVICES'
-        self._logger = _VistaRPCLogger()
-        self._client = _VistaRPCClient(host, int(port), access, verify, self.default_context, self._logger)
-        self._connected = False
+	def _build_client(self) -> _VistaRPCClient:
+		return _VistaRPCClient(
+			host=self.host,
+			port=self.port,
+			access=self.access,
+			verify=self.verify,
+			context=self.default_context,
+			logger=self.logger,
+		)
 
-    # ---- lifecycle ----
-    def connect(self):
-        if not self._connected:
-            self._client.connect()
-            self._connected = True
+	def _reset_client(self) -> None:
+		try:
+			self._client.close()
+		except Exception:
+			pass
+		self._client = self._build_client()
+		self._connected = False
+		self.logger.info("VistaRPC", "client reset after authentication failure")
 
-    def close(self):
-        try:
-            self._client.close()
-        finally:
-            self._connected = False
+	def connect(self) -> None:
+		if self._connected:
+			return
+		try:
+			self._client.connect()
+			self._connected = True
+		except GatewayError as err:
+			text = str(err or "")
+			if "invalid access/verify" in text.lower() or "tcpconnect failed" in text.lower():
+				self._reset_client()
+				self._client.connect()
+				self._connected = True
+			else:
+				raise
 
-    # ---- Generic RPC ----
-    def call_rpc(self, *, context: str, rpc: str, parameters: Optional[list[dict]] = None, json_result: bool = False, timeout: int = 60) -> Any:  # type: ignore[override]
-        self.connect()
-        # Socket path ignores timeout here (blocking socket). Could add per-call timeouts via settimeout.
-        params = []
-        for p in (parameters or []):
-            # vista-api-x accepts dicts like {'string': '...'}; socket expects literal params list
-            if 'string' in p:
-                params.append(str(p.get('string') or ''))
-            elif 'literal' in p:
-                params.append(str(p.get('literal') or ''))
-            elif 'namedArray' in p:
-                params.append(p.get('namedArray') or {})
-            else:
-                params.append(p)
-        raw = self._client.call_in_context(context, rpc, params)
-        # vista-api-x sometimes returns wrapper JSON; socket returns raw caret/newline strings
-        if json_result:
-            try:
-                return json.loads(raw)
-            except Exception:
-                return {'raw': raw}
-        return raw
+	def close(self) -> None:
+		try:
+			self._client.close()
+		finally:
+			self._connected = False
 
-    # ---- VPR helpers ----
-    def _vpr_named_array(self, dfn: str, domain: Optional[str] = None, params: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
-        body: Dict[str, Any] = { 'patientId': str(dfn) }
-        if domain:
-            body['domain'] = str(domain)
-        if params and isinstance(params, dict):
-            # Pass through whitelisted keys only; server ignores unknowns
-            for k, v in params.items():
-                if v is not None:
-                    body[str(k)] = v
-        return body
+	def call_rpc(
+		self,
+		*,
+		context: str,
+		rpc: str,
+		parameters: Optional[List[Dict[str, Any]]] = None,
+		json_result: bool = False,
+		timeout: int = 60,
+	) -> Any:  # type: ignore[override]
+		self.connect()
+		params: List[Any] = []
+		for entry in parameters or []:
+			if "string" in entry:
+				params.append(str(entry.get("string") or ""))
+			elif "literal" in entry:
+				params.append(str(entry.get("literal") or ""))
+			elif "multiline" in entry:
+				params.append(entry.get("multiline") or "")
+			else:
+				params.append(entry)
+		try:
+			raw = self._client.call_in_context(context, rpc, params)
+		except (GatewayError, OSError) as err:
+			text = str(err or "")
+			lowered = text.lower()
+			if "invalid access/verify" in lowered:
+				self._reset_client()
+				self.connect()
+				raw = self._client.call_in_context(context, rpc, params)
+			elif "10053" in lowered or "connection was aborted" in lowered or "socket closed" in lowered:
+				self.logger.info("VistaRPC", "socket connection aborted; resetting client")
+				self._reset_client()
+				self.connect()
+				raw = self._client.call_in_context(context, rpc, params)
+			else:
+				raise
+		if json_result:
+			try:
+				return json.loads(raw)
+			except Exception:
+				return {"raw": raw}
+		return raw
 
-    def get_demographics(self, dfn: str) -> Dict[str, Any]:
-        # Fetch via VPR XML patient domain and normalize
-        return self.get_vpr_domain(dfn, domain='patient')
+	def get_demographics(self, dfn: str) -> Dict[str, Any]:
+		return self.get_vpr_domain(dfn, domain="patient")
 
-    def get_vpr_domain(self, dfn: str, domain: str, params: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:  # type: ignore[override]
-        """Fetch a single domain via VPR GET PATIENT DATA (XML).
+	def get_vpr_domain(
+		self,
+		dfn: str,
+		domain: str,
+		params: Optional[Dict[str, Any]] = None,
+	) -> Dict[str, Any]:  # type: ignore[override]
+		self.connect()
+		domain = domain.lower()
+		if domain == "patient":
+			raw = self._client.call_in_context(self.default_context, "ORWPT PTINQ", [str(dfn)])
+			item = _parse_orwpt_ptinq(raw, dfn)
+			return _wrap_items("patient", dfn, [item])
+		if domain in ("med", "meds", "medication"):
+			raw = self._client.call_in_context(self.default_context, "ORWPS ACTIVE", [str(dfn)])
+			items = _parse_orwps_active(raw)
+			return _wrap_items("med", dfn, items)
+		if domain in ("lab", "labs"):
+			raw = self._client.call_in_context(self.default_context, "ORWCV LAB", [str(dfn)])
+			items = _parse_orwcv_lab(raw)
+			return _wrap_items("lab", dfn, items)
+		if domain in ("vital", "vitals"):
+			start = params.get("start") if params else None
+			stop = params.get("stop") if params else None
+			fm_start = _iso_to_fileman(start) or ""
+			fm_stop = _iso_to_fileman(stop) or ""
+			raw = self._client.call_in_context(self.default_context, "ORQQVI VITALS", [str(dfn), fm_start, fm_stop])
+			items = _parse_orqqvi_vitals(raw)
+			return _wrap_items("vital", dfn, items)
+		if domain in ("document", "documents", "notes"):
+			return self._get_document_domain(dfn, params=params)
+		if domain in ("problem", "problems"):
+			raw = self._client.call_in_context(self.default_context, "ORQQPL PROBLEM LIST", [str(dfn)])
+			items = _parse_orqqpl_problem_list(raw)
+			return _wrap_items("problem", dfn, items)
+		if domain in ("allergy", "allergies"):
+			raw = self._client.call_in_context(self.default_context, "ORQQAL LIST", [str(dfn)])
+			items = _parse_orqqal_allergies(raw)
+			return _wrap_items("allergy", dfn, items)
+		return _wrap_items(domain, dfn, [])
 
-        Strategy:
-        1. Prefer the native positional parameter signature (DFN, TYPE, START, STOP, MAX, ITEM, FILTER list)
-           because the RPC definition (Vivian site 8994-2917) expects ordered literals.
-        2. If the positional call yields a <results> domain section, parse with parse_vpr_results_xml.
-        3. Fallback to legacy namedArray invocation then normalize with _normalize_vpr_xml_to_items.
-        """
-        self.connect()
-        # Map internal domain name to TYPE value (RPC expects semicolon-delimited kinds). For single domain we send one.
-        type_map = {
-            'patient': 'demographics',
-            'med': 'meds',
-            'lab': 'labs',
-            'vital': 'vitals',
-            'document': 'documents',
-            'image': 'images',
-            'procedure': 'procedures',
-            'visit': 'visits',
-            'problem': 'problems',
-            'allergy': 'reactions',
-        }
-        type_val = type_map.get(domain)
-        positional_params: List[Any] = [str(dfn)]
-        if type_val:
-            positional_params.append(type_val)
-        # Optional future: map params keys start/stop/max/item/filter -> append in order. Presently only support start/stop/max.
-        if params and isinstance(params, dict):
-            # START (3rd), STOP (4th), MAX (5th), ITEM (6th) - maintain order by placeholders if earlier ones missing.
-            start = params.get('start') or params.get('START')
-            stop = params.get('stop') or params.get('STOP')
-            max_items = params.get('max') or params.get('MAX')
-            item_id = params.get('item') or params.get('ITEM')
-            # Append respecting sequence; blank values become '' to preserve positional alignment only when later params used.
-            if any(v is not None for v in (start, stop, max_items, item_id)):
-                positional_params.append(str(start) if start else '')
-                positional_params.append(str(stop) if stop else '')
-                positional_params.append(str(max_items) if max_items else '')
-                positional_params.append(str(item_id) if item_id else '')
-            # FILTER list unsupported here; would require list param structure; leave for future.
-        self._logger.info('VistaSocketGateway', f"Invoking VPR GET PATIENT DATA (positional) for domain '{domain}' TYPE='{type_val}' (DFN {dfn})")
-        raw_xml_positional = ''
-        try:
-            raw_xml_positional = self._client.call_in_context(self.vpr_context, 'VPR GET PATIENT DATA', positional_params)
-            parsed_results = parse_vpr_results_xml(raw_xml_positional, domain=domain)
-            if parsed_results.get('items'):  # Successful domain parse
-                return self._wrap_domain_response(domain, dfn, parsed_results)
-        except Exception as e:
-            self._logger.error('VistaSocketGateway', f"Positional domain call failed: {e}")
-        # Fallback: namedArray approach used previously
-        named = self._vpr_named_array(dfn, domain=domain, params=params)
-        self._logger.info('VistaSocketGateway', f"Fallback namedArray invocation for domain '{domain}' (DFN {dfn})")
-        raw_xml = self._client.call_in_context(self.vpr_context, 'VPR GET PATIENT DATA', [ { 'namedArray': named } ])
-        # Try results parser second time (some deployments may still return <results>)
-        try:
-            parsed_results_2 = parse_vpr_results_xml(raw_xml, domain=domain)
-            if parsed_results_2.get('items'):
-                return self._wrap_domain_response(domain, dfn, parsed_results_2)
-        except Exception:
-            pass
-        legacy = _normalize_vpr_xml_to_items(raw_xml)
-        return self._wrap_domain_response(domain, dfn, legacy)
+	def get_vpr_fullchart(
+		self,
+		dfn: str,
+		params: Optional[Dict[str, Any]] = None,
+	) -> Dict[str, Any]:
+		domains = [
+			"patient",
+			"med",
+			"lab",
+			"vital",
+			"document",
+			"problem",
+			"allergy",
+		]
+		items: List[Dict[str, Any]] = []
+		for domain in domains:
+			try:
+				payload = self.get_vpr_domain(dfn, domain=domain, params=params)
+				domain_items = payload.get("items") if isinstance(payload, dict) else []
+				if isinstance(domain_items, list):
+					items.extend(domain_items)
+			except Exception:
+				continue
+		return _wrap_items("fullchart", dfn, items)
 
-    def get_vpr_fullchart(self, dfn: str, params: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
-        """Aggregate common domains to emulate fullchart when JSON endpoint is unavailable.
-        Domains: patient, med, lab, vital, document, image, procedure, visit, problem, allergy.
-        Returns {'items': [...]} concatenated for simplicity.
-        """
-        domains = ['patient','med','lab','vital','document','image','procedure','visit','problem','allergy']
-        items: List[Dict[str, Any]] = []
-        for dom in domains:
-            try:
-                part = self.get_vpr_domain(dfn, dom, params=params)
-                arr = part.get('items') if isinstance(part, dict) else []
-                if isinstance(arr, list):
-                    items.extend(arr)
-            except Exception:
-                continue
-        return {'items': items}
+	def get_document_texts(self, dfn: str, doc_ids: List[str]) -> Dict[str, List[str]]:  # type: ignore[override]
+		self.connect()
+		results: Dict[str, List[str]] = {}
+		cache: Dict[str, List[str]] = {}
+		for doc_id in doc_ids:
+			original = str(doc_id or "").strip()
+			if not original:
+				continue
+			normalized = _normalize_doc_id(original)
+			rpc_token = normalized or original
+			lines: Optional[List[str]] = None
+			if rpc_token in cache:
+				lines = cache[rpc_token]
+			elif rpc_token:
+				try:
+					raw = self._client.call_in_context(self.default_context, "TIU GET RECORD TEXT", [rpc_token])
+					text = str(raw or "").replace("\r", "")
+					stripped = text.strip()
+					if stripped and not _normalize_context_error(stripped):
+						lower = stripped.lower()
+						if not any(marker in lower for marker in ("not authorized", "does not exist", "rpc not registered")):
+							lines = stripped.splitlines()
+				except Exception:
+					lines = None
+				if lines:
+					cache[rpc_token] = lines
+			if lines:
+				results[original] = list(lines)
+				if normalized and normalized != original:
+					results.setdefault(normalized, list(lines))
+		return results
 
-    # ---- Internal helpers ----
-    def _wrap_domain_response(self, domain: str, dfn: str, parsed: Dict[str, Any]) -> Dict[str, Any]:
-        """Return a structure closer to the VPR GET PATIENT DATA JSON domain envelope while
-        preserving backward compatibility with existing transforms.
+	@staticmethod
+	def _candidate_ids(item: Dict[str, Any]) -> List[str]:
+		ids: List[str] = []
+		for key in ("id", "localId", "uid", "uidLong"):
+			val = item.get(key)
+			if not val:
+				continue
+			val_str = str(val).strip()
+			if not val_str:
+				continue
+			ids.append(val_str)
+			if ":" in val_str:
+				ids.append(val_str.split(":")[-1])
+			if "-" in val_str:
+				ids.append(val_str.split("-")[-1])
+		return ids
 
-        JSON VPR domain (vista-api-x) roughly provides:
-            { 'apiVersion': '1.01', 'params': {...}, 'data': { 'updated': 'TS', 'totalItems': N, 'items': [...] } }
+	def _get_document_domain(self, dfn: str, params: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+		settings = params or {}
+		start = settings.get("start")
+		stop = settings.get("stop")
+		max_results = settings.get("max")
+		context_id = settings.get("tiu_context_id") or settings.get("context_id") or settings.get("context") or "3"
+		sort_order = settings.get("sort") or "D"
+		status_filter = settings.get("status_filter")
+		if status_filter is None:
+			candidate_status = settings.get("status")
+			if isinstance(candidate_status, str) and candidate_status.strip().isdigit():
+				status_filter = candidate_status.strip()
+			else:
+				status_filter = "0"
+		else:
+			status_filter = str(status_filter)
+		include_addenda = settings.get("include_addenda")
+		if include_addenda is None:
+			include_addenda = "0"
+		else:
+			include_addenda = "1" if str(include_addenda).lower() in {"1", "true", "yes"} else "0"
+		target_tokens: Set[str] = set()
+		for raw_token in (settings.get("id"), settings.get("uid")):
+			if raw_token is None:
+				continue
+			value = str(raw_token).strip()
+			if not value:
+				continue
+			for token in (value, value.lower()):
+				target_tokens.add(token)
+			if ":" in value:
+				suffix = value.split(":")[-1]
+				for token in (suffix, suffix.lower()):
+					target_tokens.add(token)
+			if "-" in value:
+				suffix = value.split("-")[-1]
+				for token in (suffix, suffix.lower()):
+					target_tokens.add(token)
+		text_requested = False
+		text_flag = settings.get("text")
+		if text_flag is not None:
+			text_requested = str(text_flag).strip().lower() in {"1", "true", "yes"}
+		elif settings.get("id"):
+			# Clients typically request text when explicit IDs supplied
+			text_requested = True
+		try:
+			max_count = int(str(max_results)) if max_results is not None else 200
+		except Exception:
+			max_count = 200
+		if target_tokens:
+			try:
+				candidate_max = max(5, len(target_tokens) * 5)
+				max_count = max(1, min(max_count, candidate_max))
+			except Exception:
+				max_count = max(1, min(max_count or 10, 10))
+		start_fm = _iso_to_fileman(start) or "-1"
+		stop_fm = _iso_to_fileman(stop) or "-1"
+		rpc_params: List[Any] = [
+			str(context_id),
+			"1",
+			str(dfn),
+			start_fm,
+			stop_fm,
+			str(status_filter or "0"),
+			str(max_count),
+			str(sort_order or "D"),
+			"1",
+			include_addenda,
+			"1",
+			"",
+		]
+		raw = self._client.call_in_context(self.default_context, "TIU DOCUMENTS BY CONTEXT", rpc_params)
+		items = _parse_tiu_documents(raw)
+		if target_tokens:
+			filtered: List[Dict[str, Any]] = []
+			for item in items:
+				if not isinstance(item, dict):
+					continue
+				candidates = self._candidate_ids(item)
+				candidate_tokens = set(candidates)
+				candidate_tokens.update(tok.lower() for tok in candidates)
+				if candidate_tokens & target_tokens:
+					filtered.append(item)
+			if filtered:
+				items = filtered
+		if text_requested and items:
+			doc_ids: List[str] = []
+			seen_ids: Set[str] = set()
+			for item in items:
+				if not isinstance(item, dict):
+					continue
+				candidates = self._candidate_ids(item)
+				candidate_tokens = set(candidates)
+				candidate_tokens.update(tok.lower() for tok in candidates)
+				if target_tokens and not (candidate_tokens & target_tokens):
+					continue
+				selected = None
+				for cand in candidates:
+					if cand.isdigit():
+						selected = cand
+						break
+				if not selected and candidates:
+					selected = candidates[0]
+				if selected and selected not in seen_ids:
+					seen_ids.add(selected)
+					doc_ids.append(selected)
+			if doc_ids:
+				text_map = self.get_document_texts(dfn, doc_ids)
+				for item in items:
+					if not isinstance(item, dict):
+						continue
+					identifier = item.get("id") or item.get("localId") or item.get("uid")
+					if not identifier:
+						continue
+					key = str(identifier)
+					lines = text_map.get(key)
+					if not lines and ":" in key:
+						alt = key.split(":")[-1]
+						lines = text_map.get(alt)
+					if not lines:
+						continue
+					item["text"] = [{"content": ln} for ln in lines if isinstance(ln, str) and ln.strip()]
+		meta = {
+			"rpc": "TIU DOCUMENTS BY CONTEXT",
+			"max": max_count,
+			"start": start,
+			"stop": stop,
+			"status": settings.get("status"),
+			"contextId": str(context_id),
+		}
+		return _wrap_items("document", dfn, items, meta)
 
-        Our socket XML path currently returns just { 'items': [...], 'meta': {...} }.
-        To enable drop-in parity we synthesize a minimal superset:
-            {
-              'items': [...],                 # existing transform fast-path
-              'meta': {...},                  # original meta (version, timeZone, domain, total)
-              'data': {
-                  'totalItems': N,
-                  'items': [...],
-                  'version': meta.version?,   # surfaced for troubleshooting
-                  'timeZone': meta.timeZone?  # surfaced for troubleshooting
-              }
-            }
-
-        We intentionally omit apiVersion/params/systemId since they are transport-specific; these can
-        be added later if needed for strict diffing. Keeping root 'items' ensures no callers break.
-        """
-        try:
-            items = []
-            if isinstance(parsed, dict):
-                items = parsed.get('items') or []
-                if not isinstance(items, list):
-                    items = []
-            meta = parsed.get('meta') if isinstance(parsed, dict) else None
-            if not isinstance(meta, dict):
-                meta = {}
-            total = meta.get('total')
-            if not isinstance(total, int):
-                total = len(items)
-            data_block: Dict[str, Any] = {
-                'totalItems': total,
-                'items': items,
-            }
-            # surface version/timeZone if present (non-standard but helpful)
-            for k in ('version','timeZone','updated'):
-                if meta.get(k) and k not in data_block:
-                    data_block[k] = meta.get(k)
-            # Provide domain hint for debugging
-            if meta.get('domain') is None and domain:
-                meta['domain'] = domain
-            # Provide patient hint if absent
-            if 'dfn' not in meta:
-                meta['dfn'] = str(dfn)
-            wrapped = {
-                'items': items,  # legacy consumers
-                'meta': meta,
-                'data': data_block,
-            }
-            return wrapped
-        except Exception:
-            # Best-effort fallback: return original parsed
-            return parsed

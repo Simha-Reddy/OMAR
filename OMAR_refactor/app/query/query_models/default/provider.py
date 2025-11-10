@@ -1,9 +1,10 @@
 from __future__ import annotations
+import json
 from typing import Dict, Any, List
 from ...contracts import QueryModel
 from app.ai_tools import llm
 from pathlib import Path
-from app.gateways.vista_api_x_gateway import VistaApiXGateway
+from app.gateways.factory import get_gateway
 from .services.rag import (
     RagEngine,
     sliding_window_chunk,
@@ -23,6 +24,87 @@ class DefaultQueryModelImpl:
         # Structure: { dfn: { 'chunks': [...], 'bm25': obj, 'vectors': None, 'updated_at': float } }
         self._patient_cache: Dict[str, Dict[str, Any]] = {}
         self._cache_ttl_seconds = 3 * 60 * 60  # 3 hours
+
+    def _trim_ascii(self, text: str, limit: int = 1800) -> str:
+        try:
+            raw = str(text or '')
+        except Exception:
+            raw = ''
+        try:
+            ascii_text = raw.encode('ascii', 'ignore').decode('ascii')
+        except Exception:
+            ascii_text = raw
+        if limit and len(ascii_text) > limit:
+            excess = len(ascii_text) - limit
+            return ascii_text[:limit] + f"... (truncated {excess} chars)"
+        return ascii_text
+
+    def _debug(self, message: str, payload: Any | None = None, limit: int = 1800) -> None:
+        try:
+            prefix = '[HeyOMAR][DefaultQM] '
+            if payload is None:
+                print(prefix + str(message))
+                return
+            if isinstance(payload, str):
+                body = self._trim_ascii(payload, limit)
+            else:
+                try:
+                    serialized = json.dumps(payload, ensure_ascii=True, default=str)
+                except Exception:
+                    serialized = str(payload)
+                body = self._trim_ascii(serialized, limit)
+            print(prefix + str(message) + ': ' + body)
+        except Exception:
+            pass
+
+    def _summarize_chunks(self, chunks: List[Dict[str, Any]], limit: int = 5) -> List[Dict[str, Any]]:
+        summary: List[Dict[str, Any]] = []
+        try:
+            for ch in chunks[:limit]:
+                preview = self._trim_ascii(ch.get('text') or '', 160)
+                entry: Dict[str, Any] = {
+                    'note_id': ch.get('note_id'),
+                    'title': ch.get('title'),
+                    'date': ch.get('date'),
+                }
+                score = ch.get('score')
+                if score is None:
+                    score = ch.get('bm25_score')
+                if isinstance(score, (int, float)):
+                    entry['score'] = round(float(score), 4)
+                if preview:
+                    entry['preview'] = preview
+                summary.append(entry)
+        except Exception:
+            return []
+        return summary
+
+    def _generate_rewrites(self, query: str, tag: str) -> List[str]:
+        base = [query]
+        try:
+            prompt = (
+                "Rewrite the following clinical question into 3 to 4 diverse retrieval queries that capture synonyms, abbreviations, and alternative phrasings.\n"
+                "Return each on its own line without numbering.\n\nQuestion: " + query
+            )
+            txt = llm.chat(prompt) or ''
+            lines = [s.strip('- ').strip() for s in str(txt).splitlines() if s.strip()]
+            uniq: List[str] = []
+            seen: set[str] = set()
+            for s in lines:
+                key = s.lower()
+                if key and key not in seen:
+                    seen.add(key)
+                    uniq.append(s)
+                if len(uniq) >= 4:
+                    break
+            base = [query]
+            for s in uniq:
+                if s.lower() != query.lower():
+                    base.append(s)
+        except Exception as err:
+            self._debug('answer.rewrite_error', {'tag': tag, 'error': str(err)})
+        self._debug('answer.rewrites', {'tag': tag, 'queries': base})
+        return base
 
     def _get_cached(self, dfn: str) -> Dict[str, Any] | None:
         try:
@@ -110,7 +192,8 @@ class DefaultQueryModelImpl:
             duz = str(sess.get('duz') or '983')
         except Exception:
             station, duz = '500', '983'
-        gateway = VistaApiXGateway(station=station, duz=duz)
+        self._debug('answer.start', {'query': query, 'dfn': dfn, 'station': station, 'mode': mode})
+        gateway = get_gateway(station=station, duz=duz)
         top_chunks: List[Dict[str, Any]] = []
         if dfn:
             # Prefer the RagStore path, which supports optional embeddings and the embedding policy (recent 100 progress + all DS/consult/radiology)
@@ -138,32 +221,11 @@ class DefaultQueryModelImpl:
                         pass
                 # Retrieve using store (hybrid with vectors when present)
                 # Optional multi-query rewrites + RRF fusion remain valuable on top of hybrid
-                def _gen_rewrites(q: str) -> list[str]:
-                    try:
-                        prompt = (
-                            "Rewrite the following clinical question into 3 to 4 diverse retrieval queries that capture synonyms, abbreviations, and alternative phrasings.\n"
-                            "Return each on its own line without numbering.\n\nQuestion: " + q
-                        )
-                        txt = llm.chat(prompt) or ''
-                        lines = [s.strip('- ').strip() for s in str(txt).splitlines() if s.strip()]
-                        uniq: list[str] = []
-                        seen: set[str] = set()
-                        for s in lines:
-                            k = s.lower()
-                            if k and k not in seen:
-                                seen.add(k)
-                                uniq.append(s)
-                            if len(uniq) >= 4:
-                                break
-                        base = [q]
-                        for s in uniq:
-                            if s.lower() != q.lower():
-                                base.append(s)
-                        return base[:4]
-                    except Exception:
-                        return [q]
-
-                rewrites: list[str] = _gen_rewrites(query) if mode != 'summary' else [query]
+                if mode != 'summary':
+                    rewrites = self._generate_rewrites(query, 'rag_store')
+                else:
+                    rewrites = [query]
+                    self._debug('answer.rewrites', {'tag': 'rag_store_summary', 'queries': rewrites})
                 runs: list[list[Dict[str, Any]]] = []
                 K_PER = 12
                 for rq in rewrites:
@@ -197,6 +259,7 @@ class DefaultQueryModelImpl:
                 used_rag_store = True
             except Exception:
                 used_rag_store = False
+            self._debug('answer.rag_store_used', {'enabled': used_rag_store})
 
             if not used_rag_store:
                 # Fallback to in-model cache + keyword-only DocumentSearchIndex
@@ -224,32 +287,11 @@ class DefaultQueryModelImpl:
                                     ch['tag_boost'] = 0.0
                     except Exception:
                         pass
-                    def _gen_rewrites(q: str) -> list[str]:
-                        try:
-                            prompt = (
-                                "Rewrite the following clinical question into 3 to 4 diverse retrieval queries that capture synonyms, abbreviations, and alternative phrasings.\n"
-                                "Return each on its own line without numbering.\n\nQuestion: " + q
-                            )
-                            txt = llm.chat(prompt) or ''
-                            lines = [s.strip('- ').strip() for s in str(txt).splitlines() if s.strip()]
-                            uniq: list[str] = []
-                            seen: set[str] = set()
-                            for s in lines:
-                                k = s.lower()
-                                if k and k not in seen:
-                                    seen.add(k)
-                                    uniq.append(s)
-                                if len(uniq) >= 4:
-                                    break
-                            base = [q]
-                            for s in uniq:
-                                if s.lower() != q.lower():
-                                    base.append(s)
-                            return base[:4]
-                        except Exception:
-                            return [q]
-
-                    rewrites: list[str] = _gen_rewrites(query) if mode != 'summary' else [query]
+                    if mode != 'summary':
+                        rewrites = self._generate_rewrites(query, 'fallback_bm25')
+                    else:
+                        rewrites = [query]
+                        self._debug('answer.rewrites', {'tag': 'fallback_summary', 'queries': rewrites})
                     runs: list[list[Dict[str, Any]]] = []
                     K_PER = 12
                     for rq in rewrites:
@@ -281,6 +323,7 @@ class DefaultQueryModelImpl:
                         top_chunks = fused[:12]
                 else:
                     top_chunks = []
+            self._debug('answer.rag_results', {'count': len(top_chunks), 'samples': self._summarize_chunks(top_chunks)})
         else:
             # Fallback: ad-hoc RAG on provided documents (empty by default)
             vpr_docs = {'data': {'items': []}}
@@ -288,6 +331,7 @@ class DefaultQueryModelImpl:
             rag.build_chunks_from_vpr_documents(vpr_docs)
             rag.index()
             top_chunks = rag.retrieve(query, top_k=12)
+            self._debug('answer.rag_results', {'count': len(top_chunks), 'samples': self._summarize_chunks(top_chunks)})
 
         # Optional: re-rank by title tags (deprioritize nursing/admin/education for summaries by default)
         try:
@@ -506,7 +550,9 @@ class DefaultQueryModelImpl:
             f"{(prior_block + '\n\n') if prior_block else ''}Below are excerpts from the chart:\n{context}"
             f"{structured_block}"
         )
+        self._debug('answer.prompt', {'length': len(final_prompt), 'body': self._trim_ascii(final_prompt, 1800)})
         answer_text = llm.chat(final_prompt)
+        self._debug('answer.response', {'length': len(answer_text or ''), 'body': self._trim_ascii(answer_text or '', 1000)})
 
         # 4) Prepare citations list
         citations = []
@@ -569,7 +615,7 @@ class DefaultQueryModelImpl:
                     duz = str(sess.get('duz') or duz)
                 except Exception:
                     pass
-                gw = VistaApiXGateway(station=station, duz=duz)
+                gw = get_gateway(station=station, duz=duz)
                 vpr_docs = gw.get_vpr_domain(str(dfn), domain='document', params={'text': '1'})
                 rag_store.ensure_index(str(dfn), vpr_docs)
             top_chunks = rag_store.retrieve(str(dfn), query, top_k=12) or []

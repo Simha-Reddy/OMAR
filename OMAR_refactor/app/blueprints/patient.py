@@ -870,39 +870,17 @@ def documents_text_batch_api(dfn: str):
         if not isinstance(ids, list) or not ids:
             return jsonify({'notes': []})
         ids = [str(x) for x in ids if x is not None]
-        # Prefer fetching raw by id in small batches; extract text
+        try:
+            texts = svc.get_document_texts(dfn, ids)
+        except Exception:
+            texts = {}
+
         notes_out = []
-        # Build params: VPR supports id filter; batch to be safe
-        chunk_size = 25
-        for i in range(0, len(ids), chunk_size):
-            part = ids[i:i+chunk_size]
-            try:
-                params = { 'id': ','.join(part) }
-                vpr = svc.get_vpr_raw(dfn, 'document', params=params)
-                raw_items = T._get_nested_items(vpr)  # type: ignore
-                # Map back by id (string compare on id or uid tail)
-                by_id = {}
-                for it in raw_items:
-                    if not isinstance(it, dict):
-                        continue
-                    rid = str(it.get('id') or it.get('localId') or it.get('uid') or '')
-                    if rid:
-                        by_id[rid] = it
-                for want in part:
-                    cand = by_id.get(want)
-                    # If not found directly, try matching tail of uid
-                    if not cand:
-                        for k,v in by_id.items():
-                            if k.endswith(f"-{want}"):
-                                cand = v; break
-                    if not cand:
-                        continue
-                    txt = _extract_full_text(cand) or ''
-                    lines = txt.split('\n') if txt else []
-                    notes_out.append({ 'doc_id': want, 'text': lines })
-            except Exception:
-                continue
-        return jsonify({ 'notes': notes_out })
+        for doc_id in ids:
+            lines = texts.get(doc_id)
+            if lines:
+                notes_out.append({'doc_id': doc_id, 'text': list(lines)})
+        return jsonify({'notes': notes_out})
     except Exception as e:
         return jsonify({'error': str(e)}), 500
 

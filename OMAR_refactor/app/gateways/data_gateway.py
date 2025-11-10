@@ -1,5 +1,5 @@
 from __future__ import annotations
-from typing import Any, Dict, Protocol, Tuple, Optional
+from typing import Any, Dict, List, Protocol, Tuple, Optional
 
 class DataGateway(Protocol):
     """Abstract interface for patient data reads."""
@@ -10,6 +10,16 @@ class DataGateway(Protocol):
     def get_vpr_fullchart(self, dfn: str, params: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
         """Return full VPR JSON by omitting the domain filter (large payload).
         Optional params can include start/stop or other supported flags.
+        """
+        ...
+
+    def get_document_texts(self, dfn: str, doc_ids: List[str]) -> Dict[str, List[str]]:
+        """Return full text lines for the requested TIU document ids.
+
+        Implementations may use different transport strategies (single VPR call vs.
+        individual TIU RPCs). The return value maps each requested doc id to the
+        corresponding list of text lines. Any ids that cannot be resolved should be
+        omitted from the result.
         """
         ...
 

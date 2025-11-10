@@ -2,7 +2,7 @@ from __future__ import annotations
 import os
 import time
 import requests
-from typing import Any, Dict, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 from .data_gateway import DataGateway, GatewayError
 
 BASE_URL = os.getenv("VISTA_API_BASE_URL", "https://vista-api-x.vetext.app/api")
@@ -164,3 +164,111 @@ class VistaApiXGateway(DataGateway):
                     continue
                 raise GatewayError(f"RPC '{rpc}' call failed: {e}")
         raise GatewayError(f"RPC '{rpc}' call failed after retries")
+
+    # --- Document helpers ---
+    def get_document_texts(self, dfn: str, doc_ids: List[str]) -> Dict[str, List[str]]:
+        if not doc_ids:
+            return {}
+
+        wanted = [str(doc_id).strip() for doc_id in doc_ids if str(doc_id).strip()]
+        if not wanted:
+            return {}
+
+        results: Dict[str, List[str]] = {}
+        chunk_size = 25
+
+        for start in range(0, len(wanted), chunk_size):
+            batch = wanted[start:start + chunk_size]
+            params = {"id": ",".join(batch), "text": "1"}
+            try:
+                vpr = self.get_vpr_domain(dfn, "document", params=params)
+            except GatewayError:
+                continue
+
+            for item in self._iter_document_items(vpr):
+                match = self._match_requested_id(item, batch)
+                if not match or match in results:
+                    continue
+                lines = self._extract_text_lines(item)
+                if lines:
+                    results[match] = lines
+
+        return results
+
+    @staticmethod
+    def _iter_document_items(vpr_payload: Dict[str, Any]) -> List[Dict[str, Any]]:
+        if not isinstance(vpr_payload, dict):
+            return []
+        collection: List[Any] = []
+        data = vpr_payload.get("data")
+        if isinstance(data, dict) and isinstance(data.get("items"), list):
+            collection = list(data["items"])
+        else:
+            top_items = vpr_payload.get("items")
+            if isinstance(top_items, list):
+                collection = list(top_items)
+        return [item for item in collection if isinstance(item, dict)]
+
+    @staticmethod
+    def _candidate_ids(item: Dict[str, Any]) -> List[str]:
+        ids: List[str] = []
+        for key in ("id", "localId", "uid", "uidLong"):
+            val = item.get(key)
+            if not val:
+                continue
+            val_str = str(val).strip()
+            if not val_str:
+                continue
+            ids.append(val_str)
+            if ":" in val_str:
+                ids.append(val_str.split(":")[-1])
+            if "-" in val_str:
+                ids.append(val_str.split("-")[-1])
+        return ids
+
+    def _match_requested_id(self, item: Dict[str, Any], requested: List[str]) -> Optional[str]:
+        candidates = self._candidate_ids(item)
+        for want in requested:
+            if want in candidates:
+                return want
+        return None
+
+    @staticmethod
+    def _extract_text_lines(item: Dict[str, Any]) -> List[str]:
+        blocks: List[str] = []
+
+        def _maybe_add(val: Any):
+            if isinstance(val, str) and val.strip():
+                blocks.append(val.strip("\n"))
+
+        text_field = item.get("text")
+        if isinstance(text_field, list):
+            for block in text_field:
+                if isinstance(block, dict):
+                    for key in ("content", "text", "summary", "value"):
+                        if block.get(key):
+                            _maybe_add(block[key])
+                else:
+                    _maybe_add(block)
+        elif isinstance(text_field, dict):
+            for key in ("content", "text", "summary", "value"):
+                if text_field.get(key):
+                    _maybe_add(text_field[key])
+        else:
+            _maybe_add(text_field)
+
+        if not blocks:
+            for key in ("content", "body", "documentText", "noteText", "clinicalText", "report", "impression"):
+                fallback = item.get(key)
+                if isinstance(fallback, str) and fallback.strip():
+                    _maybe_add(fallback)
+                elif isinstance(fallback, dict):
+                    for sub_key in ("content", "text"):
+                        if fallback.get(sub_key):
+                            _maybe_add(fallback[sub_key])
+
+        if not blocks:
+            return []
+
+        text = "\n".join(blocks)
+        return text.splitlines()

@@ -44,13 +44,13 @@ DOMAIN_TAGS: Dict[str, Tuple[str, str]] = {
     'patient': ('demographics', 'patient'),
     'vital': ('vitals', 'vital'),
     'lab': ('labs', 'lab'),
-    'med': ('medications', 'medication'),
+    'med': ('meds', 'med'),
     'document': ('documents', 'document'),
     'image': ('images', 'image'),
     'procedure': ('procedures', 'procedure'),
     'visit': ('visits', 'visit'),
     'problem': ('problems', 'problem'),
-    'allergy': ('allergies', 'allergy'),
+    'allergy': ('reactions', 'allergy'),
 }
 
 

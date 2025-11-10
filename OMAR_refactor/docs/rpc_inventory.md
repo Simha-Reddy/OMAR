@@ -19,6 +19,8 @@ Summary table
 | ORWPT LAST5                  | OR CPRS GUI CHART     | Patient lookup by LAST5 token                               |
 | ORWPT LIST ALL               | OR CPRS GUI CHART     | Patient name prefix search with paging                      |
 | ORWPT TOP                    | OR CPRS GUI CHART     | Currently selected CPRS patient (sync)                      |
+| TIU DOCUMENTS                | OR CPRS GUI CHART     | Retrieve TIU document index for notes                       |
+| TIU GET RECORD TEXT          | OR CPRS GUI CHART     | Retrieve TIU note text lines                                |
 | VPR GET PATIENT DATA         | JLV WEB SERVICES      | Fetch patient domain (XML variant; socket mode)             |
 | VPR GET PATIENT DATA JSON    | LHS RPC CONTEXT       | Fetch patient domain or full chart (JSON; DEMO HTTP mode)   |
 <!-- RPC_TABLE_END -->
@@ -80,11 +82,26 @@ Detailed sections
 - Response: caret-delimited lines; filtered client-side so `NAME` starts with original prefix; paging via nextCursor (last name of page).
 
 ### ORWPT TOP
+
+### TIU DOCUMENTS
 - Context: `OR CPRS GUI CHART`
-- Endpoint: `/sync` in `cprs_api.py`
-- Parameters: none
-- Response: caret-delimited record; first two segments used for `dfn` and `name`.
-- Purpose: sync current CPRS-selected patient to OMAR workspace.
+- Gateway: `VistaSocketGateway._fetch_tiu_document_index()` and `_get_tiu_document_domain()`
+- Parameters (ordered list):
+	1. DFN (patient identifier)
+	2. Document class selector (using `[CLINICAL DOCUMENTS]` for inclusive list)
+	3. Start FileMan date/time (blank for site default)
+	4. Stop FileMan date/time (blank for site default)
+	5. Direction (`-1` to retrieve newest first)
+	6. Maximum results to return (defaults to 200 when omitted)
+	7. Pagination cursor (blank)
+	8. Optional status filter (semicolon-delimited values, blank for all)
+- Response: caret-delimited lines; first piece is TIU document IEN, subsequent pieces carry title, FileMan reference date/time, status, author, facility, class, type, and encounter cues. The socket gateway normalizes each line into a VPR-like item dictionary used by the existing note transforms.
+
+### TIU GET RECORD TEXT
+- Context: `OR CPRS GUI CHART` (fallbacks include `TIU AUTHORIZATION` and `JLV WEB SERVICES` when needed)
+- Gateway: `VistaSocketGateway._fetch_tiu_text()` / `get_document_texts()`
+- Parameters: single string parameter — TIU document IEN.
+- Response: newline-delimited text (CPRS broker response). The gateway splits the payload into individual lines and returns them to the API response map keyed by document id.
 
 ### DG SENSITIVE RECORD ACCESS
 - Context: `OR CPRS GUI CHART`

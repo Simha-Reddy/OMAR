@@ -46,10 +46,11 @@ def set_mode_socket(site: dict, access: str, verify: str, default_context: Optio
     except Exception:
         pass
     gw = VistaSocketGateway(
-        host=str(site.get('host') or ''), port=int(str(site.get('port') or '0')),
-        access=access, verify=verify,
-        default_context=default_context or os.getenv('VISTA_DEFAULT_CONTEXT') or 'OR CPRS GUI CHART',
-        vpr_context=os.getenv('VISTA_VPR_XML_CONTEXT') or 'JLV WEB SERVICES'
+        host=str(site.get('host') or ''),
+        port=int(str(site.get('port') or '0')),
+        access=access,
+        verify=verify,
+        default_context=default_context or os.getenv('VISTA_DEFAULT_CONTEXT') or 'OR CPRS GUI CHART'
     )
     # Test-connect lazily in endpoints; can also connect here if desired
     reg[sid] = gw

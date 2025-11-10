@@ -76,27 +76,104 @@ def _fmt_ssn(ssn_val: Any) -> Optional[str]:
     except Exception:
         return None
 
+_VITAL_TYPE_MAP: Dict[str, Tuple[str, Optional[str]]] = {
+    'BP': ('Blood Pressure', 'mmHg'),
+    'BLOODPRESSURE': ('Blood Pressure', 'mmHg'),
+    'T': ('Temperature', 'F'),
+    'TEMP': ('Temperature', 'F'),
+    'TEMPERATURE': ('Temperature', 'F'),
+    'P': ('Pulse', 'bpm'),
+    'HR': ('Pulse', 'bpm'),
+    'PULSE': ('Pulse', 'bpm'),
+    'R': ('Respiratory Rate', 'breaths/min'),
+    'RR': ('Respiratory Rate', 'breaths/min'),
+    'RESP': ('Respiratory Rate', 'breaths/min'),
+    'RESPIRATORYRATE': ('Respiratory Rate', 'breaths/min'),
+    'WT': ('Weight', 'lbs'),
+    'WEIGHT': ('Weight', 'lbs'),
+    'WTKG': ('Weight', 'kg'),
+    'HT': ('Height', 'in'),
+    'HEIGHT': ('Height', 'in'),
+    'HTCM': ('Height', 'cm'),
+    'PO2': ('SpO2', '%'),
+    'POX': ('SpO2', '%'),
+    'SPO2': ('SpO2', '%'),
+    'O2': ('SpO2', '%'),
+    'OXYGENSATURATION': ('SpO2', '%'),
+    'PN': ('Pain', None),
+    'PAIN': ('Pain', None),
+    'BMI': ('BMI', None),
+    'CG': ('Girth', 'cm'),
+}
+
+
+def _normalize_vital_code(raw_type: Any) -> Optional[str]:
+    text = (raw_type or '').strip()
+    if not text:
+        return None
+    upper = text.upper()
+    if upper in _VITAL_TYPE_MAP:
+        return upper
+    compact = ''.join(ch for ch in upper if not ch.isspace())
+    if compact in _VITAL_TYPE_MAP:
+        return compact
+    for alias, target in (
+        ('TEMPERATURE', 'TEMP'),
+        ('PULSE', 'P'),
+        ('HEART', 'P'),
+        ('RESP', 'RESP'),
+        ('WEIGHT', 'WT'),
+        ('HEIGHT', 'HT'),
+        ('BLOODPRESSURE', 'BP'),
+        ('OXYGEN', 'PO2'),
+        ('SATURATION', 'PO2'),
+    ):
+        if alias in upper:
+            mapped = target.upper()
+            if mapped in _VITAL_TYPE_MAP:
+                return mapped
+    return None
+
+
+def _sanitize_vital_unit(unit: Any, value: Any) -> Optional[str]:
+    text = (unit or '').strip()
+    if not text:
+        return None
+    value_text = (value or '').strip()
+    if text == value_text:
+        return None
+    if value_text and text.startswith(value_text):
+        text = text[len(value_text):].strip()
+    if not text:
+        return None
+    tokens = [tok.strip('() ') for tok in text.split() if tok.strip('() ')]
+    if not tokens:
+        return None
+    cleaned = tokens[-1]
+    if cleaned.lower() == 'lb':
+        return 'lbs'
+    return cleaned
+
 
 def _pick_phone(telecoms: Any) -> Dict[str, Optional[str]]:
-    out: Dict[str, Optional[str]] = { 'Phone (mobile)': None, 'Phone (work)': None }
+    out: Dict[str, Optional[str]] = {'Phone (mobile)': None, 'Phone (work)': None}
     try:
         arr = telecoms if isinstance(telecoms, list) else []
         for t in arr:
-            try:
-                usage = (t.get('usageCode') or t.get('usageName') or '').upper()
-                num = t.get('telecom') or ''
-                if not num:
-                    continue
-                if 'MC' in usage or 'MOBILE' in usage:
-                    out['Phone (mobile)'] = out['Phone (mobile)'] or str(num)
-                elif 'WORK' in usage or 'WP' in usage:
-                    out['Phone (work)'] = out['Phone (work)'] or str(num)
-            except Exception:
+            if not isinstance(t, dict):
                 continue
+            usage = str(t.get('usageCode') or t.get('usageName') or '').upper()
+            num = t.get('telecom') or t.get('value') or ''
+            num = str(num).strip()
+            if not num:
+                continue
+            if any(token in usage for token in ('MOB', 'CELL', 'HOME')):
+                out['Phone (mobile)'] = out['Phone (mobile)'] or num
+            if any(token in usage for token in ('WORK', 'OFFICE', 'WP')):
+                out['Phone (work)'] = out['Phone (work)'] or num
     except Exception:
         pass
     return out
-
 
 # NOTE: FHIR mapping functions removed by request to preserve VA-specific fidelity.
 
@@ -491,17 +568,38 @@ def vpr_to_quick_vitals(vpr_payload: Any) -> List[Dict[str, Any]]:
     for it in items:
         if not isinstance(it, dict):
             continue
-        vt = it.get('typeName') or it.get('vitalType') or it.get('name') or ''
+        vt_raw = (
+            it.get('typeCode')
+            or it.get('type')
+            or it.get('typeName')
+            or it.get('vitalType')
+            or it.get('name')
+            or ''
+        )
+        code = _normalize_vital_code(vt_raw)
+        display = None
+        default_unit = None
+        if code and code in _VITAL_TYPE_MAP:
+            display, default_unit = _VITAL_TYPE_MAP[code]
+        if not display:
+            display = (it.get('typeName') or it.get('name') or vt_raw or '').strip() or code or ''
         val = it.get('result') or it.get('value') or it.get('measurement') or ''
-        units = it.get('units') or it.get('unit') or None
+        units = _sanitize_vital_unit(it.get('units') or it.get('unit'), val)
+        if not units:
+            units = default_unit
         dt_val = it.get('observed') or it.get('dateTime') or it.get('taken')
         dt_iso = _parse_any_datetime_to_iso(dt_val)
-        out.append({
-            'type': vt,
+        record: Dict[str, Any] = {
+            'type': display,
             'value': val,
             'units': units,
             'takenDate': dt_iso,
-        })
+        }
+        if code:
+            record['code'] = code
+        if it.get('location'):
+            record['location'] = it.get('location')
+        out.append(record)
     return out
 
 
