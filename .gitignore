@@ -1,16 +1,10 @@
-# Ignore refactor scripts (removed from repo per request)
-/OMAR_refactor/scripts/
-/OMAR_refactor/examples/
-/OMAR_refactor/tests/
-/OMAR_refactor/archives/
-
-# Root-level .gitignore that keeps only specific folders in the repo
-# Strategy: ignore everything, then whitelist the allowed folders and the .gitignore itself.
+# Root-level .gitignore strategy: ignore everything, then explicitly allow the
+# top-level folders we want in the repository.
 
 # Ignore everything at the repository root
 /*
 
-# Allow this .gitignore to be tracked
+# Always keep this .gitignore file tracked
 !.gitignore
 
 # Whitelist allowed top-level folders
@@ -18,23 +12,19 @@
 !/flyers/
 !/Helpful\ Resources/
 
-# Allow all contents within those whitelisted folders
+# Allow all contents within the whitelisted folders
 !/OMAR_refactor/**
 !/flyers/**
 !/Helpful\ Resources/**
 
-# Inside OMAR_refactor, ignore environment files/folders
-/OMAR_refactor/.env
-/OMAR_refactor/.venv
-/OMAR_refactor/.venv/**
-
-# Ignore cipher.txt file inside OMAR_refactor
-/OMAR_refactor/cipher.txt
-
-# Ignore bundled/portable Python runtime inside OMAR_refactor
-/OMAR_refactor/python
-/OMAR_refactor/python/**
-
-# Ignore tests folder inside OMAR_refactor (local test files and CI artifacts)
-/OMAR_refactor/tests/
-/OMAR_refactor/tests/**
+# Inside OMAR_refactor, keep sensitive or generated content out of git
+OMAR_refactor/scripts/
+OMAR_refactor/examples/
+OMAR_refactor/tests/
+OMAR_refactor/archives/
+OMAR_refactor/.env
+OMAR_refactor/.venv/
+OMAR_refactor/.venv/**
+OMAR_refactor/cipher.txt
+OMAR_refactor/python/
+OMAR_refactor/python/**
