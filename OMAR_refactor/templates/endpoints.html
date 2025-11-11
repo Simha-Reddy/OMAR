@@ -21,6 +21,9 @@
       .answer { white-space:pre-wrap; line-height:1.5; }
       .citations { margin-top:8px; }
       .citation { font-size: 13px; color:#374151; padding:8px 10px; background:#f9fafb; border:1px solid #e5e7eb; border-radius:6px; margin-top:6px; }
+      details { margin-top:10px; }
+      details summary { cursor:pointer; font-weight:600; }
+      .debug-pre { max-height:300px; overflow:auto; background:#0b1020; color:#e5e7eb; padding:10px 12px; border-radius:8px; font-size:13px; }
     </style>
   </head>
   <body>
@@ -97,6 +100,30 @@
       <div id="citations" class="citations"></div>
     </div>
 
+    <div class="card" id="debug-card" style="display:none;">
+      <h3 style="margin:0 0 8px 0;">Hey OMAR Debug Trace</h3>
+      <details open>
+        <summary>Client → Server payload</summary>
+        <pre id="debug-client" class="debug-pre"></pre>
+      </details>
+      <details>
+        <summary>Server retrieval / RAG</summary>
+        <pre id="debug-rag" class="debug-pre"></pre>
+      </details>
+      <details>
+        <summary>Prompt sent to LLM</summary>
+        <pre id="debug-prompt" class="debug-pre"></pre>
+      </details>
+      <details>
+        <summary>LLM → Server response</summary>
+        <pre id="debug-llm" class="debug-pre"></pre>
+      </details>
+      <details>
+        <summary>Server → Client (answer + citations)</summary>
+        <pre id="debug-response" class="debug-pre"></pre>
+      </details>
+    </div>
+
     <script type="module">
       import { csrfFetch, qs } from '/static/js/ui.js';
 
@@ -107,6 +134,12 @@
       const resultCard = qs('#result-card');
       const answerEl = qs('#answer');
       const citesEl = qs('#citations');
+      const debugCard = qs('#debug-card');
+      const debugClientEl = qs('#debug-client');
+      const debugRagEl = qs('#debug-rag');
+      const debugPromptEl = qs('#debug-prompt');
+      const debugLlmEl = qs('#debug-llm');
+      const debugResponseEl = qs('#debug-response');
 
       async function ask() {
         const dfn = (dfnEl.value || '').trim();
@@ -120,8 +153,9 @@
         answerEl.textContent = '';
         citesEl.innerHTML = '';
         resultCard.style.display = 'none';
+        if (debugCard) debugCard.style.display = 'none';
         try {
-          const body = dfn ? { prompt, patient: { DFN: dfn } } : { prompt };
+          const body = dfn ? { prompt, patient: { DFN: dfn }, debug: true } : { prompt, debug: true };
           const resp = await csrfFetch('/api/query/ask', {
             method: 'POST',
             body: JSON.stringify(body)
@@ -141,6 +175,19 @@
             citesEl.appendChild(div);
           }
           resultCard.style.display = 'block';
+          if (data.debug && debugCard) {
+            try { debugClientEl.textContent = JSON.stringify(data.debug.client || {}, null, 2); } catch { debugClientEl.textContent = 'n/a'; }
+            try { debugRagEl.textContent = JSON.stringify(data.debug.rag || {}, null, 2); } catch { debugRagEl.textContent = 'n/a'; }
+            try { debugPromptEl.textContent = JSON.stringify(data.debug.prompt || {}, null, 2); } catch { debugPromptEl.textContent = 'n/a'; }
+            try { debugLlmEl.textContent = JSON.stringify(data.debug.llm || {}, null, 2); } catch { debugLlmEl.textContent = 'n/a'; }
+            const responseDebug = {
+              answer: data.answer || '',
+              citations: data.citations || [],
+              ...(data.debug.response ? { response: data.debug.response } : {}),
+            };
+            try { debugResponseEl.textContent = JSON.stringify(responseDebug, null, 2); } catch { debugResponseEl.textContent = 'n/a'; }
+            debugCard.style.display = 'block';
+          }
           statusEl.textContent = '';
         } catch (err) {
           console.error(err);

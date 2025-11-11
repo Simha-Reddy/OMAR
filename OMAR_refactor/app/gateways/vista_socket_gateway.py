@@ -11,6 +11,7 @@ from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional, Set, Tuple
 
 from .data_gateway import DataGateway, GatewayError
+from ..services.labs_rpc import filter_panels, parse_orwor_result, parse_orwcv_lab
 
 
 def _env_int(name: str, default: int) -> int:
@@ -27,6 +28,10 @@ _DOMAIN_CACHE_SIZE = max(4, _env_int("VISTA_VPR_CACHE_SIZE", 12))
 _PATIENT_LIST_TTL = max(5, _env_int("VISTA_PATIENT_LIST_TTL", 30))
 _PATIENT_SEARCH_TTL = max(5, _env_int("VISTA_PATIENT_SEARCH_TTL", 20))
 _PATIENT_SEARCH_CACHE_SIZE = max(4, _env_int("VISTA_PATIENT_SEARCH_CACHE_SIZE", 24))
+_LAB_PANEL_CACHE_TTL = max(5, _env_int("VISTA_LAB_PANEL_CACHE_TTL", 180))
+_LAB_PANEL_CACHE_SIZE = max(4, _env_int("VISTA_LAB_PANEL_CACHE_SIZE", 24))
+_LAB_DETAIL_CACHE_TTL = max(10, _env_int("VISTA_LAB_DETAIL_CACHE_TTL", 600))
+_LAB_DETAIL_CACHE_SIZE = max(8, _env_int("VISTA_LAB_DETAIL_CACHE_SIZE", 64))
 
 
 class _VistaRPCLogger:
@@ -548,24 +553,6 @@ def _parse_orwps_active(raw: str) -> List[Dict[str, Any]]:
 	return items
 
 
-def _parse_orwcv_lab(raw: str) -> List[Dict[str, Any]]:
-	items: List[Dict[str, Any]] = []
-	for line in str(raw or "").splitlines():
-		parts = [segment.strip() for segment in line.split("^")]
-		if len(parts) < 4 or not parts[0]:
-			continue
-		item: Dict[str, Any] = {
-			"id": parts[0],
-			"displayName": parts[1],
-			"result": parts[3] if parts[3] else parts[2],
-			"resulted": _fileman_to_iso(parts[2]),
-		}
-		if item["resulted"]:
-			item["observed"] = item["resulted"]
-		items.append(item)
-	return items
-
-
 _VITAL_TYPE_METADATA: Dict[str, Dict[str, Optional[str]]] = {
 	"BP": {"display": "Blood Pressure", "default_unit": "mmHg"},
 	"T": {"display": "Temperature", "default_unit": "F"},
@@ -798,6 +785,8 @@ class VistaSocketGateway(DataGateway):
 		self._domain_cache: "OrderedDict[Tuple[str, str, str, str], Tuple[float, Dict[str, Any]]]" = OrderedDict()
 		self._patient_list_cache: Optional[Tuple[float, Any]] = None
 		self._patient_search_cache: "OrderedDict[str, Tuple[float, Any]]" = OrderedDict()
+		self._lab_panel_cache: "OrderedDict[Tuple[str, str], Tuple[float, List[Dict[str, Any]]]]" = OrderedDict()
+		self._lab_detail_cache: "OrderedDict[Tuple[str, str, str], Tuple[float, Dict[str, Any]]]" = OrderedDict()
 		self._cacheable_domains = {"patient", "med", "lab", "vital", "problem", "allergy"}
 
 	def _build_client(self) -> _VistaRPCClient:
@@ -823,6 +812,8 @@ class VistaSocketGateway(DataGateway):
 			self._domain_cache.clear()
 			self._patient_list_cache = None
 			self._patient_search_cache.clear()
+			self._lab_panel_cache.clear()
+			self._lab_detail_cache.clear()
 
 	def clear_patient_cache(self, dfn: Optional[str] = None) -> None:
 		with self._cache_lock:
@@ -1074,7 +1065,7 @@ class VistaSocketGateway(DataGateway):
 			include_raw = self._raw_flag(params)
 			def _load_lab() -> Dict[str, Any]:
 				raw = self._client.call_in_context(self.default_context, "ORWCV LAB", [str(dfn)])
-				items = _parse_orwcv_lab(raw)
+				items = parse_orwcv_lab(raw)
 				return _wrap_items("lab", dfn, items, raw_text=raw if include_raw else None)
 			return self._domain_cache_produce(cache_key, _load_lab)
 		if domain in ("vital", "vitals"):
@@ -1106,6 +1097,51 @@ class VistaSocketGateway(DataGateway):
 				return _wrap_items("allergy", dfn, items, raw_text=raw if include_raw else None)
 			return self._domain_cache_produce(cache_key, _load_allergy)
 		return _wrap_items(domain, dfn, [])
+
+	def get_lab_panels(
+		self,
+		dfn: str,
+		*,
+		start: Optional[str] = None,
+		end: Optional[str] = None,
+		max_panels: Optional[int] = None,
+	) -> List[Dict[str, Any]]:  # type: ignore[override]
+		self.connect()
+		key = (self._site_key, str(dfn))
+		now = time.monotonic()
+		with self._cache_lock:
+			entry = self._lab_panel_cache.get(key)
+			if entry and (now - entry[0]) <= _LAB_PANEL_CACHE_TTL:
+				cached = copy.deepcopy(entry[1])
+			else:
+				cached = None
+		if cached is None:
+			raw = self._client.call_in_context(self.default_context, "ORWCV LAB", [str(dfn)])
+			panels = parse_orwcv_lab(raw)
+			with self._cache_lock:
+				self._lab_panel_cache[key] = (now, copy.deepcopy(panels))
+				self._lab_panel_cache.move_to_end(key)
+				while len(self._lab_panel_cache) > _LAB_PANEL_CACHE_SIZE:
+					self._lab_panel_cache.popitem(last=False)
+			cached = panels
+		return filter_panels(copy.deepcopy(cached), start=start, end=end, max_panels=max_panels)
+
+	def get_lab_panel_detail(self, dfn: str, lab_id: str) -> Dict[str, Any]:  # type: ignore[override]
+		self.connect()
+		key = (self._site_key, str(dfn), str(lab_id))
+		now = time.monotonic()
+		with self._cache_lock:
+			entry = self._lab_detail_cache.get(key)
+			if entry and (now - entry[0]) <= _LAB_DETAIL_CACHE_TTL:
+				return copy.deepcopy(entry[1])
+		raw = self._client.call_in_context(self.default_context, "ORWOR RESULT", [str(dfn), "0", str(lab_id)])
+		detail = parse_orwor_result(raw)
+		with self._cache_lock:
+			self._lab_detail_cache[key] = (now, copy.deepcopy(detail))
+			self._lab_detail_cache.move_to_end(key)
+			while len(self._lab_detail_cache) > _LAB_DETAIL_CACHE_SIZE:
+				self._lab_detail_cache.popitem(last=False)
+		return detail
 
 	def get_vpr_fullchart(
 		self,

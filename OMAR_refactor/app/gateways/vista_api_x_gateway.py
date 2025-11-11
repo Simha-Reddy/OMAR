@@ -4,6 +4,7 @@ import time
 import requests
 from typing import Any, Dict, List, Optional, Tuple
 from .data_gateway import DataGateway, GatewayError
+from ..services.labs_rpc import filter_panels, parse_orwor_result, parse_orwcv_lab
 
 BASE_URL = os.getenv("VISTA_API_BASE_URL", "https://vista-api-x.vetext.app/api")
 API_KEY = os.getenv("VISTA_API_KEY")
@@ -11,6 +12,7 @@ VERIFY_SSL = os.getenv("VISTA_API_VERIFY_SSL", "true").lower() in ("1","true","y
 SUPPRESS_TLS_WARNINGS = os.getenv("VISTA_API_SUPPRESS_TLS_WARNINGS", "0").lower() in ("1","true","yes","on")
 # RPC context: default to LHS RPC CONTEXT for now; configurable via .env
 VPR_RPC_CONTEXT = os.getenv("VISTA_API_RPC_CONTEXT", "LHS RPC CONTEXT")
+CPRS_CONTEXT = os.getenv("VISTA_DEFAULT_CONTEXT", "OR CPRS GUI CHART")
 
 if not VERIFY_SSL and SUPPRESS_TLS_WARNINGS:
     try:
@@ -194,6 +196,28 @@ class VistaApiXGateway(DataGateway):
                     results[match] = lines
 
         return results
+
+    def get_lab_panels(
+        self,
+        dfn: str,
+        *,
+        start: Optional[str] = None,
+        end: Optional[str] = None,
+        max_panels: Optional[int] = None,
+    ) -> List[Dict[str, Any]]:  # type: ignore[override]
+        params = [{"string": str(dfn)}]
+        raw = self.call_rpc(context=CPRS_CONTEXT, rpc="ORWCV LAB", parameters=params)
+        panels = parse_orwcv_lab(raw if isinstance(raw, str) else str(raw))
+        return filter_panels(panels, start=start, end=end, max_panels=max_panels)
+
+    def get_lab_panel_detail(self, dfn: str, lab_id: str) -> Dict[str, Any]:  # type: ignore[override]
+        params = [
+            {"string": str(dfn)},
+            {"string": "0"},
+            {"string": str(lab_id)},
+        ]
+        raw = self.call_rpc(context=CPRS_CONTEXT, rpc="ORWOR RESULT", parameters=params)
+        return parse_orwor_result(raw if isinstance(raw, str) else str(raw))
 
     @staticmethod
     def _iter_document_items(vpr_payload: Dict[str, Any]) -> List[Dict[str, Any]]:

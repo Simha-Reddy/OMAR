@@ -13,6 +13,22 @@ class DataGateway(Protocol):
         """
         ...
 
+    # Lab RPC supplemental helpers (ORWCV/ORWOR)
+    def get_lab_panels(
+        self,
+        dfn: str,
+        *,
+        start: Optional[str] = None,
+        end: Optional[str] = None,
+        max_panels: Optional[int] = None,
+    ) -> List[Dict[str, Any]]:
+        """Return recent lab panels (ORWCV LAB) with optional ISO range filtering."""
+        ...
+
+    def get_lab_panel_detail(self, dfn: str, lab_id: str) -> Dict[str, Any]:
+        """Return detailed analyte data for a specific lab panel via ORWOR RESULT."""
+        ...
+
     def get_document_texts(self, dfn: str, doc_ids: List[str]) -> Dict[str, List[str]]:
         """Return full text lines for the requested TIU document ids.
 

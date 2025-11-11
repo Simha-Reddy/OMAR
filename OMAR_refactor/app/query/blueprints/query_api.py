@@ -44,7 +44,8 @@ def ask():
             'prompt_override': (data.get('prompt_override') or ''),
             'prompt_template': (data.get('prompt_template') or ''),
             # Pass through optional structured sections assembled on the client (e.g., DotPhrases expansions)
-            'structured_sections': (data.get('structured_sections') or '')
+            'structured_sections': (data.get('structured_sections') or ''),
+            'debug': bool(data.get('debug'))
         })
         try:
             # Minimal diagnostics for debugging: do not include PHI

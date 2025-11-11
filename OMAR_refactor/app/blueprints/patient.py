@@ -1,5 +1,6 @@
 from __future__ import annotations
 import os
+from typing import Any
 from flask import Blueprint, jsonify, current_app, request
 from ..services.patient_service import PatientService
 from ..gateways.factory import get_gateway
@@ -378,7 +379,7 @@ def demographics_quick(dfn: str):
         raw_params = {'raw': '1'} if raw_requested else None
         vpr = svc.get_vpr_raw(dfn, 'patient', params=raw_params)
         quick = svc.get_demographics_quick(dfn)
-        if (request.args.get('includeRaw','0').lower() in ('1','true','yes','on')):
+        if (request.args.get('includeRaw', '0').lower() in ('1', 'true', 'yes', 'on')):
             # Attach first raw item for traceability
             item = None
             try:
@@ -516,7 +517,6 @@ def labs_quick(dfn: str):
         raw_requested = _raw_requested()
         raw_params = {'raw': '1'} if raw_requested else None
         vpr = svc.get_vpr_raw(dfn, 'labs', params=raw_params)
-        quick = svc.get_labs_quick(dfn, params=raw_params)
 
         # Server-side filters: names (comma-separated), days, start, end
         names_raw = (request.args.get('names') or '').strip()
@@ -554,6 +554,16 @@ def labs_quick(dfn: str):
             e_parsed = _to_iso(e_arg)
             if e_parsed:
                 end_iso = e_parsed
+
+        filters_payload: dict[str, Any] = {'start': start_iso, 'end': end_iso}
+        max_panels_arg = request.args.get('maxPanels') or request.args.get('max')
+        if max_panels_arg:
+            try:
+                filters_payload['max_panels'] = int(str(max_panels_arg).strip())
+            except Exception:
+                pass
+
+        quick = svc.get_labs_quick(dfn, params=raw_params, filters=filters_payload)
 
         def _date_ok(item):
             if not (start_iso or end_iso):
@@ -597,18 +607,19 @@ def labs_quick(dfn: str):
 
         include_raw_items = request.args.get('includeRaw','0').lower() in ('1','true','yes','on')
         if include_raw_items and isinstance(filtered, list):
-            # Only attach _raw when no filters are applied to preserve index alignment
             if not filters_applied:
                 raw_items = []
                 try:
                     raw_items = T._get_nested_items(vpr)  # type: ignore
                 except Exception:
                     raw_items = []
+                vpr_index = 0
                 out = []
-                for idx, q in enumerate(filtered):
+                for q in filtered:
                     obj = dict(q)
-                    if idx < len(raw_items):
-                        obj['_raw'] = raw_items[idx]
+                    if q.get('source') != 'rpc' and vpr_index < len(raw_items):
+                        obj['_raw'] = raw_items[vpr_index]
+                        vpr_index += 1
                     out.append(obj)
                 filtered = out
         return _json_with_optional_raw(filtered, vpr, list_label='labs')
@@ -1002,10 +1013,12 @@ def labs_list_envelope(dfn: str):
             raw_items = []
         items = []
         if isinstance(quick, list):
-            for idx, q in enumerate(quick):
+            vpr_index = 0
+            for q in quick:
                 obj = dict(q)
-                if include_raw and idx < len(raw_items):
-                    obj['_raw'] = raw_items[idx]
+                if include_raw and q.get('source') != 'rpc' and vpr_index < len(raw_items):
+                    obj['_raw'] = raw_items[vpr_index]
+                    vpr_index += 1
                 items.append(obj)
         return jsonify(_envelope_list(items))
     except Exception as e:

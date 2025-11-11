@@ -176,6 +176,8 @@ class DefaultQueryModelImpl:
         sess = payload.get('session') or {}
         mode = str(payload.get('mode') or '').strip().lower()
         structured_sections = (payload.get('structured_sections') or '').strip()
+        debug_enabled = bool(payload.get('debug'))
+        debug_data: Dict[str, Any] = {}
         if not query:
             return { 'answer': '', 'citations': [], 'model_id': self.model_id }
 
@@ -195,6 +197,8 @@ class DefaultQueryModelImpl:
         self._debug('answer.start', {'query': query, 'dfn': dfn, 'station': station, 'mode': mode})
         gateway = get_gateway(station=station, duz=duz)
         top_chunks: List[Dict[str, Any]] = []
+        rewrites_used: List[str] = []
+        rag_source = 'none'
         if dfn:
             # Prefer the RagStore path, which supports optional embeddings and the embedding policy (recent 100 progress + all DS/consult/radiology)
             used_rag_store = False
@@ -226,6 +230,7 @@ class DefaultQueryModelImpl:
                 else:
                     rewrites = [query]
                     self._debug('answer.rewrites', {'tag': 'rag_store_summary', 'queries': rewrites})
+                rewrites_used = list(rewrites)
                 runs: list[list[Dict[str, Any]]] = []
                 K_PER = 12
                 for rq in rewrites:
@@ -257,6 +262,7 @@ class DefaultQueryModelImpl:
                     fused = [idx_map[k] for k, _ in ordered]
                     top_chunks = fused[:12]
                 used_rag_store = True
+                rag_source = 'rag_store'
             except Exception:
                 used_rag_store = False
             self._debug('answer.rag_store_used', {'enabled': used_rag_store})
@@ -292,6 +298,7 @@ class DefaultQueryModelImpl:
                     else:
                         rewrites = [query]
                         self._debug('answer.rewrites', {'tag': 'fallback_summary', 'queries': rewrites})
+                    rewrites_used = list(rewrites)
                     runs: list[list[Dict[str, Any]]] = []
                     K_PER = 12
                     for rq in rewrites:
@@ -323,6 +330,7 @@ class DefaultQueryModelImpl:
                         top_chunks = fused[:12]
                 else:
                     top_chunks = []
+                rag_source = 'fallback_bm25'
             self._debug('answer.rag_results', {'count': len(top_chunks), 'samples': self._summarize_chunks(top_chunks)})
         else:
             # Fallback: ad-hoc RAG on provided documents (empty by default)
@@ -332,6 +340,32 @@ class DefaultQueryModelImpl:
             rag.index()
             top_chunks = rag.retrieve(query, top_k=12)
             self._debug('answer.rag_results', {'count': len(top_chunks), 'samples': self._summarize_chunks(top_chunks)})
+            rewrites_used = [query]
+            rag_source = 'adhoc'
+
+        if debug_enabled:
+            patient_dfn = ''
+            if isinstance(patient, dict):
+                try:
+                    patient_dfn = str(patient.get('DFN') or patient.get('dfn') or patient.get('localId') or patient.get('patientId') or '')
+                except Exception:
+                    patient_dfn = ''
+            debug_data['client'] = {
+                'query': query,
+                'mode': mode,
+                'patient': {'DFN': patient_dfn},
+                'station': station,
+                'duz': duz,
+                'structured_sections_length': len(structured_sections),
+                'structured_sections_preview': structured_sections[:800],
+            }
+            debug_data['rag'] = {
+                'source': rag_source,
+                'used_rag_store': rag_source == 'rag_store',
+                'rewrites': rewrites_used,
+                'chunk_count': len(top_chunks),
+                'chunks': self._summarize_chunks(top_chunks, limit=12),
+            }
 
         # Optional: re-rank by title tags (deprioritize nursing/admin/education for summaries by default)
         try:
@@ -551,8 +585,22 @@ class DefaultQueryModelImpl:
             f"{structured_block}"
         )
         self._debug('answer.prompt', {'length': len(final_prompt), 'body': self._trim_ascii(final_prompt, 1800)})
+        if debug_enabled:
+            debug_data['prompt'] = {
+                'system_prompt': system,
+                'preface': preface,
+                'structured_sections': structured_sections,
+                'prior_block': prior_block,
+                'final_prompt_length': len(final_prompt),
+                'final_prompt_preview': self._trim_ascii(final_prompt, 6000),
+                'note_order': note_order,
+            }
         answer_text = llm.chat(final_prompt)
         self._debug('answer.response', {'length': len(answer_text or ''), 'body': self._trim_ascii(answer_text or '', 1000)})
+        if debug_enabled:
+            debug_data['llm'] = {
+                'response': answer_text,
+            }
 
         # 4) Prepare citations list
         citations = []
@@ -565,6 +613,10 @@ class DefaultQueryModelImpl:
                 'date': c.get('date'),
                 'preview': (c.get('text') or '')[:200]
             })
+        if debug_enabled:
+            debug_data['response'] = {
+                'citations': citations,
+            }
 
         # Persist chat history per DFN and include prior Q&A in future prompts
         try:
@@ -583,7 +635,10 @@ class DefaultQueryModelImpl:
         except Exception:
             pass
 
-        return { 'answer': answer_text, 'citations': citations, 'model_id': self.model_id }
+        result = { 'answer': answer_text, 'citations': citations, 'model_id': self.model_id }
+        if debug_enabled:
+            result['debug'] = debug_data
+        return result
 
     def rag_results(self, payload: Dict[str, Any]) -> Dict[str, Any]:
         """Return early RAG results (notes/excerpts) for the given query. If DFN or index not available, return empty list.

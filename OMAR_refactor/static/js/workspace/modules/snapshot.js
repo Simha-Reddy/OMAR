@@ -4,7 +4,7 @@
   const MODULE_NAME = 'Snapshot';
 
   // Simple state and helpers
-  const state = { data: null, labs: null, right: null };
+  const state = { data: null, labs: null, right: null, screenings: null };
   const activeControllers = new Set();
   // Add lightweight per-URL promise cache to collapse near-simultaneous calls within this module
   const requestCache = new Map(); // url -> { t:number, p:Promise }
@@ -54,6 +54,23 @@
     }catch(_e){}
   }
 
+  function getLabsArray(){
+    const src = state && state.labs;
+    if (Array.isArray(src)) return src;
+    if (src && Array.isArray(src.labs)) return src.labs;
+    return [];
+  }
+  function getProcedureArray(){
+    const src = state && state.screenings;
+    const arr = src && src.procedures;
+    return Array.isArray(arr) ? arr : [];
+  }
+  function getRadiologyArray(){
+    const src = state && state.screenings;
+    const arr = src && src.radiology;
+    return Array.isArray(arr) ? arr : [];
+  }
+
   function cancelAll(){
     for(const c of Array.from(activeControllers)){
       try{ c.abort(); }catch(_e){}
@@ -64,10 +81,10 @@
     // Serve from in-module cache if fresh
     const now = Date.now();
     const hit = requestCache.get(url);
-    if (hit && (now - hit.t) < REQUEST_TTL_MS) return hit.p;
+    if(hit && now - hit.t < REQUEST_TTL_MS) return hit.p;
     const ctrl = new AbortController();
     activeControllers.add(ctrl);
-    const p = fetch(url, { headers: { 'Accept':'application/json', 'X-Caller':'Snapshot' }, credentials:'same-origin', signal: ctrl.signal })
+    const p = fetch(url, { signal: ctrl.signal })
       .finally(()=> activeControllers.delete(ctrl))
       .then(r => { if(!r.ok) throw new Error('HTTP '+r.status); return r.json(); });
     requestCache.set(url, { t: now, p });
@@ -283,13 +300,181 @@
   // Right side helpers (from explore/right_sidebar.js)
   function titleCase(str){ if(!str||typeof str!=='string') return str; return str.toLowerCase().replace(/\b([a-z])(\w*)/g,(m,a,b)=>a.toUpperCase()+b); }
   function stripParenCodes(str){ try{ return String(str||'').replace(/\s*\([^)]*\)\s*/g,' ').replace(/\s{2,}/g,' ').trim(); }catch(_e){ return str; } }
+
+  function combineResults(){
+    const merged = [];
+    for(let i=0; i<arguments.length; i++){ // eslint-disable-line prefer-rest-params
+      const arr = arguments[i];
+      if(Array.isArray(arr)) merged.push(...arr);
+    }
+    merged.sort((a,b)=>{
+      const aTime = a && a.d instanceof Date ? a.d.getTime() : 0;
+      const bTime = b && b.d instanceof Date ? b.d.getTime() : 0;
+      return aTime - bTime;
+    });
+    return merged;
+  }
+
+  function findProcedures(procedures, patterns){
+    const regexes = (patterns || []).map(p=> p instanceof RegExp ? p : new RegExp(p, 'i'));
+    const out = [];
+    (procedures || []).forEach(proc => {
+      if(!proc) return;
+      const name = _norm(proc.name || proc.type || '');
+      if(!name) return;
+      const matched = regexes.some(rx => rx.test(name));
+      if(!matched) return;
+      const dRaw = proc.date || proc.performed || proc.completed || proc.entered || proc.created;
+      const d = dRaw ? new Date(dRaw) : null;
+      if(!d || Number.isNaN(d.getTime())) return;
+      const status = proc.status ? titleCase(proc.status) : 'Completed';
+      out.push({ v: status, u: '', d, raw: proc });
+    });
+    out.sort((a,b)=> a.d - b.d);
+    return out;
+  }
+
+  function findRadiology(studies, patterns){
+    const regexes = (patterns || []).map(p=> p instanceof RegExp ? p : new RegExp(p, 'i'));
+    const out = [];
+    (studies || []).forEach(study => {
+      if(!study) return;
+      const fields = [study.title, study.exam, study.documentType, study.type, study.name]
+        .map(v => _norm(v || ''))
+        .filter(Boolean);
+      if(!fields.length) return;
+      const matched = regexes.some(rx => fields.some(field => rx.test(field)));
+      if(!matched) return;
+      const dRaw = study.date || study.performed || study.completed || study.resulted;
+      const d = dRaw ? new Date(dRaw) : null;
+      if(!d || Number.isNaN(d.getTime())) return;
+      const status = study.status ? titleCase(study.status) : 'Completed';
+      out.push({ v: status, u: '', d, raw: study });
+    });
+    out.sort((a,b)=> a.d - b.d);
+    return out;
+  }
   function renderAllergies(listEl, allergies){ if(!allergies||!allergies.length){ listEl.innerHTML='<li class="vital-empty">No allergies on file</li>'; return; } for(const a of allergies){ const li=document.createElement('li'); li.style.cursor='pointer'; const name=titleCase(a.substance||'Allergy'); const crit=a.criticality? ` (${titleCase(String(a.criticality))})` : ''; li.textContent = name + crit; li.addEventListener('click', (e)=>{ e.stopPropagation(); const rows=[]; const recorded = a.recordedDate || a.enteredDate; if(recorded) rows.push(`Recorded: ${fmtDateOnly(recorded)}`); if(a.onsetDateTime||a.onset) rows.push(`Onset: ${fmtDateOnly(a.onsetDateTime||a.onset)}`); if(a.lastOccurrence) rows.push(`Last Occurrence: ${fmtDate(a.lastOccurrence)}`); if(a.clinicalStatus||a.status) rows.push(`Status: ${a.clinicalStatus||a.status}`); if(a.verificationStatus) rows.push(`Verification: ${a.verificationStatus}`); const cats=((a.category||[]).join(', ')); if(cats) rows.push(`Category: ${cats}`); const rx=(a.reactions||[]).flatMap(r=> (r.manifestations||[])); if(Array.isArray(a.reactions) && a.reactions.length && (!rx||!rx.length)){ rows.push('Reactions: '+a.reactions.join('; ')); } else if(rx&&rx.length){ rows.push('Reactions: '+rx.join('; ')); } togglePopover(li, name, rows); }); listEl.appendChild(li); } }
-  function medStatusBucket(m){ const s=(m.status||'').toLowerCase(); if(s.includes('discont')||s.includes('stopp')) return 'discontinued'; const now=new Date(); if(s.includes('expired')) return 'expired'; if(m.endDate){ const ed=new Date(m.endDate); if(ed && ed<now) return 'expired'; } if(s.includes('active')) return 'active'; if(s.includes('pending')) return 'pending'; return 'other'; }
-  function medDetailRows(m){ const rows=[]; if(m.medClass) rows.push(`Class: ${m.medClass}`); if(m.status) rows.push(`Status: ${titleCase(m.status)}`); if(m.dose) rows.push(`Dose: ${m.dose}`); if(m.route) rows.push(`Route: ${m.route}`); if(m.frequency) rows.push(`Frequency: ${m.frequency}`); if(m.sig) rows.push(`Sig: ${m.sig}`); if(m.startDate) rows.push(`Start: ${fmtDateOnly(m.startDate)}`); if(m.lastFilled) rows.push(`Last Filled: ${fmtDateOnly(m.lastFilled)}`); if(m.endDate) rows.push(`End: ${fmtDateOnly(m.endDate)}`); return rows; }
-  function renderMeds(listEl, meds, opts){ opts=opts||{}; const activeOnly=!!opts.activeOnly; if(!Array.isArray(meds)){ listEl.innerHTML='<li class="vital-empty">No recent medications</li>'; return { count:0 }; } const cutoff=new Date(); cutoff.setDate(cutoff.getDate()-90); let recent=meds.filter(m=>{ const sdt=m.startDate||m.lastFilled||(m.source||{}).updated||m.endDate; const d = sdt? new Date(sdt) : null; const s=(m.status||'').toLowerCase(); const act=s==='active' || s.includes('active'); const pend=s==='pending' || s.includes('pending'); return (d && d>=cutoff) || act || pend; }); if(activeOnly) recent=recent.filter(m => { const s=(m.status||'').toLowerCase(); return s.includes('active') || s.includes('pending'); }); if(!recent.length){ listEl.innerHTML='<li class="vital-empty">No medications in the current view</li>'; return { count:0 }; }
-    const groups={ active:[], pending:[], expired:[], discontinued:[], other:[] }; for(const m of recent){ groups[medStatusBucket(m)].push(m); }
-    function appendGroup(arr, cls){ arr.sort((a,b)=> String(b.startDate||b.lastFilled||'').localeCompare(String(a.startDate||a.lastFilled||''))); for(const m of arr){ const li=document.createElement('li'); li.className=cls; li.style.cursor='pointer'; const name=titleCase(m.name||'Medication'); const dose=m.dose? ` — ${m.dose}`:''; li.textContent = name + dose; li.addEventListener('click', (e)=>{ e.stopPropagation(); togglePopover(li, name, medDetailRows(m)); }); listEl.appendChild(li); } }
-    appendGroup(groups.active,'med-active'); appendGroup(groups.pending,'med-pending'); if(!activeOnly){ appendGroup(groups.expired,'med-expired'); appendGroup(groups.discontinued,'med-discontinued'); appendGroup(groups.other,''); }
+  function medStatusBucket(m){ const s=(m.status||'').toLowerCase(); if(s.includes('discont')||s.includes('stopp')) return 'discontinued'; const now=new Date(); if(s.includes('expired')) return 'expired'; if(m.endDate){ const ed=new Date(m.endDate); if(ed && !Number.isNaN(ed) && ed<now) return 'expired'; } if(s.includes('active')) return 'active'; if(s.includes('pending')) return 'pending'; return 'other'; }
+
+  function normalizeMedication(m){
+    if(!m) return null;
+    const name = (m.name || m.display || m.localName || m.qualifiedName || 'Medication').toString();
+    const statusRaw = (m.status || '').toString().trim().toLowerCase();
+    const statusLabel = statusRaw ? titleCase(statusRaw) : 'Unknown';
+    const startRaw = m.startDate || m.start || m.ordered || m.beginDate || m.effectiveDate || '';
+    const endRaw = m.endDate || m.stop || m.discontinued || m.expires || m.expirationDate || '';
+    let startDate = null; let startTs = null;
+    if(startRaw){ const d = new Date(startRaw); if(!Number.isNaN(d.getTime())){ startDate = d; startTs = d.getTime(); } }
+    let endDate = null; let endTs = null;
+    if(endRaw){ const d = new Date(endRaw); if(!Number.isNaN(d.getTime())){ endDate = d; endTs = d.getTime(); } }
+    const sig = (m.sig || m.instructions || m.dose || m.schedule || '').toString();
+    const route = (m.route || m.routeName || '').toString();
+    const dose = (m.dose || m.doseText || m.strength || '').toString();
+    const frequency = (m.frequency || m.schedule || '').toString();
+    const provider = (m.provider || m.orderingProvider || m.author || '').toString();
+    const facility = (m.facility || m.location || '').toString();
+    const quantity = m.quantity != null ? String(m.quantity) : (m.amount != null ? String(m.amount) : '');
+    return { name, statusRaw, statusLabel, startRaw, endRaw, startDate, endDate, startTs, endTs, sig, route, dose, frequency, provider, facility, quantity, raw: m };
+  }
+
+  function renderMedDetails(anchor, med){
+    const rows = [];
+    if(med.sig) rows.push(`Sig: ${med.sig}`);
+    if(med.dose) rows.push(`Dose: ${med.dose}`);
+    if(med.route) rows.push(`Route: ${med.route}`);
+    if(med.frequency && (!med.sig || !med.sig.toLowerCase().includes(med.frequency.toLowerCase()))) rows.push(`Frequency: ${med.frequency}`);
+    if(med.startDate) rows.push(`Start: ${fmtDateOnly(med.startDate)}`);
+    if(med.endDate) rows.push(`End: ${fmtDateOnly(med.endDate)}`);
+    if(med.quantity) rows.push(`Quantity: ${med.quantity}`);
+    if(med.provider) rows.push(`Provider: ${med.provider}`);
+    if(med.facility) rows.push(`Facility: ${med.facility}`);
+    if(rows.length === 0) rows.push('No additional details');
+    togglePopover(anchor, med.name, rows);
+  }
+
+  function renderMeds(listEl, meds, opts){
+    const activeOnly = !!(opts && opts.activeOnly);
+    listEl.innerHTML = '';
+    if(!Array.isArray(meds) || !meds.length){
+      listEl.innerHTML = `<li class="vital-empty">${activeOnly ? 'No active medications' : 'No medications on file'}</li>`;
+      return { count: 0 };
+    }
+
+    const groups = { active: [], pending: [], expired: [], discontinued: [], other: [] };
+    meds.forEach(item => {
+      const norm = normalizeMedication(item);
+      if(!norm) return;
+      const bucket = medStatusBucket(item);
+      groups[bucket] = groups[bucket] || [];
+      groups[bucket].push(norm);
+    });
+
+    const order = activeOnly ? ['active','pending'] : ['active','pending','expired','discontinued','other'];
+    const recent = [];
+    order.forEach(bucket => {
+      const arr = groups[bucket] || [];
+      arr.sort((a,b)=>{
+        const aTime = a.startTs != null ? a.startTs : (a.endTs != null ? a.endTs : 0);
+        const bTime = b.startTs != null ? b.startTs : (b.endTs != null ? b.endTs : 0);
+        return bTime - aTime;
+      });
+      arr.forEach(item => recent.push({ item, bucket }));
+    });
+
+    if(!recent.length){
+      listEl.innerHTML = `<li class="vital-empty">${activeOnly ? 'No active medications' : 'No medications on file'}</li>`;
+      return { count: 0 };
+    }
+
+    const limit = Math.min(recent.length, 20);
+    for(let i = 0; i < limit; i += 1){
+      const entry = recent[i];
+      const med = entry.item;
+      const bucket = entry.bucket;
+      const li = document.createElement('li');
+      if(bucket === 'active') li.classList.add('med-active');
+      else if(bucket === 'pending') li.classList.add('med-pending');
+      else if(bucket === 'expired') li.classList.add('med-expired');
+      else if(bucket === 'discontinued') li.classList.add('med-discontinued');
+      li.style.cursor = 'pointer';
+
+      const nameSpan = document.createElement('span');
+      nameSpan.textContent = med.name;
+      nameSpan.style.fontWeight = '600';
+  nameSpan.style.color = bucket === 'active' ? brandBlue() : 'var(--paper-contrast, #333)';
+      li.appendChild(nameSpan);
+
+      const metaSpan = document.createElement('span');
+      metaSpan.style.marginLeft = '8px';
+      metaSpan.style.color = '#666';
+      metaSpan.style.fontSize = '0.9em';
+      const metaParts = [];
+      metaParts.push(med.statusLabel);
+      if(med.startDate) metaParts.push('Start ' + fmtDateOnly(med.startDate));
+      if(med.endDate) metaParts.push('End ' + fmtDateOnly(med.endDate));
+      if(!med.endDate && med.startDate){
+        const days = Math.round((Date.now() - med.startDate.getTime()) / (1000*60*60*24));
+        if(Number.isFinite(days) && days > 0) metaParts.push(days + ' days ago');
+      }
+      metaSpan.textContent = metaParts.join(' - ');
+      li.appendChild(metaSpan);
+
+      li.addEventListener('click', (ev)=>{
+        ev.stopPropagation();
+        renderMedDetails(li, med);
+      });
+
+      listEl.appendChild(li);
+    }
+
+    if(recent.length > limit){
+      const more = document.createElement('li');
+      more.className = 'vital-empty';
+      more.textContent = `+${recent.length - limit} more medications`;
+      listEl.appendChild(more);
+    }
+
     return { count: recent.length };
   }
   function isDiabetesProblem(p){ return /diabetes/i.test((p.name||p.problem||'').toString()); }
@@ -432,8 +617,10 @@
     mount.appendChild(grid);
 
     // Labs fishbones (deferred)
-  const labs = Array.isArray(state.labs) ? state.labs : (state.labs && Array.isArray(state.labs.labs)? state.labs.labs : []);
-    if(labs && labs.length){
+  const labsArray = getLabsArray();
+  const proceduresArray = getProcedureArray();
+  const radiologyArray = getRadiologyArray();
+    if((labsArray && labsArray.length) || (proceduresArray && proceduresArray.length) || (radiologyArray && radiologyArray.length)){
       const placeholder = document.createElement('div');
       placeholder.className='labs-fishbone';
       placeholder.innerHTML = '<div style="font-size:0.85em;color:#777;margin:8px 0 4px 2px;">Loading labs…</div>';
@@ -441,7 +628,7 @@
 
       const buildAndRender = ()=>{
         try{
-          const series=buildLabSeries(labs);
+          const series=buildLabSeries(labsArray);
           const wrap=document.createElement('div'); wrap.className='labs-fishbone';
           const latestDateFor=(keys)=>{ let latest=null; keys.forEach(k=>{ const arr=series[k]||[]; if(arr.length){ const d=new Date(arr[arr.length-1].date||0); if(!isNaN(d) && (!latest||d>latest)) latest=d; } }); return latest; };
           const bmpDate=latestDateFor(['na','k','cl','hco3','bun','cr','glu']);
@@ -456,25 +643,56 @@
           // Additional labs/studies sections (separators removed per UX)
           const sectionHeader = (title, opts) => { const h=document.createElement('div'); h.textContent=title; h.style.fontSize='0.95em'; h.style.color='var(--paper-contrast)'; h.style.margin='6px 0 4px 2px'; h.style.fontWeight = (opts && opts.bold===false) ? '400' : '600'; return h; };
           function makeDateMini(d){ const s=document.createElement('span'); s.className='vital-date-mini'; s.textContent=d? ` (${fmtDateOnly(d)})` : ''; s.style.fontSize='0.85em'; s.style.color='#777'; s.style.marginLeft='6px'; return s; }
-          function makeValueSpan(text, abnormal){ const v=document.createElement('span'); v.textContent=text; v.style.marginLeft='6px'; v.style.color = abnormal? '#ef5350' : brandBlue(); v.style.fontWeight='600'; return v; }
+          function makeValueSpan(text, abnormal){
+            const v=document.createElement('span');
+            const display = (text && String(text).trim()) ? String(text).trim() : '--';
+            v.textContent = display;
+            v.style.marginLeft='6px';
+            if(display === '--'){
+              v.style.color='#777';
+              v.style.fontWeight='400';
+            } else {
+              v.style.color = abnormal? '#ef5350' : brandBlue();
+              v.style.fontWeight='600';
+            }
+            return v;
+          }
           function makeLine(label, results, type, unitFallback){
-            const line=document.createElement('div'); line.style.display='flex'; line.style.alignItems='baseline'; line.style.gap='4px'; line.style.padding='2px 2px'; line.style.cursor = (results&&results.length)? 'pointer' : 'default';
+            const hasResults = Array.isArray(results) && results.length;
+            const line=document.createElement('div'); line.style.display='flex'; line.style.alignItems='baseline'; line.style.gap='4px'; line.style.padding='2px 2px'; line.style.cursor = hasResults ? 'pointer' : 'default';
             const lab=document.createElement('span'); lab.textContent = label + ':'; lab.style.color='#555'; lab.style.minWidth='64px'; line.appendChild(lab);
-            const last = results && results.length? results[results.length-1] : null;
+            const last = hasResults ? results[results.length-1] : null;
             const unit = (last && last.u) ? last.u : (unitFallback||'');
-            const valueText = last? fmtVal(last.v, unit) : '';
+            const valueText = last? fmtVal(last.v, unit) : '--';
             let abnormal = false;
-            if(last){
+            if(last && valueText !== '--'){
               const ab = abnormalByRef(last.v, last.raw);
               if(ab===true) abnormal = true; else if(ab===null) abnormal = (severityForExtra(type, last.v)==='abnormal');
             }
             const vSpan = makeValueSpan(valueText, abnormal);
             line.appendChild(vSpan);
             line.appendChild(makeDateMini(last? last.d : null));
-            if(results && results.length){
+            line.title = hasResults && last && last.d ? fmtDateOnly(last.d) : 'No recent results';
+            if(hasResults){
               line.addEventListener('click', (e)=>{
                 e.stopPropagation();
-                const rows = lastN(results,3).map(x=> `${fmtVal(x.v, x.u || unitFallback || '')} — ${fmtDate(x.d)}`);
+                const rows = lastN(results,3).map(x=>{
+                  const rawLabel = x.raw && (x.raw.name || x.raw.test || x.raw.title || x.raw.exam);
+                  const val = fmtVal(x.v, x.u || unitFallback || '');
+                  const pieces = [];
+                  if(rawLabel) pieces.push(String(rawLabel).trim());
+                  if(val && val !== '--') pieces.push(val);
+                  const status = x.raw && x.raw.status ? titleCase(x.raw.status) : '';
+                  if(status && (!pieces.length || pieces[pieces.length-1] !== status)) pieces.push(status);
+                  const datePart = fmtDate(x.d);
+                  if(datePart) pieces.push(datePart);
+                  return pieces.length ? pieces.join(' — ') : '--';
+                });
+                if(last && last.raw){
+                  const detail = last.raw.impression || last.raw.findings || last.raw.result || last.raw.summary || last.raw.comment;
+                  if(detail) rows.unshift({ text: String(detail) });
+                }
+                if(!rows.length) rows.push('No recent results');
                 togglePopover(line, `${label} (last 3)`, rows);
               });
             }
@@ -485,7 +703,9 @@
 
           const labsList = document.createElement('div'); labsList.className='labs-additional-list'; labsList.style.marginTop='8px';
 
-          const allLabs = (state.labs && state.labs.labs) || [];
+          const allLabs = labsArray;
+          const allProcedures = proceduresArray;
+          const allRadiology = radiologyArray;
 
           // 1) A1c, Lipid, TSH | Vertical | Liver labs (no separators)
           const row1=document.createElement('div'); row1.style.display='flex'; row1.style.gap='12px'; row1.style.alignItems='flex-start'; row1.style.flexWrap='wrap'; row1.style.marginTop='10px';
@@ -541,14 +761,20 @@
           const fitRes = findLabs(allLabs, [], [/\bfit\b/i, /fecal immunochemical/i]);
           colL.appendChild(makeLine('FIT', fitRes, 'fit', ''));
           colL.appendChild(sectionHeader('Colonoscopy', { bold: false }));
+          const colonoscopyFromProcedures = findProcedures(allProcedures, [/\bcolono/i, /colorectal\s+screen/i]);
+          const colonoscopyFromRadiology = findRadiology(allRadiology, [/virtual\s+colonoscopy/i, /ct\s+colonography/i]);
+          const colonoscopyCombined = combineResults(colonoscopyFromProcedures, colonoscopyFromRadiology);
+          colL.appendChild(makeLine('Colonoscopy', colonoscopyCombined, 'colonoscopy', ''));
           const papRes = findLabs(allLabs, [], [/\bpap\b/i, /papanicolaou/i]);
-          const hpvRes = findLabs(allLabs, [], [/\bhpv\b/i]);
-          const papHpvCombined = [...papRes, ...hpvRes].sort((a,b)=> a.d - b.d);
+          const hpvRes = findLabs(allLabs, [], [/\bhpv\b/i, /human papillomavirus/i]);
+          const papHpvCombined = combineResults(papRes, hpvRes);
           colL.appendChild(makeLine('PAP/HPV', papHpvCombined, 'paphpv', ''));
-          colL.appendChild(sectionHeader('Mammogram', { bold: false }));
-          colL.appendChild(sectionHeader('LDCT', { bold: false }));
 
           const colR=document.createElement('div'); colR.style.minWidth='220px';
+          const mammogramRes = findRadiology(allRadiology, [/mammogram/i, /mammo/i, /breast imaging/i, /tomosynthesis/i]);
+          colR.appendChild(makeLine('Mammogram', mammogramRes, 'mammogram', ''));
+          const ldctRes = findRadiology(allRadiology, [/\bldct\b/i, /low\s*dose\s*ct/i, /lung\s+cancer\s+screen/i]);
+          colR.appendChild(makeLine('LDCT', ldctRes, 'ldct', ''));
           const hivRes = findLabs(allLabs, [], [/\bhiv\b/i]);
           colR.appendChild(makeLine('HIV', hivRes, 'hiv', ''));
           const hcvRes = findLabs(allLabs, ['13955-0'], [/hepatitis c/i, /\bhcv\b/i]);
@@ -645,23 +871,40 @@
     } catch(_e){}
     if(!patientMeta || !patientMeta.dfn){ leftMount.innerHTML='<div class="vital-empty">Select a patient to view snapshot.</div>'; rightMount.innerHTML=''; try { if (container && container.dataset) delete container.dataset.loading; } catch(_e){} return; }
 
+  // Reset cached data holders before fresh fetch to avoid showing stale entries
+  state.data = { vitals: [] };
+  state.labs = { labs: [] };
+  state.right = { allergies: [], medications: [], problems: [] };
+  state.screenings = { procedures: [], radiology: [] };
+
     // Load left + right in parallel
     try{
       const tFetchStart = (perfOn && performance && performance.now) ? performance.now() : 0;
       // Use refactor Api client with DFN-aware endpoints
-      const [vRes, lRes, aRes, mRes, pRes] = await Promise.all([
+      const [vRes, lRes, aRes, mRes, pRes, procRes, radRes] = await Promise.all([
         window.Api && Api.quick ? Api.quick('demographics').then(() => Api.quick('vitals')).catch(()=>[]) : Promise.resolve([]),
         (window.Api && Api.quick ? Api.quick('labs', { last: '1y' }) : Promise.resolve([])).catch(()=>[]),
         (window.Api && Api.quick ? Api.quick('allergies') : Promise.resolve([])).catch(()=>[]),
         (window.Api && Api.quick ? Api.quick('meds', { last: '1y' }) : Promise.resolve([])).catch(()=>[]),
-        (window.Api && Api.quick ? Api.quick('problems') : Promise.resolve([])).catch(()=>[])
+        (window.Api && Api.quick ? Api.quick('problems') : Promise.resolve([])).catch(()=>[]),
+        (window.Api && Api.quick ? Api.quick('procedures', { last: '5y' }) : Promise.resolve([])).catch(()=>[]),
+        (window.Api && Api.quick ? Api.quick('radiology', { last: '5y' }) : Promise.resolve([])).catch(()=>[])
       ]);
       if (perfOn && performance && performance.now) {
         try { console.log(`SNAPSHOT:fetch-all took ${(performance.now()-tFetchStart).toFixed(0)}ms`); } catch(_e){}
       }
-  state.data = { vitals: Array.isArray(vRes) ? vRes : [] };
-  state.labs = Array.isArray(lRes) ? lRes : ((lRes && lRes.labs) ? lRes.labs : []);
-  state.right = { allergies: Array.isArray(aRes)? aRes : ((aRes&&aRes.allergies)||[]), medications: Array.isArray(mRes)? mRes : ((mRes&&mRes.medications)||[]), problems: Array.isArray(pRes)? pRes : ((pRes&&pRes.problems)||[]) };
+    const vitalsList = Array.isArray(vRes) ? vRes : [];
+    const labsList = Array.isArray(lRes) ? lRes : ((lRes && lRes.labs) ? lRes.labs : []);
+    const allergiesList = Array.isArray(aRes)? aRes : ((aRes&&aRes.allergies)||[]);
+    const medsList = Array.isArray(mRes)? mRes : ((mRes&&mRes.medications)||[]);
+    const problemsList = Array.isArray(pRes)? pRes : ((pRes&&pRes.problems)||[]);
+    const proceduresList = Array.isArray(procRes)? procRes : ((procRes && procRes.procedures) || []);
+    const radiologyList = Array.isArray(radRes)? radRes : ((radRes && radRes.radiology) || []);
+
+    state.data = { vitals: vitalsList };
+    state.labs = { labs: labsList };
+    state.right = { allergies: allergiesList, medications: medsList, problems: problemsList };
+    state.screenings = { procedures: proceduresList, radiology: radiologyList };
       const t0 = (perfOn && performance && performance.now)? performance.now() : 0;
       leftMount.innerHTML=''; renderVitalsAndLabs(leftMount);
       rightMount.innerHTML=''; renderRightColumn(rightMount, state.right);

@@ -1,10 +1,125 @@
 (function(){
   window.WorkspaceModules = window.WorkspaceModules || {};
   const MODULE_NAME = 'Documents';
+  const DOCUMENT_COLUMNS = ['date','title','author','encounter','normal'];
+
+  function ensureSharedStyles(){
+    const id = 'workspace-shared-detail-styles';
+    if(document.getElementById(id)) return;
+    const style = document.createElement('style');
+    style.id = id;
+    style.textContent = `
+      .ws-col-resize-handle { position:absolute; top:0; right:-3px; width:8px; cursor:col-resize; user-select:none; height:100%; }
+      .ws-col-resize-handle::after { content:''; position:absolute; top:0; bottom:0; left:3px; width:2px; background:transparent; transition:background 0.15s ease; }
+      th:hover .ws-col-resize-handle::after { background:rgba(0,0,0,0.18); }
+      .ws-detail-modal { position:fixed; inset:0; display:none; align-items:center; justify-content:center; z-index:10000; font-family:inherit; }
+      .ws-detail-modal[aria-hidden="true"] { display:none; }
+      .ws-detail-modal .ws-modal-backdrop { position:absolute; inset:0; background:rgba(0,0,0,0.42); }
+      .ws-detail-modal .ws-modal-panel { position:relative; width:min(880px, 92%); max-height:88vh; background:#ffffff; border-radius:10px; box-shadow:0 18px 44px rgba(15,23,42,0.45); display:flex; flex-direction:column; overflow:hidden; }
+      .ws-detail-modal .ws-modal-header { display:flex; align-items:center; justify-content:space-between; padding:12px 16px; border-bottom:1px solid #d9dee7; background:#f5f7fb; }
+      .ws-detail-modal .ws-modal-title { font-weight:600; color:#1f2933; margin-right:12px; flex:1; }
+      .ws-detail-modal .ws-modal-close { border:none; background:transparent; font-size:18px; cursor:pointer; padding:4px 8px; color:#1f2933; }
+  .ws-detail-modal pre { margin:0; padding:16px; flex:1; overflow:auto; background:#0f172a; color:#e2e8f0; font-size:13px; line-height:1.5; }
+  .labs-table-wrap th, .labs-table-wrap td,
+  .meds-table-wrap th, .meds-table-wrap td,
+  .documents-module th, .documents-module td { box-sizing:border-box; }
+    `;
+    document.head.appendChild(style);
+  }
+
+  function ensureDocumentStyles(){
+    const id = 'documents-module-styles';
+    if(document.getElementById(id)) return;
+    const style = document.createElement('style');
+    style.id = id;
+    style.textContent = `
+  .documents-module table.documents-list { width:auto; min-width:100%; border-collapse:collapse; table-layout:auto; font-size:0.95em; }
+      .documents-module thead th { text-align:left; padding:8px 10px; font-weight:600; color:#31405f; border-bottom:1px solid #d5dbe7; background:linear-gradient(180deg,#f5f7fb,#e8ecf5); position:relative; user-select:none; }
+      .documents-module tbody td { padding:8px 10px; border-bottom:1px solid #f1f3f6; vertical-align:top; color:#2b2b2b; }
+      .documents-module tbody tr:hover { background:#f7f9fc; }
+  .documents-module .doc-title-text { font-weight:700; color:#1f4e92; margin-bottom:2px; }
+  .documents-module .doc-meta { color:#687086; font-size:0.82em; margin-top:1px; }
+  .documents-module .doc-snippet { color:#555; font-size:0.85em; margin-top:2px; white-space:normal; }
+      .documents-module .doc-group-row { background:#f6f6f6; border-bottom:1px solid #e7e7e7; font-weight:600; }
+    `;
+    document.head.appendChild(style);
+  }
+
+  function makeColumnsResizable(table, widths, columnKeys){
+    if(!table) return;
+    const headerCells = Array.from(table.querySelectorAll('thead th'));
+    if(!headerCells.length) return;
+    const rows = Array.from(table.querySelectorAll('tbody tr'));
+
+    headerCells.forEach((th, idx)=>{
+      const key = columnKeys[idx] || `col${idx}`;
+      th.dataset.colKey = key;
+      let handle = th.querySelector('.ws-col-resize-handle');
+      if(handle) handle.remove();
+      handle = document.createElement('span');
+      handle.className = 'ws-col-resize-handle';
+      handle.addEventListener('mousedown', (ev)=> startResize(idx, key, ev));
+      handle.addEventListener('click', (ev)=> ev.stopPropagation());
+      th.appendChild(handle);
+    });
+
+    applyWidths();
+
+    function applyWidths(){
+      headerCells.forEach((th, idx)=>{
+        const key = columnKeys[idx] || `col${idx}`;
+        const value = widths[key];
+        if(!value) return;
+        th.style.width = value;
+        th.style.minWidth = value;
+        th.style.maxWidth = '';
+        rows.forEach(row => {
+          const cell = row.children[idx];
+          if(cell){
+            cell.style.width = value;
+            cell.style.minWidth = value;
+            cell.style.maxWidth = '';
+          }
+        });
+      });
+    }
+
+    function startResize(index, key, ev){
+      ev.preventDefault();
+      ev.stopPropagation();
+      const th = headerCells[index];
+      if(!th) return;
+      const startX = ev.clientX;
+      const startWidth = th.getBoundingClientRect().width;
+      const minWidth = 110;
+      const onMove = (moveEv)=>{
+        const dx = moveEv.clientX - startX;
+        const nextWidth = Math.max(minWidth, Math.round(startWidth + dx));
+        widths[key] = `${nextWidth}px`;
+        applyWidths();
+      };
+      const onUp = ()=>{
+        document.removeEventListener('mousemove', onMove);
+        document.removeEventListener('mouseup', onUp);
+      };
+      document.addEventListener('mousemove', onMove);
+      document.addEventListener('mouseup', onUp);
+    }
+  }
 
   // Documents module with server-side pagination, debounced keyword search, optional grouping, and a keyboard-enabled viewer.
 
-  function _formatDate(iso){ try{ if(!iso) return ''; const d = new Date(iso); if(isNaN(d)) return iso; return d.toLocaleString(); }catch(e){return iso||'';} }
+  function _formatDate(iso){
+    try{
+      if(!iso) return '';
+      const d = new Date(iso);
+      if(Number.isNaN(d.getTime())) return iso;
+      const mm = String(d.getMonth() + 1).padStart(2, '0');
+      const dd = String(d.getDate()).padStart(2, '0');
+      const yyyy = d.getFullYear();
+      return `${mm}/${dd}/${yyyy}`;
+    }catch(e){ return iso || ''; }
+  }
   function escapeHtml(s){ if(s===null||s===undefined) return ''; return String(s).replace(/[&<>"]/g, function(c){ return ({'&':'&amp;','<':'&lt;','>':'&gt;', '"':'&quot;'}[c]); }); }
   function _debounce(fn, ms){ let t=null; return function(...args){ clearTimeout(t); t=setTimeout(()=>fn.apply(this,args), ms); } }
 
@@ -55,28 +170,44 @@
     `;
   }
 
-  function renderRows(tableEl, items, mode, opts){
-    // opts: { group:boolean }
+  function renderRows(tableEl, items, mode, opts, columnWidths){
+    const widths = columnWidths || {};
     const group = !!(opts && opts.group);
     const buildRow = (it)=>{
       const title = it.title || it.localTitle || it.displayName || '(Untitled)';
       const date = it.date || it.referenceDateTime || it.entered || it.dateTime || '';
+      const author = it.author || it.authorDisplayName || it.authorName || it.provider || it.providerName || '';
+      const encounter = it.encounter || it.visit || it.location || '';
+      const normalTitle = it.normalTitle || it.standardTitle || '';
       const facility = it.facility || '';
       const dtype = it.documentType || it.type || '';
       const docId = it.docId || it.doc_id || '';
-      const snippet = (mode==='search' && it.snippet) ? `<div class="doc-snippet" style="color:#666; font-size:0.85em; margin-top:2px;">${escapeHtml(it.snippet)}</div>` : '';
+      const snippet = (mode === 'search' && it.snippet) ? `<div class="doc-snippet">${escapeHtml(it.snippet)}</div>` : '';
+      const metaParts = [];
+      if(dtype) metaParts.push(dtype);
+      if(facility) metaParts.push(facility);
+      const meta = metaParts.length ? `<div class="doc-meta">${escapeHtml(metaParts.join(' | '))}</div>` : '';
       return `<tr class="doc-row" data-docid="${encodeURIComponent(docId)}">
-        <td style="padding:6px; border-bottom:1px solid #f3f3f3;">
-          <div style="font-weight:500;">${escapeHtml(title)}</div>
+        <td class="doc-cell doc-date">${escapeHtml(_formatDate(date))}</td>
+        <td class="doc-cell doc-title">
+          <div class="doc-title-text">${escapeHtml(title)}</div>
+          ${meta}
           ${snippet}
         </td>
-        <td style="padding:6px; border-bottom:1px solid #f3f3f3;">${escapeHtml(_formatDate(date))}</td>
-        <td style="padding:6px; border-bottom:1px solid #f3f3f3;">${escapeHtml(facility)}</td>
-        <td style="padding:6px; border-bottom:1px solid #f3f3f3;">${escapeHtml(dtype)}</td>
+        <td class="doc-cell doc-author">${escapeHtml(author)}</td>
+        <td class="doc-cell doc-encounter">${escapeHtml(encounter)}</td>
+        <td class="doc-cell doc-normal">${escapeHtml(normalTitle)}</td>
       </tr>`;
     };
-    let html = '<table class="documents-list" style="width:100%; border-collapse:collapse; font-size:0.95em;">';
-    html += '<thead><tr style="text-align:left; border-bottom:1px solid #ddd;"><th style="padding:6px; width:44%">Title</th><th style="padding:6px; width:18%">Date</th><th style="padding:6px; width:18%">Facility</th><th style="padding:6px; width:20%">Type</th></tr></thead>';
+
+    let html = '<table class="documents-list">';
+    html += '<thead><tr class="doc-head-row">'
+      + '<th data-col-key="date">Date</th>'
+      + '<th data-col-key="title">Title</th>'
+      + '<th data-col-key="author">Author</th>'
+      + '<th data-col-key="encounter">Encounter</th>'
+      + '<th data-col-key="normal">Normal Title</th>'
+      + '</tr></thead>';
     html += '<tbody>';
     if (group){
       const byType = new Map();
@@ -87,7 +218,7 @@
       }
       const types = Array.from(byType.keys()).sort((a,b)=> String(a).localeCompare(String(b)));
       for(const t of types){
-        html += `<tr><td colspan="4" style="padding:6px 4px; background:#f6f6f6; border-bottom:1px solid #e7e7e7; font-weight:600;">${escapeHtml(t)}</td></tr>`;
+        html += `<tr class="doc-group-row"><td colspan="${DOCUMENT_COLUMNS.length}">${escapeHtml(t)}</td></tr>`;
         const arr = byType.get(t).slice().sort((a,b)=> String(a.title||'').localeCompare(String(b.title||'')));
         for(const it of arr){ html += buildRow(it); }
       }
@@ -96,6 +227,8 @@
     }
     html += '</tbody></table>';
     tableEl.innerHTML = html;
+    const table = tableEl.querySelector('table');
+    makeColumnsResizable(table, widths, DOCUMENT_COLUMNS);
   }
 
   async function fetchList(params){
@@ -162,8 +295,11 @@
     _idOrder: [], // ordered docIds for nav
     _currentIndex: -1,
     _unbindKeys: null,
+    _columnWidths: {},
   _lastQuery: '',
     async render(container){
+      ensureSharedStyles();
+      ensureDocumentStyles();
       this._container = container;
       renderSkeleton(container);
       const table = container.querySelector('#documentsTable');
@@ -202,7 +338,7 @@
         }
         // maintain nav order by currently visible list
         this._idOrder = this._items.map(it => (it.docId || it.doc_id || '')).filter(Boolean);
-        renderRows(table, this._items, mode, { group: this._group });
+  renderRows(table, this._items, mode, { group: this._group }, this._columnWidths);
         wireRows();
         setStatus('');
         setSize(this._items.length, res ? res.total : null);
@@ -244,7 +380,7 @@
       // Events
       loadMore.onclick = async ()=>{ if (this._mode==='search'){ await loadSearch(searchInput.value, true); } else { await loadList(true); } };
       sortSel.onchange = async ()=>{ this._sort = sortSel.value || 'date:desc'; if (this._mode==='list'){ await loadList(false); } };
-      groupToggle.onchange = ()=>{ this._group = !!groupToggle.checked; renderRows(table, this._items, this._mode, { group: this._group }); wireRows(); };
+  groupToggle.onchange = ()=>{ this._group = !!groupToggle.checked; renderRows(table, this._items, this._mode, { group: this._group }, this._columnWidths); wireRows(); };
       clearBtn.onclick = async ()=>{ searchInput.value=''; await loadList(false); };
       const debouncedSearch = _debounce(async ()=>{ const q=(searchInput.value||'').trim(); if (q){ await loadSearch(q, false); } else { await loadList(false); } }, 300);
       searchInput.addEventListener('input', debouncedSearch);

@@ -470,6 +470,18 @@ def vpr_to_quick_labs(vpr_payload: Any) -> List[Dict[str, Any]]:
     for it in items:
         if not isinstance(it, dict):
             continue
+        uid = it.get('uid') or None
+        local_id = it.get('localId') or None
+        panel_id = None
+        if isinstance(local_id, str):
+            parts = [seg for seg in local_id.split(';') if seg]
+            if len(parts) >= 2:
+                panel_id = parts[1]
+        elif isinstance(uid, str):
+            seg = uid.rsplit(':', 1)[-1]
+            parts = [p for p in seg.split(';') if p]
+            if len(parts) >= 2:
+                panel_id = parts[1]
         # Name: prefer displayName when present
         name = (
             it.get('displayName')
@@ -552,6 +564,12 @@ def vpr_to_quick_labs(vpr_payload: Any) -> List[Dict[str, Any]]:
             'observed': observed_fm,    # raw Fileman
             'observedDate': obs_iso,
             'resulted': obs_iso,        # alias preferred by some UIs
+            'uid': uid,
+            'localId': local_id,
+            'panelId': panel_id,
+            'category': it.get('category') or None,
+            'groupName': it.get('groupName') or None,
+            'source': 'vpr',
         }
         out.append(obj)
     return out
