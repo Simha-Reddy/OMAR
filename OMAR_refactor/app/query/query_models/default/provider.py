@@ -129,21 +129,30 @@ class DefaultQueryModelImpl:
             'history': (self._patient_cache.get(str(dfn)) or {}).get('history', []),
         }
 
-    def _build_chunks_from_document_index(self, dfn: str) -> List[Dict[str, Any]]:
+    def _build_chunks_from_document_index(
+        self,
+        dfn: str,
+        *,
+        gateway=None,
+        doc_index: Any | None = None,
+        limit: int = 200,
+    ) -> List[Dict[str, Any]]:
         """Bridge DocumentSearchIndex full texts into chunk list."""
         try:
-            from app.services.document_search_service import get_or_build_index_for_dfn
-            idx = get_or_build_index_for_dfn(str(dfn))
+            if doc_index is None:
+                from app.services.document_search_service import get_or_build_index_for_dfn
+                doc_index = get_or_build_index_for_dfn(str(dfn), gateway=gateway)
         except Exception:
+            doc_index = None
+        if doc_index is None:
             return []
         try:
-            order = list(getattr(idx, 'order', []) or [])
-            text_map = getattr(idx, 'text', {}) or {}
-            meta_map = getattr(idx, 'meta', {}) or {}
+            order = list(getattr(doc_index, 'order', []) or [])
+            text_map = getattr(doc_index, 'text', {}) or {}
+            meta_map = getattr(doc_index, 'meta', {}) or {}
         except Exception:
             return []
-        # Limit documents to keep memory reasonable
-        doc_ids: List[str] = order[:200] if order else list(text_map.keys())[:200]
+        doc_ids: List[str] = order[:limit] if order else list(text_map.keys())[:limit]
         all_chunks: List[Dict[str, Any]] = []
         for doc_id in doc_ids:
             try:
@@ -151,19 +160,23 @@ class DefaultQueryModelImpl:
                 if not full:
                     continue
                 meta = meta_map.get(doc_id, {}) if isinstance(meta_map, dict) else {}
-                # Prefer nationalTitle for tagging; keep local title for display
                 title_local = meta.get('title') or ''
                 title_nat = meta.get('nationalTitle') or ''
-                title = title_local
                 date = meta.get('date') or ''
+                note_id = (
+                    meta.get('uid')
+                    or meta.get('uidLong')
+                    or meta.get('rpc_id')
+                    or str(doc_id)
+                )
                 text_clean = remove_boilerplate_phrases(full)
                 chunks = sliding_window_chunk(text_clean, window_size=1600, step_size=800)
                 for ch in chunks:
-                    ch['title'] = title
+                    ch['title'] = title_local
                     if title_nat:
                         ch['title_nat'] = title_nat
                     ch['date'] = date
-                    ch['note_id'] = str(doc_id)
+                    ch['note_id'] = str(note_id)
                 all_chunks.extend(chunks)
             except Exception:
                 continue
@@ -200,71 +213,62 @@ class DefaultQueryModelImpl:
         rewrites_used: List[str] = []
         rag_source = 'none'
         if dfn:
+            doc_index = None
+            try:
+                from app.services.document_search_service import get_or_build_index_for_dfn
+                doc_index = get_or_build_index_for_dfn(str(dfn), gateway=gateway)
+            except Exception:
+                doc_index = None
+
             # Prefer the RagStore path, which supports optional embeddings and the embedding policy (recent 100 progress + all DS/consult/radiology)
             used_rag_store = False
-            try:
-                # Ensure index exists and apply embedding policy opportunistically
-                st = rag_store.status(str(dfn))
-                if not (st.get('indexed') and int(st.get('chunks', 0)) > 0):
-                    # Fetch documents with text so chunking/excerpts are available
-                    vpr_docs = gateway.get_vpr_domain(str(dfn), domain='document', params={'text': '1'})
-                    rag_store.ensure_index(str(dfn), vpr_docs)
-                    # Apply embedding policy automatically when possible
+            if doc_index is not None:
+                try:
+                    manifest = rag_store.ensure_index(str(dfn), doc_index)
                     try:
-                        rag_store.embed_docs_policy(str(dfn), vpr_docs)
+                        if manifest.get('lexical_only', True):
+                            rag_store.embed_docs_policy(str(dfn), doc_index)
                     except Exception:
                         pass
-                else:
-                    # If already indexed but lexical-only, try to upgrade vectors per policy
-                    try:
-                        if bool(st.get('lexical_only', True)):
-                            # We need a VPR payload for policy selection
-                            vpr_docs = gateway.get_vpr_domain(str(dfn), domain='document', params={'text': '1'})
-                            rag_store.embed_docs_policy(str(dfn), vpr_docs)
-                    except Exception:
-                        pass
-                # Retrieve using store (hybrid with vectors when present)
-                # Optional multi-query rewrites + RRF fusion remain valuable on top of hybrid
-                if mode != 'summary':
-                    rewrites = self._generate_rewrites(query, 'rag_store')
-                else:
-                    rewrites = [query]
-                    self._debug('answer.rewrites', {'tag': 'rag_store_summary', 'queries': rewrites})
-                rewrites_used = list(rewrites)
-                runs: list[list[Dict[str, Any]]] = []
-                K_PER = 12
-                for rq in rewrites:
-                    try:
-                        res = rag_store.retrieve(str(dfn), rq, top_k=K_PER)
-                        if res:
-                            runs.append(res)
-                    except Exception:
-                        continue
-                if not runs:
-                    top_chunks = []
-                elif len(runs) == 1:
-                    top_chunks = runs[0][:12]
-                else:
-                    # Reciprocal Rank Fusion (RRF)
-                    k_rrf = 60.0
-                    scores: dict[int, float] = {}
-                    idx_map: dict[int, Dict[str, Any]] = {}
-                    for run in runs:
-                        for r, m in enumerate(run, start=1):
-                            try:
-                                key = id(m)
-                                if key not in idx_map:
-                                    idx_map[key] = m
-                                scores[key] = scores.get(key, 0.0) + 1.0 / (k_rrf + r)
-                            except Exception:
-                                continue
-                    ordered = sorted(scores.items(), key=lambda kv: kv[1], reverse=True)
-                    fused = [idx_map[k] for k, _ in ordered]
-                    top_chunks = fused[:12]
-                used_rag_store = True
-                rag_source = 'rag_store'
-            except Exception:
-                used_rag_store = False
+                    if mode != 'summary':
+                        rewrites = self._generate_rewrites(query, 'rag_store')
+                    else:
+                        rewrites = [query]
+                        self._debug('answer.rewrites', {'tag': 'rag_store_summary', 'queries': rewrites})
+                    rewrites_used = list(rewrites)
+                    runs: list[list[Dict[str, Any]]] = []
+                    K_PER = 12
+                    for rq in rewrites:
+                        try:
+                            res = rag_store.retrieve(str(dfn), rq, top_k=K_PER)
+                            if res:
+                                runs.append(res)
+                        except Exception:
+                            continue
+                    if not runs:
+                        top_chunks = []
+                    elif len(runs) == 1:
+                        top_chunks = runs[0][:12]
+                    else:
+                        k_rrf = 60.0
+                        scores: dict[int, float] = {}
+                        idx_map: dict[int, Dict[str, Any]] = {}
+                        for run in runs:
+                            for r, m in enumerate(run, start=1):
+                                try:
+                                    key = id(m)
+                                    if key not in idx_map:
+                                        idx_map[key] = m
+                                    scores[key] = scores.get(key, 0.0) + 1.0 / (k_rrf + r)
+                                except Exception:
+                                    continue
+                        ordered = sorted(scores.items(), key=lambda kv: kv[1], reverse=True)
+                        fused = [idx_map[k] for k, _ in ordered]
+                        top_chunks = fused[:12]
+                    used_rag_store = True
+                    rag_source = 'rag_store'
+                except Exception:
+                    used_rag_store = False
             self._debug('answer.rag_store_used', {'enabled': used_rag_store})
 
             if not used_rag_store:
@@ -276,7 +280,7 @@ class DefaultQueryModelImpl:
                     chunks = list(cached.get('chunks') or [])
                     bm25 = cached.get('bm25')  # type: ignore
                 else:
-                    chunks = self._build_chunks_from_document_index(str(dfn))
+                    chunks = self._build_chunks_from_document_index(str(dfn), gateway=gateway, doc_index=doc_index)
                     bm25 = build_bm25_index(chunks) if chunks else None
                     if chunks and bm25:
                         self._set_cached(str(dfn), chunks, bm25)
@@ -658,25 +662,32 @@ class DefaultQueryModelImpl:
         # Prefer RagStore retrieval (uses embeddings when available)
         top_chunks: List[Dict[str, Any]] = []
         used_rag_store = False
+        doc_index = None
+        gw = None
         try:
-            st = rag_store.status(str(dfn))
-            if not (st.get('indexed') and int(st.get('chunks', 0)) > 0):
-                # Build minimal index from documents (ask for text for chunking)
-                station = '500'
-                duz = '983'
+            sess = payload.get('session') or {}
+            station = str(sess.get('station') or '500')
+            duz = str(sess.get('duz') or '983')
+            gw = get_gateway(station=station, duz=duz)
+        except Exception:
+            gw = get_gateway()
+        try:
+            from app.services.document_search_service import get_or_build_index_for_dfn
+            doc_index = get_or_build_index_for_dfn(str(dfn), gateway=gw)
+        except Exception:
+            doc_index = None
+        if doc_index is not None:
+            try:
+                manifest = rag_store.ensure_index(str(dfn), doc_index)
                 try:
-                    sess = payload.get('session') or {}
-                    station = str(sess.get('station') or station)
-                    duz = str(sess.get('duz') or duz)
+                    if manifest.get('lexical_only', True):
+                        rag_store.embed_docs_policy(str(dfn), doc_index)
                 except Exception:
                     pass
-                gw = get_gateway(station=station, duz=duz)
-                vpr_docs = gw.get_vpr_domain(str(dfn), domain='document', params={'text': '1'})
-                rag_store.ensure_index(str(dfn), vpr_docs)
-            top_chunks = rag_store.retrieve(str(dfn), query, top_k=12) or []
-            used_rag_store = True
-        except Exception:
-            used_rag_store = False
+                top_chunks = rag_store.retrieve(str(dfn), query, top_k=12) or []
+                used_rag_store = True
+            except Exception:
+                used_rag_store = False
 
         if not used_rag_store:
             cached = self._get_cached(str(dfn))
@@ -686,7 +697,7 @@ class DefaultQueryModelImpl:
                 chunks = list(cached.get('chunks') or [])
                 bm25 = cached.get('bm25')  # type: ignore
             else:
-                chunks = self._build_chunks_from_document_index(str(dfn))
+                chunks = self._build_chunks_from_document_index(str(dfn), gateway=gw, doc_index=doc_index)
                 bm25 = build_bm25_index(chunks) if chunks else None
                 if chunks and bm25:
                     self._set_cached(str(dfn), chunks, bm25)

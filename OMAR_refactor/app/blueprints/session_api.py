@@ -5,6 +5,8 @@ from typing import Any, Dict, Optional
 
 from flask import Blueprint, request, jsonify, current_app
 
+from ..utils.context import merge_context
+
 bp = Blueprint('session_api', __name__)
 
 
@@ -89,10 +91,10 @@ def get_state():
 	"""
 	pid = (request.args.get('patient_id') or '').strip()
 	if not pid:
-		return jsonify({'error': 'patient_id required'}), 400
+		return jsonify(merge_context({'error': 'patient_id required'})), 400
 	uid = _get_user_id()
 	state = _load_state(uid, pid)
-	return jsonify({'ok': True, 'state': state})
+	return jsonify(merge_context({'ok': True, 'state': state}, dfn=pid))
 
 
 @bp.route('/state', methods=['POST'])
@@ -103,12 +105,12 @@ def post_state():
 	data = request.get_json(silent=True) or {}
 	pid = str(data.get('patient_id') or '').strip()
 	if not pid:
-		return jsonify({'error': 'patient_id required'}), 400
+		return jsonify(merge_context({'error': 'patient_id required'})), 400
 	uid = _get_user_id()
 	current = _load_state(uid, pid)
 	merged = _merge_state(current, data)
 	_save_state(uid, pid, merged)
-	return jsonify({'ok': True, 'state': merged})
+	return jsonify(merge_context({'ok': True, 'state': merged}, dfn=pid))
 
 
 @bp.route('/purge', methods=['POST'])
@@ -119,7 +121,7 @@ def purge_state():
 	data = request.get_json(silent=True) or {}
 	pid = str(data.get('patient_id') or '').strip()
 	if not pid:
-		return jsonify({'error': 'patient_id required'}), 400
+		return jsonify(merge_context({'error': 'patient_id required'})), 400
 	uid = _get_user_id()
 	r = _redis()
 	if r is None:
@@ -135,5 +137,5 @@ def purge_state():
 			clear_fn(pid)
 	except Exception:
 		pass
-	return jsonify({'ok': True})
+	return jsonify(merge_context({'ok': True}, dfn=pid))
 

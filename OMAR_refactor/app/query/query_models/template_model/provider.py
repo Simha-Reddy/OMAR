@@ -14,13 +14,13 @@ class TemplateQueryModelImpl:
     def __init__(self):
         self._prompt_path = Path(__file__).parent / 'PROMPT_answer.md'
 
-    def _build_chunks_from_dfn(self, dfn: str) -> List[Dict[str, Any]]:
+    def _build_chunks_from_dfn(self, dfn: str, *, gateway=None) -> List[Dict[str, Any]]:
         """Build simple text chunks from the DocumentSearchIndex for this DFN.
         Each chunk includes text and lightweight metadata for citation building.
         """
         from app.services.document_search_service import get_or_build_index_for_dfn
         from .services.rag_simple import sliding_window_chunk, remove_boilerplate_phrases
-        idx = get_or_build_index_for_dfn(str(dfn))
+        idx = get_or_build_index_for_dfn(str(dfn), gateway=gateway)
         order = list(getattr(idx, 'order', []) or [])
         text_map = getattr(idx, 'text', {}) or {}
         meta_map = getattr(idx, 'meta', {}) or {}
@@ -56,7 +56,21 @@ class TemplateQueryModelImpl:
 
         # 1) Build chunks and BM25 index (simple keyword search)
         from .services.rag_simple import build_bm25_index, hybrid_search
-        chunks: List[Dict[str, Any]] = self._build_chunks_from_dfn(dfn) if dfn else []
+        gateway = None
+        if dfn:
+            try:
+                sess = payload.get('session') or {}
+                station = str(sess.get('station') or '500')
+                duz = str(sess.get('duz') or '983')
+                from app.gateways.factory import get_gateway
+                gateway = get_gateway(station=station, duz=duz)
+            except Exception:
+                try:
+                    from app.gateways.factory import get_gateway
+                    gateway = get_gateway()
+                except Exception:
+                    gateway = None
+        chunks: List[Dict[str, Any]] = self._build_chunks_from_dfn(dfn, gateway=gateway) if dfn else []
         bm25 = build_bm25_index(chunks) if chunks else None
         if not (chunks and bm25):
             # Nothing to search; answer trivially
@@ -115,7 +129,21 @@ class TemplateQueryModelImpl:
         if not dfn:
             return { 'results': [] }
         from .services.rag_simple import build_bm25_index, hybrid_search
-        chunks: List[Dict[str, Any]] = self._build_chunks_from_dfn(dfn)
+        gateway = None
+        if dfn:
+            try:
+                sess = payload.get('session') or {}
+                station = str(sess.get('station') or '500')
+                duz = str(sess.get('duz') or '983')
+                from app.gateways.factory import get_gateway
+                gateway = get_gateway(station=station, duz=duz)
+            except Exception:
+                try:
+                    from app.gateways.factory import get_gateway
+                    gateway = get_gateway()
+                except Exception:
+                    gateway = None
+        chunks: List[Dict[str, Any]] = self._build_chunks_from_dfn(dfn, gateway=gateway)
         bm25 = build_bm25_index(chunks) if chunks else None
         if not (chunks and bm25):
             return { 'results': [] }

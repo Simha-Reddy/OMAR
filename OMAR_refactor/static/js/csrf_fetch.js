@@ -1,11 +1,67 @@
 // filepath: static/csrf_fetch.js
-// Global fetch patch to automatically attach CSRF header and same-origin credentials
-// Applies to mutating same-origin requests (POST/PUT/PATCH/DELETE)
+// Global fetch patch to automatically attach CSRF header and per-tab session metadata
+// Applies to all same-origin requests; mutation methods also receive CSRF protection.
 (function(){
   try {
     if (window.__csrfFetchPatched) return;
     const origFetch = window.fetch;
-    const METHODS = new Set(['POST','PUT','PATCH','DELETE']);    function getCsrf(){
+    const METHODS = new Set(['POST','PUT','PATCH','DELETE']);
+    const TAB_ID_KEY = 'omar:session:client-id';
+    const TAB_ORDER_KEY = 'omar:session:order';
+    const ORDER_COUNTER_KEY = 'omar:session:order-counter';
+
+    function randomId(){
+      try {
+        if (window.crypto && typeof window.crypto.randomUUID === 'function') {
+          return window.crypto.randomUUID();
+        }
+      } catch(_e){}
+      return 'tab-' + Date.now().toString(36) + '-' + Math.random().toString(36).slice(2);
+    }
+
+    function ensureTabSessionMeta(){
+      const cached = window.__omarSessionMeta;
+      if (cached && typeof cached === 'object') return cached;
+      let clientId = null;
+      try {
+        clientId = sessionStorage.getItem(TAB_ID_KEY);
+        if (!clientId) {
+          clientId = randomId();
+          sessionStorage.setItem(TAB_ID_KEY, clientId);
+        }
+      } catch(_e) {
+        clientId = randomId();
+      }
+
+      let order = null;
+      try {
+        const stored = sessionStorage.getItem(TAB_ORDER_KEY);
+        const parsed = stored ? parseInt(stored, 10) : NaN;
+        if (Number.isFinite(parsed) && parsed > 0) {
+          order = parsed;
+        }
+      } catch(_e){}
+
+      if (order === null) {
+        try {
+          const counterRaw = localStorage.getItem(ORDER_COUNTER_KEY);
+          let counter = counterRaw ? parseInt(counterRaw, 10) : 0;
+          if (!Number.isFinite(counter) || counter < 0) counter = 0;
+          counter += 1;
+          localStorage.setItem(ORDER_COUNTER_KEY, String(counter));
+          order = counter;
+        } catch(_e) {
+          order = Math.max(1, Math.floor(Date.now() % 1_000_000));
+        }
+        try { sessionStorage.setItem(TAB_ORDER_KEY, String(order)); } catch(_e){}
+      }
+
+      const meta = { clientId, order };
+      window.__omarSessionMeta = meta;
+      return meta;
+    }
+
+    function getCsrf(){
       try {
         // Prefer cookie value since it's set by server and matches session
         const cookieValue = document.cookie.split('; ')
@@ -36,29 +92,47 @@
     }
 
     window.fetch = function(resource, init){
+      let patchedInit = init;
       try {
         const isReq = (resource && typeof Request !== 'undefined' && resource instanceof Request);
         const url = isReq ? resource.url : String(resource);
         const method = ((init && init.method) || (isReq ? resource.method : 'GET') || 'GET').toUpperCase();
-        if (METHODS.has(method) && isSameOrigin(url)){
-          const csrf = getCsrf();
-          // Build headers, preserving existing
-          const existing = isReq ? resource.headers : (init && init.headers);
-          const hdrs = toHeaders(existing);
-          if (csrf && !hdrs.has('X-CSRF-Token')) hdrs.set('X-CSRF-Token', csrf);
-          // Merge back into init to avoid reconstructing Request bodies
-          init = init || {};
-          init.headers = hdrs;
-          if (!('credentials' in (init||{}))){ init.credentials = 'same-origin'; }
-          if (!('cache' in (init||{}))){ init.cache = 'no-store'; }
-          if (!('referrerPolicy' in (init||{}))){ init.referrerPolicy = 'no-referrer'; }
+        const sameOrigin = isSameOrigin(url);
+        const existing = isReq ? resource.headers : (init && init.headers);
+        let headersToSend = null;
+
+        if (sameOrigin){
+          const meta = ensureTabSessionMeta();
+          if (meta && (meta.clientId || meta.order)){
+            headersToSend = toHeaders(existing);
+            if (meta.clientId && !headersToSend.has('X-OMAR-Session-Id')) {
+              headersToSend.set('X-OMAR-Session-Id', meta.clientId);
+            }
+            if (meta.order && !headersToSend.has('X-OMAR-Session-Order')) {
+              headersToSend.set('X-OMAR-Session-Order', String(meta.order));
+            }
+          }
         }
-      } catch(_e) { /* non-fatal */ }
-      return origFetch.call(this, resource, init);
+
+        if (sameOrigin && METHODS.has(method)){
+          if (!headersToSend) headersToSend = toHeaders(existing);
+          const csrf = getCsrf();
+          if (csrf && !headersToSend.has('X-CSRF-Token')) headersToSend.set('X-CSRF-Token', csrf);
+          patchedInit = init || {};
+          patchedInit.headers = headersToSend;
+          if (!('credentials' in (patchedInit||{}))){ patchedInit.credentials = 'same-origin'; }
+          if (!('cache' in (patchedInit||{}))){ patchedInit.cache = 'no-store'; }
+          if (!('referrerPolicy' in (patchedInit||{}))){ patchedInit.referrerPolicy = 'no-referrer'; }
+        } else if (headersToSend) {
+          patchedInit = init || {};
+          patchedInit.headers = headersToSend;
+        }
+      } catch(_e) { patchedInit = init; }
+      return origFetch.call(this, resource, patchedInit);
     };
 
     window.__csrfFetchPatched = true;
-    try { console.info('[CSRF] fetch() patched for automatic tokens'); } catch(_e){}
+    try { console.info('[CSRF] fetch() patched with automatic tokens and session metadata'); } catch(_e){}
   } catch(_e) {
     // If anything goes wrong, keep original fetch
   }

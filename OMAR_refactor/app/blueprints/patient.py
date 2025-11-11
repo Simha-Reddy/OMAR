@@ -1,10 +1,12 @@
 from __future__ import annotations
+import json
 import os
 from typing import Any
-from flask import Blueprint, jsonify, current_app, request
+from flask import Blueprint, jsonify, current_app, request, g
 from ..services.patient_service import PatientService
 from ..gateways.factory import get_gateway
 from ..services import transforms as T
+from ..utils.context import merge_context
 from app.services.loinc_index import LoincIndex
 from app.query.query_models.default.services.rag_store import store as rag_store
 try:
@@ -16,6 +18,54 @@ except Exception:
 bp = Blueprint('patient_api', __name__)
 
 # Very small composition for now; later use DI container
+
+
+def _update_gateway_context(**values: Any) -> None:
+    try:
+        ctx = dict(getattr(g, 'gateway_context', {}) or {})
+    except RuntimeError:
+        return
+    updated = False
+    for key, value in values.items():
+        if value is None:
+            continue
+        text = str(value).strip()
+        if not text:
+            continue
+        if ctx.get(key) == text:
+            continue
+        ctx[key] = text
+        updated = True
+    if updated:
+        g.gateway_context = ctx
+
+
+@bp.url_value_preprocessor
+def _capture_dfn(_: str | None, values: dict[str, Any] | None) -> None:
+    if not values:
+        return
+    dfn = values.get('dfn')
+    if dfn is not None:
+        _update_gateway_context(dfn=dfn)
+
+
+@bp.after_request
+def _inject_context(response):  # type: ignore[override]
+    try:
+        if not response.is_json:
+            return response
+        data = response.get_json(silent=True)
+        if data is None:
+            return response
+        wrapped = merge_context(data)
+        if wrapped is data:
+            return response
+        response.set_data(json.dumps(wrapped, ensure_ascii=False))
+        response.headers['Content-Type'] = 'application/json'
+        response.headers['Content-Length'] = str(len(response.get_data()))
+    except Exception:
+        pass
+    return response
 
 def _get_patient_service() -> PatientService:
     """Build PatientService using the active gateway mode.

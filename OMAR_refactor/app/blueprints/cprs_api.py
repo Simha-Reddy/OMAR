@@ -1,8 +1,48 @@
 from __future__ import annotations
-from flask import Blueprint, jsonify
+import json
+from flask import Blueprint, jsonify, g
 from ..gateways.factory import get_gateway
+from ..utils.context import merge_context
 
 bp = Blueprint('cprs_api', __name__)
+
+
+@bp.after_request
+def _attach_context(response):  # type: ignore[override]
+    try:
+        if not response.is_json:
+            return response
+        data = response.get_json(silent=True)
+        if data is None:
+            return response
+        wrapped = merge_context(data)
+        if wrapped is data:
+            return response
+        response.set_data(json.dumps(wrapped, ensure_ascii=False))
+        response.headers['Content-Type'] = 'application/json'
+        response.headers['Content-Length'] = str(len(response.get_data()))
+    except Exception:
+        pass
+    return response
+
+
+def _update_gateway_context(**values: str) -> None:
+    try:
+        ctx = dict(getattr(g, 'gateway_context', {}) or {})
+    except RuntimeError:
+        return
+    changed = False
+    for key, value in values.items():
+        if value is None:
+            continue
+        text = str(value).strip()
+        if not text or ctx.get(key) == text:
+            continue
+        ctx[key] = text
+        changed = True
+    if changed:
+        g.gateway_context = ctx
+
 
 def _unwrap_vax_raw(raw_val):
     try:
@@ -55,6 +95,7 @@ def cprs_sync_top():
                 cparts = [p.strip() for p in text.split(',')]
                 if len(cparts) >= 2:
                     name = f"{cparts[0]},{cparts[1]}"
+        _update_gateway_context(dfn=dfn)
         return jsonify({ 'ok': bool(dfn), 'dfn': dfn, 'name': name, 'raw': text })
     except Exception as e:
         return jsonify({ 'ok': False, 'dfn': '', 'name': '', 'error': str(e) })

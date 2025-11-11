@@ -6,9 +6,15 @@ import threading
 
 import numpy as np
 
-from .rag import build_bm25_index, hybrid_search
-from .rag import RagEngine  # reuse chunk building from VPR payload
+from .rag import (
+    build_bm25_index,
+    hybrid_search,
+    sliding_window_chunk,
+    remove_boilerplate_phrases,
+    clean_chunks_remove_duplicates_and_boilerplate,
+)
 from app.ai_tools import embeddings as emb_api
+from app.services.document_search_service import DocumentSearchIndex
 
 # Very light-weight in-memory patient RAG store.
 # - Per-DFN cache with simple TTL and generation counter
@@ -25,6 +31,8 @@ class _PatientIndex:
         self.updated_at: float = self.created_at
         self.generation: int = 1
         self.lexical_only: bool = True
+        self.source_generation: Optional[int] = None
+        self.document_manifest: Dict[str, Any] = {}
 
     def manifest(self) -> Dict[str, Any]:
         return {
@@ -35,6 +43,7 @@ class _PatientIndex:
             'generation': int(self.generation),
             'created_at': self.created_at,
             'updated_at': self.updated_at,
+            'source_generation': self.source_generation,
         }
 
 class RagStore:
@@ -71,7 +80,42 @@ class RagStore:
                 except Exception:
                     pass
 
-    def ensure_index(self, dfn: str, vpr_documents_payload: Any) -> Dict[str, Any]:
+    def _chunks_from_document_index(self, doc_index: DocumentSearchIndex) -> List[Dict[str, Any]]:
+        chunks: List[Dict[str, Any]] = []
+        for doc_id, meta, full_text in doc_index.iter_documents():
+            text = (full_text or '').strip()
+            if not text:
+                continue
+            cleaned = remove_boilerplate_phrases(text)
+            if not cleaned:
+                continue
+            window = sliding_window_chunk(cleaned, window_size=1600, step_size=800)
+            title = meta.get('title') or ''
+            nat = meta.get('nationalTitle') or ''
+            date = meta.get('date') or ''
+            note_id = (
+                meta.get('uid')
+                or meta.get('uidLong')
+                or meta.get('rpc_id')
+                or doc_id
+            )
+            doc_class = meta.get('class') or ''
+            doc_type = meta.get('type') or ''
+            for ch in window:
+                ch['title'] = title
+                if nat:
+                    ch['title_nat'] = nat
+                ch['date'] = date
+                ch['note_id'] = note_id
+                ch['source_doc_id'] = doc_id
+                if doc_class:
+                    ch['documentClass'] = doc_class
+                if doc_type:
+                    ch['documentType'] = doc_type
+            chunks.extend(window)
+        return clean_chunks_remove_duplicates_and_boilerplate(chunks)
+
+    def ensure_index(self, dfn: str, doc_index: DocumentSearchIndex, force: bool = False) -> Dict[str, Any]:
         """Build chunks and BM25 for patient if not present. Always returns manifest."""
         self._prune()
         with self._lock(dfn):
@@ -79,18 +123,20 @@ class RagStore:
             if idx is None:
                 idx = _PatientIndex(dfn)
                 self._store[dfn] = idx
-            # Build chunks (replace fully for now)
-            eng = RagEngine(window_size=1600, step_size=800)
-            chunks = eng.build_chunks_from_vpr_documents(vpr_documents_payload)
-            idx.chunks = chunks
-            # BM25
-            idx.bm25 = build_bm25_index(idx.chunks)
-            # Decide whether to embed now
-            idx.vectors = None
-            idx.lexical_only = True
-            idx.generation += 1
-            now = time.time()
-            idx.updated_at = now
+            source_generation = getattr(doc_index, 'generation', None)
+            needs_rebuild = force or not idx.chunks or idx.source_generation != source_generation
+            if not needs_rebuild and doc_index.is_stale():
+                needs_rebuild = True
+            if needs_rebuild:
+                chunks = self._chunks_from_document_index(doc_index)
+                idx.chunks = chunks
+                idx.bm25 = build_bm25_index(idx.chunks) if idx.chunks else None
+                idx.vectors = None
+                idx.lexical_only = True
+                idx.generation += 1
+                idx.updated_at = time.time()
+                idx.source_generation = source_generation
+                idx.document_manifest = doc_index.manifest()
             return idx.manifest()
 
     def embed_now(self, dfn: str) -> Dict[str, Any]:
@@ -173,53 +219,37 @@ class RagStore:
                 pass
             return idx.manifest()
 
-    def embed_docs_policy(self, dfn: str, vpr_documents_payload: Any) -> Dict[str, Any]:
+    def embed_docs_policy(self, dfn: str, doc_index: DocumentSearchIndex) -> Dict[str, Any]:
         """Embed per policy:
         - First 100 most recent Progress Notes
         - All Discharge Summaries, Consults, and Radiology documents
         """
-        # Build a set of note_ids to embed using raw VPR items
-        try:
-            items = []
-            if isinstance(vpr_documents_payload, dict):
-                d = vpr_documents_payload.get('data') or {}
-                items = (d.get('items') if isinstance(d, dict) else None) or vpr_documents_payload.get('items') or []
-            elif isinstance(vpr_documents_payload, list):
-                items = vpr_documents_payload
-        except Exception:
-            items = []
-        def _get_id(it: Dict[str, Any]) -> Optional[str]:
-            for k in ('uid','id','localId','uidLong'):
-                v = it.get(k)
-                if v:
-                    return str(v)
-            return None
-        def _get_doc_class(it: Dict[str, Any]) -> str:
-            return str(it.get('documentClass') or '').lower()
-        def _get_doc_type(it: Dict[str, Any]) -> str:
-            return str(it.get('documentTypeName') or it.get('documentType') or '').lower()
-        def _get_date(it: Dict[str, Any]) -> str:
-            return str(it.get('referenceDateTime') or it.get('dateTime') or it.get('entered') or '')
-        # Collect candidates
-        progress: List[Tuple[str, str]] = []  # (date, id)
+        note_candidates: List[Tuple[str, str, str, str]] = []
+        for doc_id, meta, _ in doc_index.iter_documents():
+            note_id = (
+                meta.get('uid')
+                or meta.get('uidLong')
+                or meta.get('rpc_id')
+                or doc_id
+            )
+            doc_class = (meta.get('class') or '').lower()
+            doc_type = (meta.get('type') or '').lower()
+            date = meta.get('date') or ''
+            if note_id:
+                note_candidates.append((note_id, doc_class, doc_type, date))
+        if not note_candidates:
+            return self.status(dfn)
+        progress: List[Tuple[str, str]] = []
         others: Set[str] = set()
-        for it in (items or []):
-            if not isinstance(it, dict):
-                continue
-            nid = _get_id(it)
-            if not nid:
-                continue
-            dclass = _get_doc_class(it)
-            dtype = _get_doc_type(it)
-            date = _get_date(it)
-            is_progress = ('progress' in dclass) or ('progress' in dtype)
-            is_discharge = ('discharge' in dclass) or ('discharge' in dtype)
-            is_consult = ('consult' in dclass) or ('consult' in dtype)
-            is_radiology = ('radiology' in dclass) or ('radiology' in dtype) or ('imaging' in dclass)
+        for note_id, doc_class, doc_type, date in note_candidates:
+            is_progress = ('progress' in doc_class) or ('progress' in doc_type)
+            is_discharge = ('discharge' in doc_class) or ('discharge' in doc_type)
+            is_consult = ('consult' in doc_class) or ('consult' in doc_type)
+            is_radiology = ('radiology' in doc_class) or ('radiology' in doc_type) or ('imaging' in doc_class)
             if is_progress:
-                progress.append((date, nid))
+                progress.append((date, note_id))
             if is_discharge or is_consult or is_radiology:
-                others.add(nid)
+                others.add(note_id)
         # Sort progress by date desc and take top 100
         try:
             progress.sort(key=lambda t: t[0], reverse=True)

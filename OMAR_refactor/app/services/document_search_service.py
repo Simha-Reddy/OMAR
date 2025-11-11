@@ -1,38 +1,78 @@
 from __future__ import annotations
-from typing import Any, Dict, List, Set, Tuple
+from typing import Any, Dict, List, Optional, Set, Tuple
 import re
+import time
 from collections import defaultdict
 from . import transforms as T
 from ..services.patient_service import PatientService
+from ..gateways.data_gateway import DataGateway
 from ..gateways.vista_api_x_gateway import VistaApiXGateway
+
+try:
+    from ..gateways.factory import get_gateway as _get_active_gateway
+except Exception:
+    _get_active_gateway = None
 
 # In-memory per-DFN index registry
 _REGISTRY: Dict[str, 'DocumentSearchIndex'] = {}
+
+INDEX_TTL_SECONDS = 3 * 60 * 60  # 3 hours per DFN cache lifecycle
 
 _term_split_re = re.compile(r'\w+|"[^"]+"')
 _word_re = re.compile(r"[A-Za-z0-9']+")
 _stop = set([ 'the','and','of','to','in','a','for','on','with','as','at','by','is','it','or','an','be','are','from','this','that','was','were','but' ])
 
 
-def get_or_build_index_for_dfn(dfn: str) -> 'DocumentSearchIndex':
+def _resolve_gateway(gateway: Optional[DataGateway]) -> Optional[DataGateway]:
+    if gateway is not None:
+        return gateway
+    if callable(_get_active_gateway):
+        try:
+            return _get_active_gateway()
+        except Exception:
+            return None
+    return None
+
+
+def get_or_build_index_for_dfn(
+    dfn: str,
+    *,
+    gateway: Optional[DataGateway] = None,
+    force: bool = False,
+) -> 'DocumentSearchIndex':
     key = str(dfn)
+    gw = _resolve_gateway(gateway)
     idx = _REGISTRY.get(key)
+    if idx is not None:
+        if force or idx.is_stale() or (gw is not None and not idx.matches_gateway(gw)):
+            idx = None
+        else:
+            if gw is not None:
+                idx.set_gateway(gw)
     if idx is None:
-        idx = DocumentSearchIndex(dfn=key)
+        idx = DocumentSearchIndex(dfn=key, gateway=gw)
         idx.build()
         _REGISTRY[key] = idx
     return idx
 
 
 class DocumentSearchIndex:
-    def __init__(self, dfn: str):
+    def __init__(self, dfn: str, gateway: Optional[DataGateway] = None):
         self.dfn = str(dfn)
+        self.gateway: Optional[DataGateway] = None
+        self.station: Optional[str] = None
+        self.duz: Optional[str] = None
+        self.ttl_seconds = INDEX_TTL_SECONDS
+        self.updated_at: float = 0.0
+        self.generation: int = 0
         # postings: term -> list[(doc_id, tf)]
         self.postings: Dict[str, Dict[str, int]] = defaultdict(lambda: defaultdict(int))
         # doc lengths for normalization
         self.doc_len: Dict[str, int] = defaultdict(int)
         # metadata fields: title/author/type/class per doc
         self.meta: Dict[str, Dict[str, str]] = {}
+        # rpc identifiers for TIU fetches: doc_id -> rpc_id/localId
+        self.rpc_ids: Dict[str, str] = {}
         # text cache: doc_id -> text (full string)
         self.text: Dict[str, str] = {}
         # document order (for viewer prev/next)
@@ -41,6 +81,63 @@ class DocumentSearchIndex:
         self.vocab_sorted: List[str] = []
         # minimum prefix length to trigger expansion
         self.min_prefix_len: int = 3
+        self.set_gateway(gateway)
+
+    def set_gateway(self, gateway: Optional[DataGateway]) -> None:
+        if gateway is None:
+            return
+        self.gateway = gateway
+        try:
+            sta = getattr(gateway, 'station', None)
+            self.station = str(sta) if sta is not None else self.station
+        except Exception:
+            pass
+        try:
+            duz = getattr(gateway, 'duz', None)
+            self.duz = str(duz) if duz is not None else self.duz
+        except Exception:
+            pass
+
+    def matches_gateway(self, gateway: Optional[DataGateway]) -> bool:
+        if gateway is None:
+            return True
+        try:
+            sta = getattr(gateway, 'station', None)
+        except Exception:
+            sta = None
+        try:
+            duz = getattr(gateway, 'duz', None)
+        except Exception:
+            duz = None
+        sta = str(sta) if sta is not None else None
+        duz = str(duz) if duz is not None else None
+        if sta and self.station and sta != self.station:
+            return False
+        if duz and self.duz and duz != self.duz:
+            return False
+        return True
+
+    def is_stale(self) -> bool:
+        if not self.updated_at:
+            return True
+        return (time.time() - self.updated_at) > max(60, self.ttl_seconds)
+
+    def manifest(self) -> Dict[str, Any]:
+        return {
+            'dfn': self.dfn,
+            'documents': len(self.order),
+            'has_text': any((txt or '').strip() for txt in self.text.values()),
+            'updated_at': self.updated_at,
+            'generation': self.generation,
+            'station': self.station,
+            'duz': self.duz,
+        }
+
+    def iter_documents(self) -> List[Tuple[str, Dict[str, str], str]]:
+        docs: List[Tuple[str, Dict[str, str], str]] = []
+        for doc_id in self.order:
+            docs.append((doc_id, dict(self.meta.get(doc_id, {})), self.text.get(doc_id, '')))
+        return docs
 
     def _tokenize(self, text: str) -> List[str]:
         tokens: List[str] = []
@@ -68,30 +165,60 @@ class DocumentSearchIndex:
         return phrases, terms
 
     def build(self):
-        # Build from quick documents + includeText
-        svc = PatientService(gateway=VistaApiXGateway())
-        vpr = svc.get_vpr_raw(self.dfn, 'document')
-        quick = svc.get_documents_quick(self.dfn)
-        raw_items = T._get_nested_items(vpr)  # type: ignore
+        # Reset state before rebuild to avoid carrying stale structures
+        self.postings = defaultdict(lambda: defaultdict(int))
+        self.doc_len = defaultdict(int)
+        self.meta = {}
+        self.rpc_ids = {}
+        self.text = {}
+        self.order = []
+        self.vocab_sorted = []
+
+        gateway = self.gateway or VistaApiXGateway()
+        self.set_gateway(gateway)
+        svc = PatientService(gateway=gateway)
+        params = {'text': '1'}
+        try:
+            vpr = svc.get_vpr_raw(self.dfn, 'document', params=dict(params))
+        except Exception:
+            vpr = {}
+        try:
+            quick = svc.get_documents_quick(self.dfn, params=dict(params))
+        except Exception:
+            quick = []
+        try:
+            raw_items = T._get_nested_items(vpr)  # type: ignore
+        except Exception:
+            raw_items = []
         # Align and extract
         docs: List[Tuple[str, Dict[str, Any], Dict[str, Any] | None]] = []
         for idx, q in enumerate(quick if isinstance(quick, list) else []):
             if not isinstance(q, dict):
                 continue
             r = raw_items[idx] if idx < len(raw_items) and isinstance(raw_items[idx], dict) else None
-            # doc id from raw or quick (best effort)
             doc_id = None
+            rpc_id = None
+            uid = None
             if isinstance(r, dict):
-                doc_id = r.get('id') or r.get('localId') or r.get('uid')
+                rpc_id = r.get('id') or r.get('localId') or None
+                uid = r.get('uid') or r.get('uidLong') or None
+            if isinstance(q, dict) and not uid:
+                uid = q.get('uid') or q.get('uidLong') or None
+            if rpc_id:
+                doc_id = str(rpc_id)
+            if uid:
+                doc_id = str(uid)
             if not doc_id:
-                # fallback to index-based id
                 doc_id = str(idx)
-            doc_id = str(doc_id)
-            docs.append((doc_id, q, r))
+            docs.append((str(doc_id), q, r))
+            if rpc_id:
+                self.rpc_ids[str(doc_id)] = str(rpc_id)
         # Sort by date desc for consistent order
         docs.sort(key=lambda t: (t[1].get('date') or ''), reverse=True)
         self.order = [d for d,_,_ in docs]
         # Index
+        missing_rpc_ids: List[str] = []
+        rpc_to_doc: Dict[str, str] = {}
         for doc_id, q, r in docs:
             title = str(q.get('title') or '')
             author = str(q.get('author') or '')
@@ -107,8 +234,26 @@ class DocumentSearchIndex:
                     full = txt or ''
                 except Exception:
                     full = ''
+            if not full and self.rpc_ids.get(doc_id):
+                missing_rpc_ids.append(self.rpc_ids[doc_id])
+                rpc_to_doc[self.rpc_ids[doc_id]] = doc_id
             # store
-            self.meta[doc_id] = { 'title': title, 'author': author, 'type': dtype, 'class': dclass, 'date': date, 'nationalTitle': nt }
+            meta_entry: Dict[str, str] = {
+                'title': title,
+                'author': author,
+                'type': dtype,
+                'class': dclass,
+                'date': date,
+                'nationalTitle': nt,
+            }
+            if isinstance(r, dict):
+                if r.get('uid'):
+                    meta_entry['uid'] = str(r.get('uid'))
+                if r.get('uidLong'):
+                    meta_entry['uidLong'] = str(r.get('uidLong'))
+            if self.rpc_ids.get(doc_id):
+                meta_entry['rpc_id'] = self.rpc_ids[doc_id]
+            self.meta[doc_id] = meta_entry
             self.text[doc_id] = full
             # index tokens
             toks = self._tokenize(full)
@@ -120,11 +265,32 @@ class DocumentSearchIndex:
                 if field_val:
                     for t in self._tokenize(field_val):
                         self.postings[t][doc_id] += boost
+        if missing_rpc_ids:
+            try:
+                texts_map = svc.get_document_texts(self.dfn, missing_rpc_ids)
+            except Exception:
+                texts_map = {}
+            for rpc_id, lines in (texts_map or {}).items():
+                doc_id = rpc_to_doc.get(str(rpc_id))
+                if not doc_id:
+                    continue
+                try:
+                    joined = '\n'.join(lines) if isinstance(lines, list) else str(lines)
+                except Exception:
+                    joined = ''
+                if joined.strip():
+                    self.text[doc_id] = joined
+                    toks = self._tokenize(joined)
+                    self.doc_len[doc_id] = len(toks)
+                    for t in toks:
+                        self.postings[t][doc_id] += 1
         # build sorted vocabulary
         try:
             self.vocab_sorted = sorted(self.postings.keys())
         except Exception:
             self.vocab_sorted = list(self.postings.keys())
+        self.updated_at = time.time()
+        self.generation += 1
 
     def _extract_full_text(self, raw_item: Dict[str, Any]) -> str | None:
         try:

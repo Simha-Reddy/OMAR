@@ -1,13 +1,34 @@
 from __future__ import annotations
+import json
 import os
 import time
 from flask import Blueprint, jsonify, request
 from ..gateways.factory import get_gateway
+from ..utils.context import merge_context
 
 # Exposes the classic OMAR patient search endpoints at the root path
 # - GET  /vista_default_patient_list
 # - POST /vista_patient_search
 bp = Blueprint('patient_search', __name__)
+
+
+@bp.after_request
+def _attach_context(response):  # type: ignore[override]
+    try:
+        if not response.is_json:
+            return response
+        data = response.get_json(silent=True)
+        if data is None:
+            return response
+        wrapped = merge_context(data)
+        if wrapped is data:
+            return response
+        response.set_data(json.dumps(wrapped, ensure_ascii=False))
+        response.headers['Content-Type'] = 'application/json'
+        response.headers['Content-Length'] = str(len(response.get_data()))
+    except Exception:
+        pass
+    return response
 
 
 def _unwrap_vax_raw(raw_val):
@@ -62,7 +83,7 @@ def _get_vista_gateway():
 @bp.get('/vista_default_patient_list')
 def vista_default_patient_list():
     """Return user's default patient list using ORQPT DEFAULT PATIENT LIST and minimal user info via ORWU USERINFO.
-    Response shape mirrors original OMAR: { patients: [...], context, count, timestamp, user: {duz,name,division} }
+    Response includes rpcContext alongside session context metadata injected after the request.
     """
     gw = _get_vista_gateway()
     # Use only CPRS context for patient list in both demo and socket modes
@@ -112,7 +133,7 @@ def vista_default_patient_list():
                     pass
                 payload = {
                     'patients': patients,
-                    'context': ctx,
+                    'rpcContext': ctx,
                     'count': len(patients),
                     'timestamp': time.time(),
                     'user': { 'duz': user_duz, 'name': user_name, 'division': user_division }
@@ -131,7 +152,7 @@ def vista_patient_search():
     """Patient search identical to original OMAR using vista-api-x.
     LAST5 (A1234) -> ORWPT LAST5; Name prefix -> ORWPT LIST ALL with FROM param.
     Body: { query, pageSize?, cursor? }
-    Returns: { matches: [{dfn,name,raw}], context, rpc, hasMore, nextCursor }
+    Returns: { matches: [{dfn,name,raw}], rpcContext, rpc, hasMore, nextCursor }
     """
     gw = _get_vista_gateway()
     # Use only CPRS context for patient search in both demo and socket modes
@@ -181,7 +202,7 @@ def vista_patient_search():
                     raw = gw.call_rpc(context=ctx, rpc=rpc, parameters=[{'string': search_str}], json_result=False, timeout=40)
                     raw_text = _unwrap_vax_raw(raw)
                     matches = _parse_lines(raw_text)
-                    return jsonify({'matches': matches, 'context': ctx, 'rpc': rpc, 'hasMore': False, 'nextCursor': None})
+                    return jsonify({'matches': matches, 'rpcContext': ctx, 'rpc': rpc, 'hasMore': False, 'nextCursor': None})
                 except Exception as e:
                     last_err = e
                     continue
@@ -210,7 +231,7 @@ def vista_patient_search():
                 filtered = [r for r in all_results if r['name'].upper().startswith(search_str)]
                 page_matches = filtered[:page_size]
                 next_cursor = page_matches[-1]['name'] if len(filtered) > page_size else None
-                return jsonify({'matches': page_matches, 'context': ctx, 'rpc': rpc, 'hasMore': bool(next_cursor), 'nextCursor': next_cursor})
+                return jsonify({'matches': page_matches, 'rpcContext': ctx, 'rpc': rpc, 'hasMore': bool(next_cursor), 'nextCursor': next_cursor})
             except Exception as e:
                 last_err = e
                 continue

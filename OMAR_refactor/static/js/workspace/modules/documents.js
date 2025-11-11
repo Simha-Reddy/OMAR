@@ -1,7 +1,7 @@
 (function(){
   window.WorkspaceModules = window.WorkspaceModules || {};
   const MODULE_NAME = 'Documents';
-  const DOCUMENT_COLUMNS = ['date','title','author','encounter','normal'];
+  const DOCUMENT_COLUMNS = ['date','title','author','encounter','national'];
 
   function ensureSharedStyles(){
     const id = 'workspace-shared-detail-styles';
@@ -178,7 +178,7 @@
       const date = it.date || it.referenceDateTime || it.entered || it.dateTime || '';
       const author = it.author || it.authorDisplayName || it.authorName || it.provider || it.providerName || '';
       const encounter = it.encounter || it.visit || it.location || '';
-      const normalTitle = it.normalTitle || it.standardTitle || '';
+  const nationalTitle = it.nationalTitle || it.normalTitle || it.standardTitle || '';
       const facility = it.facility || '';
       const dtype = it.documentType || it.type || '';
       const docId = it.docId || it.doc_id || '';
@@ -196,7 +196,7 @@
         </td>
         <td class="doc-cell doc-author">${escapeHtml(author)}</td>
         <td class="doc-cell doc-encounter">${escapeHtml(encounter)}</td>
-        <td class="doc-cell doc-normal">${escapeHtml(normalTitle)}</td>
+  <td class="doc-cell doc-national">${escapeHtml(nationalTitle)}</td>
       </tr>`;
     };
 
@@ -206,7 +206,7 @@
       + '<th data-col-key="title">Title</th>'
       + '<th data-col-key="author">Author</th>'
       + '<th data-col-key="encounter">Encounter</th>'
-      + '<th data-col-key="normal">Normal Title</th>'
+  + '<th data-col-key="national">National Title</th>'
       + '</tr></thead>';
     html += '<tbody>';
     if (group){
