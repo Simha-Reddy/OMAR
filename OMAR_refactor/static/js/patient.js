@@ -317,6 +317,24 @@ window.addEventListener("DOMContentLoaded", () => {
         return rows;
     }
 
+    function extractQuickLabs(payload){
+        if(Array.isArray(payload)) return payload;
+        if(payload && Array.isArray(payload.result)) return payload.result;
+        if(payload && payload.result && typeof payload.result === 'object' && Array.isArray(payload.result.items)) return payload.result.items;
+        if(payload && Array.isArray(payload.labs)) return payload.labs;
+        if(payload && Array.isArray(payload.items)) return payload.items;
+        return [];
+    }
+
+    function specimenLabel(specimenRaw){
+        if(specimenRaw == null) return '';
+        if(typeof specimenRaw === 'string') return specimenRaw;
+        if(typeof specimenRaw === 'object'){
+            return specimenRaw.name || specimenRaw.display || specimenRaw.text || specimenRaw.description || specimenRaw.code || '';
+        }
+        return String(specimenRaw);
+    }
+
     async function renderLabsTable(patientRecord){
         const container = document.getElementById('labsTable');
         if(!container) return; // Not on this page
@@ -327,19 +345,24 @@ window.addEventListener("DOMContentLoaded", () => {
             const resp = await fetch('/quick/patient/labs?days=365', { cache:'no-store', credentials:'same-origin', headers:{'Accept':'application/json','X-Caller':'PatientLabs'} });
             if(resp.ok){
                 const js = await resp.json();
-                if(js && Array.isArray(js.labs)){
-                    data = js.labs.map(r=>({
-                        obsId: r.id || '',
-                        date: r.resulted || r.collected || '',
-                        category: 'Lab',
-                        test: r.test || r.localName || '(Unnamed)',
-                        subTest: '',
-                        value: r.result,
-                        unit: r.unit || '',
-                        refRange: r.referenceRange || '',
-                        interpretation: r.flag || (r.abnormal? 'A' : ''),
-                        status: r.status || ''
-                    }));
+                const list = extractQuickLabs(js);
+                if(list && list.length){
+                    data = list.map(r=>{
+                        const specimenRaw = r && (r.specimen ?? r.specimenType ?? r.sample ?? r.source ?? r.bodySite ?? null);
+                        const specimen = specimenLabel(specimenRaw);
+                        return {
+                            obsId: r.uid || r.id || r.localId || '',
+                            date: r.resulted || r.observedDate || r.collected || '',
+                            category: 'Lab',
+                            test: r.test || r.localName || r.name || '(Unnamed)',
+                            subTest: specimen || '',
+                            value: (r.result != null ? r.result : r.value) ?? '',
+                            unit: r.unit || r.units || '',
+                            refRange: r.referenceRange || r.refRange || '',
+                            interpretation: r.flag || r.interpretation || (r.abnormal === true ? 'A' : ''),
+                            status: r.status || r.panelStatus || ''
+                        };
+                    });
                     usedQuick = true;
                 }
             }
@@ -870,15 +893,15 @@ window.addEventListener("DOMContentLoaded", () => {
         try {
             // Labs list (recent 1y)
             const labsEnv = Api && Api.list ? await Api.list('labs', { last: '1y' }) : null;
-            const items = (labsEnv && Array.isArray(labsEnv.items)) ? labsEnv.items : [];
+            const items = extractQuickLabs(labsEnv);
             const data = items.map(r => ({
                 date: r.resulted || r.collected || r.date || '',
                 test: r.test || r.localName || r.name || '',
-                subTest: '',
-                value: r.result || r.value || '',
-                unit: r.unit || '',
-                refRange: r.referenceRange || r.range || '',
-                interpretation: r.flag || r.interpretation || '',
+                subTest: specimenLabel(r && (r.specimen ?? r.specimenType ?? r.sample ?? r.source ?? r.bodySite ?? null)) || '',
+                value: (r.result != null ? r.result : r.value) ?? '',
+                unit: r.unit || r.units || '',
+                refRange: r.referenceRange || r.range || r.refRange || '',
+                interpretation: r.flag || r.interpretation || (r.abnormal === true ? 'A' : ''),
                 status: r.status || ''
             }));
             if (typeof window.Tabulator !== 'undefined') {

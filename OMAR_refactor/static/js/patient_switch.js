@@ -5,11 +5,14 @@
     try { return window.AppEvents || (window.AppEvents = new EventTarget()); } catch(_e){ return window; }
   })();
 
+  try { console.log('[Patient] patient_switch orchestrator loaded'); } catch(_e){}
+
   const Patient = window.Patient || {};
 
   let _isSwitching = false;
   let _currentToken = 0;
   const _abortRegistry = new Set();
+  const _hydrationCooldown = new Map();
 
   function getCurrentSwitchToken(){ return _currentToken; }
   function registerAbortable(controller){ try{ _abortRegistry.add(controller); }catch(_e){} return ()=>{ try{ _abortRegistry.delete(controller); }catch(_e){} }; }
@@ -17,6 +20,125 @@
     try{ _abortRegistry.forEach(ctrl=>{ try{ ctrl.abort(); }catch(_){} }); }catch(_e){}
     try{ _abortRegistry.clear(); }catch(_e){}
   }
+
+  function _resolveHeyOmarModelId(){
+    try{
+      const stored = localStorage.getItem('HEY_OMAR_MODEL_ID');
+      if (stored && String(stored).trim()) return String(stored).trim();
+    }catch(_e){}
+    return 'default';
+  }
+
+  function _emitHeyOmarHydration(detail){
+    try{ window.dispatchEvent(new CustomEvent('heyomar:rag-manifest', { detail })); }catch(_e){}
+  }
+
+  function _kickoffRagHydration(dfn, token, source){
+    const target = (dfn == null) ? '' : String(dfn).trim();
+    if (!target) return;
+    const model = _resolveHeyOmarModelId();
+    const key = `${target}:${model}`;
+    const now = Date.now();
+    const lastTs = _hydrationCooldown.get(key) || 0;
+    if (!source) source = 'switch';
+    if (now - lastTs < 4000 && source !== 'retry') {
+      return;
+    }
+    _hydrationCooldown.set(key, now);
+    const body = { dfn: target, model };
+    if (typeof token !== 'number') {
+      try { token = getCurrentSwitchToken(); } catch(_e){}
+    }
+    const ctrl = new AbortController();
+    const unregister = registerAbortable(ctrl);
+    (async ()=>{
+      try{
+        console.log('[Patient] Document index hydration begin', { endpoint: '/api/documents/index/start', body, source });
+        try{ window.dispatchEvent(new CustomEvent('heyomar:rag-start', { detail: { dfn: target, model, source, ts: Date.now() } })); }catch(_e){}
+        const endpoint = '/api/documents/index/start';
+        let res = await fetch(endpoint, {
+          method: 'POST',
+          credentials: 'same-origin',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(body),
+          signal: ctrl.signal,
+        });
+        if (!res.ok && res.status === 404){
+          console.warn('[Patient] Document index hydration endpoint missing at', endpoint, '; retrying legacy /api/query path');
+          res = await fetch('/api/query/index/start', {
+            method: 'POST',
+            credentials: 'same-origin',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(body),
+            signal: ctrl.signal,
+          });
+        }
+        if (!res.ok){
+          const msg = await res.text().catch(()=>('HTTP '+res.status));
+          throw new Error(msg || ('HTTP '+res.status));
+        }
+        const payload = await res.json().catch(()=>({}));
+        if (token && token !== getCurrentSwitchToken()) return;
+        if (payload && payload.manifest){
+          try{
+            const cacheKey = `heyomar:manifest:${body.model}:${body.dfn}`;
+            sessionStorage.setItem(cacheKey, JSON.stringify({ ts: Date.now(), manifest: payload.manifest }));
+          }catch(_e){}
+          console.log('[Patient] Document index hydration complete', { body, manifest: payload.manifest });
+          _emitHeyOmarHydration({ dfn: body.dfn, model: body.model, manifest: payload.manifest, status: 'ok' });
+        } else if (payload && payload.error){
+          console.warn('[Patient] Document index hydration error payload', payload);
+          _emitHeyOmarHydration({ dfn: body.dfn, model: body.model, status: 'error', error: payload.error });
+        }
+      }catch(err){
+        if (err && err.name === 'AbortError') return;
+        console.warn('[Patient] Document index hydration failed:', err);
+        _emitHeyOmarHydration({ dfn: String(dfn), model: body.model, status: 'error', error: String(err && err.message || err) });
+      }finally{
+        unregister();
+      }
+    })();
+  }
+
+  try{
+    window.addEventListener('workspace:patientSwitched', (ev)=>{
+      try{
+        const detail = ev && ev.detail || {};
+        let dfn = detail && detail.dfn ? String(detail.dfn).trim() : '';
+        if (!dfn){
+          try { dfn = sessionStorage.getItem('CURRENT_PATIENT_DFN') || window.CURRENT_PATIENT_DFN || ''; } catch(_e){}
+        }
+        if (!dfn) return;
+        const token = getCurrentSwitchToken();
+        _kickoffRagHydration(dfn, token, 'event');
+      }catch(_err){ console.warn('[Patient] Document hydration listener error:', _err); }
+    });
+  }catch(_e){}
+
+  try{
+    window.addEventListener('PATIENT_SWITCH_DONE', (ev)=>{
+      try{
+        const detail = ev && ev.detail || {};
+        const dfn = detail && detail.to ? String(detail.to).trim() : '';
+        const token = detail && typeof detail.token === 'number' ? detail.token : getCurrentSwitchToken();
+        if (dfn) _kickoffRagHydration(dfn, token, 'done-event');
+      }catch(err){ console.warn('[Patient] Document hydration PATIENT_SWITCH_DONE listener error:', err); }
+    });
+  }catch(_e){}
+
+  try{
+    window.addEventListener('patient:loaded', (ev)=>{
+      try{
+        const detail = ev && ev.detail || {};
+        let dfn = detail && detail.dfn ? String(detail.dfn).trim() : '';
+        if (!dfn){
+          try { dfn = sessionStorage.getItem('CURRENT_PATIENT_DFN') || window.CURRENT_PATIENT_DFN || ''; } catch(_e){}
+        }
+        if (!dfn) return;
+        _kickoffRagHydration(dfn, getCurrentSwitchToken(), 'patient-loaded');
+      }catch(err){ console.warn('[Patient] Document hydration patient:loaded listener error:', err); }
+    });
+  }catch(_e){}
 
   function _emit(name, detail){
     try{ if (BUS && BUS.dispatchEvent) BUS.dispatchEvent(new CustomEvent(name, { detail })); }catch(_e){}
@@ -207,6 +329,7 @@
     _currentToken++;
     const token = _currentToken;
 
+    console.log('[Patient] switchTo start', { target, current, opts });
     _emit('PATIENT_SWITCH_START', { from: current || null, to: target });
     _setUiSwitching(true);
     _hideTransientUi();
@@ -259,6 +382,7 @@
     await _rehydrateLayout();
       try{ window.dispatchEvent(new CustomEvent('workspace:patientSwitched', { detail: { dfn: target, alreadyRehydrated: true } })); }catch(_e){}
   await _updateHeaderAndModules();
+  try { _kickoffRagHydration(target, token, 'switch'); } catch(_e){}
 
     // Prompt to reload last archive (if any) for the newly selected patient
     try { await _promptReloadLatestArchiveForPatient(target); } catch(_e){}
@@ -289,6 +413,20 @@
     Patient.getCurrentSwitchToken = getCurrentSwitchToken;
     Patient.registerAbortable = registerAbortable;
     Patient.abortAll = abortAllInFlight;
+    Patient.hydrateDocuments = function(opts){
+      try {
+        let dfn = opts && opts.dfn ? String(opts.dfn).trim() : '';
+        if (!dfn){
+          try { dfn = sessionStorage.getItem('CURRENT_PATIENT_DFN') || window.CURRENT_PATIENT_DFN || ''; } catch(_e){}
+        }
+        if (!dfn) throw new Error('Missing DFN for manual hydration');
+        _kickoffRagHydration(dfn, getCurrentSwitchToken(), 'manual');
+        return true;
+      } catch(err){
+        console.error('[Patient] Manual document hydration failed:', err);
+        return false;
+      }
+    };
     window.Patient = Patient;
   } catch(_e){}
 })();

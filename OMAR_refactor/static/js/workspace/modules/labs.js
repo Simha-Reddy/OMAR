@@ -250,6 +250,31 @@
         return { display: str, numeric: Number.isFinite(num) ? num : null };
     }
 
+    function normalizeSpecimen(row){
+        const raw = row && (row.specimen ?? row.specimenType ?? row.sample ?? row.source ?? row.bodySite ?? null);
+        if(raw == null) return { label: '', code: '' };
+        if(typeof raw === 'string'){
+            return { label: raw, code: '' };
+        }
+        if(typeof raw === 'object'){
+            const code = raw.code != null ? String(raw.code) : '';
+            const labelSource = raw.name ?? raw.display ?? raw.text ?? raw.description ?? code ?? '';
+            return { label: labelSource != null ? String(labelSource) : '', code };
+        }
+        return { label: String(raw), code: '' };
+    }
+
+    function extractLabList(payload){
+        if(Array.isArray(payload)) return payload;
+        if(payload && Array.isArray(payload.result)) return payload.result;
+        if(payload && Array.isArray(payload.labs)) return payload.labs;
+        if(payload && Array.isArray(payload.items)) return payload.items;
+        if(payload && payload.result && typeof payload.result === 'object' && Array.isArray(payload.result.items)){
+            return payload.result.items;
+        }
+        return [];
+    }
+
     function normalizeRow(row){
         const test = (row.test || row.name || row.display || row.localName || 'Unknown').toString();
         const resultObj = normalizeResult(row.result != null ? row.result : row.value);
@@ -257,13 +282,15 @@
         const range = row.referenceRange || row.refRange || '';
         const abnormal = row.abnormal === true ? true : (row.abnormal === false ? false : null);
         const panel = row.panelName || row.groupName || '';
-        const specimen = row.specimen || row.specimenType || row.sample || '';
+        const specimenInfo = normalizeSpecimen(row);
+        const specimen = specimenInfo.label ? specimenInfo.label : '';
+        const specimenCode = specimenInfo.code ? specimenInfo.code : '';
         const loinc = row.loinc || row.code || '';
         const observed = row.resulted || row.observedDate || row.collected || row.date || '';
         const ts = observed ? Date.parse(observed) : NaN;
         const id = row.uid || row.localId || `${test}-${observed}-${resultObj.display}`;
     const statusLabel = abnormal === true ? 'Abnormal' : (abnormal === false ? 'Normal' : 'Unknown');
-        const searchTokens = [test, panel, specimen, loinc, resultObj.display, units].join(' ').toLowerCase();
+        const searchTokens = [test, panel, specimen, specimenCode, loinc, resultObj.display, units].join(' ').toLowerCase();
         return {
             id,
             test,
@@ -275,6 +302,7 @@
             statusLabel,
             panel,
             specimen,
+            specimenCode,
             loinc,
             resulted: observed,
             resultedTs: Number.isFinite(ts) ? ts : null,
@@ -394,7 +422,7 @@
                 <tr data-index="${idx}">
                     <td>
                         <div>${escapeHtml(row.test)}</div>
-                        ${row.specimen ? `<div class="lab-meta">Specimen: ${escapeHtml(row.specimen)}</div>` : ''}
+                        ${row.specimen ? `<div class="lab-meta">Specimen: ${escapeHtml(row.specimen)}${row.specimenCode ? ` (${escapeHtml(row.specimenCode)})` : ''}</div>` : ''}
                         ${row.loinc ? `<div class="lab-meta">LOINC: ${escapeHtml(row.loinc)}</div>` : ''}
                     </td>
                     <td>
@@ -518,7 +546,7 @@
                 throw new Error(`HTTP ${res.status}`);
             }
             const body = await res.json();
-            const list = Array.isArray(body) ? body : (body && Array.isArray(body.labs) ? body.labs : []);
+            const list = extractLabList(body);
             state.items = list.map(normalizeRow);
             state.error = '';
             applyFilters();

@@ -3,6 +3,7 @@ from flask import Blueprint, request, jsonify
 from ..registry import QueryModelRegistry
 from flask import session as flask_session
 import os
+from ...utils.context import merge_context
 
 bp = Blueprint('query_api', __name__)
 _registry = QueryModelRegistry()
@@ -55,7 +56,14 @@ def ask():
             pass
         # Ensure model_id is present
         result['model_id'] = getattr(model, 'model_id', model_id) or model_id
-        return jsonify(result)
+        context_wrapped = merge_context(
+            result,
+            dfn=patient.get('DFN'),
+            duz=vista_ctx.get('duz'),
+            session_id=flask_session.get('gateway_session_id'),
+            session_order=flask_session.get('gateway_session_order')
+        )
+        return jsonify(context_wrapped)
     except Exception as e:
         return jsonify({ 'error': str(e) }), 500
 
@@ -88,8 +96,22 @@ def rag_results():
         if hasattr(model, 'rag_results') and callable(getattr(model, 'rag_results')):
             out = model.rag_results({ 'query': query, 'patient': patient, 'session': vista_ctx })  # type: ignore
             if isinstance(out, dict) and 'results' in out:
-                return jsonify(out)
-        return jsonify({ 'results': [] })
+                wrapped = merge_context(
+                    out,
+                    dfn=patient.get('DFN'),
+                    duz=vista_ctx.get('duz'),
+                    session_id=flask_session.get('gateway_session_id'),
+                    session_order=flask_session.get('gateway_session_order')
+                )
+                return jsonify(wrapped)
+        empty_payload = { 'results': [] }
+        return jsonify(merge_context(
+            empty_payload,
+            dfn=patient.get('DFN'),
+            duz=vista_ctx.get('duz'),
+            session_id=flask_session.get('gateway_session_id'),
+            session_order=flask_session.get('gateway_session_order')
+        ))
     except Exception as e:
         return jsonify({ 'error': str(e) }), 500
 

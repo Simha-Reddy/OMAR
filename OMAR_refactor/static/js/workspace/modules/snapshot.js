@@ -54,11 +54,20 @@
     }catch(_e){}
   }
 
-  function getLabsArray(){
-    const src = state && state.labs;
+  function coerceLabsArray(src){
     if (Array.isArray(src)) return src;
+    if (src && Array.isArray(src.result)) return src.result;
     if (src && Array.isArray(src.labs)) return src.labs;
+    if (src && Array.isArray(src.items)) return src.items;
+    if (src && src.result && typeof src.result === 'object' && Array.isArray(src.result.items)) return src.result.items;
     return [];
+  }
+  function getLabsArray(){
+    return coerceLabsArray(state && state.labs);
+  }
+  function setLabsState(payload){
+    const list = coerceLabsArray(payload);
+    state.labs = { labs: list, result: list, items: list, raw: payload };
   }
   function getProcedureArray(){
     const src = state && state.screenings;
@@ -159,12 +168,21 @@
     plt:{ loinc:['777-3'], patterns:[/\bplt\b/i, /\bplatelets?\b/i] }
   };
   function _norm(s){ return (s||'').toString().trim().toLowerCase(); }
+  function specimenText(entry){
+    const raw = entry && (entry.specimen ?? entry.specimenType ?? entry.sample ?? entry.source ?? entry.bodySite ?? null);
+    if(raw == null) return '';
+    if(typeof raw === 'string') return raw;
+    if(typeof raw === 'object'){
+      return raw.name || raw.display || raw.text || raw.description || raw.code || '';
+    }
+    return String(raw);
+  }
   function keyForLab(lab){ const loinc=_norm(lab.loinc); const name=_norm(lab.test||lab.localName); for(const [key,spec] of Object.entries(ANALYTES)){ if(loinc && spec.loinc && spec.loinc.includes(loinc)) return key; if(key==='hgb' && name && (name.includes('a1c')||name.includes('glyco'))) continue; if(name && spec.patterns){ for(const p of spec.patterns){ if(p.test(name)) return key; } } } return null; }
   const MAX_LAB_POINTS = 60; // cap per analyte to reduce render work
   // Helper to detect if lab specimen is serum/plasma vs urine, etc.
   function isSerumLike(r){
     try{
-      const spec = _norm(r.specimen || r.specimenType || r.sample || r.source || r.bodySite);
+  const spec = _norm(specimenText(r));
       const name = _norm(r.test || r.localName || r.display || r.observation || r.name);
       const sys = _norm(r.system || r.category);
       // Favor serum/plasma for chemistry; exclude urine when explicitly stated
@@ -520,7 +538,7 @@
         if(isDiabetesProblem(p)){
           try{
             // Reuse already-fetched labs from state to avoid refetch
-            const labs = Array.isArray(state && state.labs) ? state.labs : ((state && state.labs && Array.isArray(state.labs.labs)) ? state.labs.labs : []);
+            const labs = getLabsArray();
             const a1c = labs.filter(r=>{ const n=_norm(r.test||r.localName||r.name); const l=_norm(r.loinc); return (l&&l==='4548-4') || /\b(hb)?a1c\b/i.test(n) || /hemoglobin a1c/i.test(n) || /glyco.?hemoglobin/i.test(n); })
               .map(r=>({ v: toNum(r.result!=null? r.result : r.value), u:(r.unit||r.units), d: new Date(r.resulted||r.collected||r.observedDate||0) })).filter(x=>x.v!=null && !isNaN(x.d)).sort((a,b)=>a.d-b.d);
             rows.push('—'); rows.push('A1c (last 3):');
@@ -873,7 +891,7 @@
 
   // Reset cached data holders before fresh fetch to avoid showing stale entries
   state.data = { vitals: [] };
-  state.labs = { labs: [] };
+  setLabsState([]);
   state.right = { allergies: [], medications: [], problems: [] };
   state.screenings = { procedures: [], radiology: [] };
 
@@ -893,18 +911,17 @@
       if (perfOn && performance && performance.now) {
         try { console.log(`SNAPSHOT:fetch-all took ${(performance.now()-tFetchStart).toFixed(0)}ms`); } catch(_e){}
       }
-    const vitalsList = Array.isArray(vRes) ? vRes : [];
-    const labsList = Array.isArray(lRes) ? lRes : ((lRes && lRes.labs) ? lRes.labs : []);
-    const allergiesList = Array.isArray(aRes)? aRes : ((aRes&&aRes.allergies)||[]);
-    const medsList = Array.isArray(mRes)? mRes : ((mRes&&mRes.medications)||[]);
-    const problemsList = Array.isArray(pRes)? pRes : ((pRes&&pRes.problems)||[]);
-    const proceduresList = Array.isArray(procRes)? procRes : ((procRes && procRes.procedures) || []);
-    const radiologyList = Array.isArray(radRes)? radRes : ((radRes && radRes.radiology) || []);
+      const vitalsList = Array.isArray(vRes) ? vRes : [];
+      const allergiesList = Array.isArray(aRes)? aRes : ((aRes&&aRes.allergies)||[]);
+      const medsList = Array.isArray(mRes)? mRes : ((mRes&&mRes.medications)||[]);
+      const problemsList = Array.isArray(pRes)? pRes : ((pRes&&pRes.problems)||[]);
+      const proceduresList = Array.isArray(procRes)? procRes : ((procRes && procRes.procedures) || []);
+      const radiologyList = Array.isArray(radRes)? radRes : ((radRes && radRes.radiology) || []);
 
-    state.data = { vitals: vitalsList };
-    state.labs = { labs: labsList };
-    state.right = { allergies: allergiesList, medications: medsList, problems: problemsList };
-    state.screenings = { procedures: proceduresList, radiology: radiologyList };
+      state.data = { vitals: vitalsList };
+      setLabsState(lRes);
+      state.right = { allergies: allergiesList, medications: medsList, problems: problemsList };
+      state.screenings = { procedures: proceduresList, radiology: radiologyList };
       const t0 = (perfOn && performance && performance.now)? performance.now() : 0;
       leftMount.innerHTML=''; renderVitalsAndLabs(leftMount);
       rightMount.innerHTML=''; renderRightColumn(rightMount, state.right);

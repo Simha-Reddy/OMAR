@@ -22,8 +22,9 @@ from app.services.document_search_service import DocumentSearchIndex
 # - No external deps (FAISS/Sklearn) to keep install minimal
 
 class _PatientIndex:
-    def __init__(self, dfn: str):
+    def __init__(self, dfn: str, model: str):
         self.dfn = dfn
+        self.model = model
         self.chunks: List[Dict[str, Any]] = []
         self.vectors: Optional[np.ndarray] = None
         self.bm25: Optional[Dict[str, Any]] = None
@@ -37,6 +38,7 @@ class _PatientIndex:
     def manifest(self) -> Dict[str, Any]:
         return {
             'dfn': self.dfn,
+            'model': self.model,
             'chunks': len(self.chunks or []),
             'has_vectors': bool(self.vectors is not None and getattr(self.vectors, 'shape', (0,))[0] > 0),
             'lexical_only': bool(self.lexical_only),
@@ -48,21 +50,29 @@ class _PatientIndex:
 
 class RagStore:
     def __init__(self, ttl_seconds: int = 3*60*60, capacity: int = 10):
-        self._store: Dict[str, _PatientIndex] = {}
-        self._locks: Dict[str, threading.Lock] = {}
+        self._store: Dict[Tuple[str, str], _PatientIndex] = {}
+        self._locks: Dict[Tuple[str, str], threading.Lock] = {}
         self._ttl = max(0, int(ttl_seconds))
         self._capacity = max(1, int(capacity))
 
-    def _lock(self, dfn: str) -> threading.Lock:
-        if dfn not in self._locks:
-            self._locks[dfn] = threading.Lock()
-        return self._locks[dfn]
+    def _normalize_model(self, model: str | None) -> str:
+        text = (model or 'default').strip()
+        return text or 'default'
+
+    def _key(self, dfn: str, model: str | None) -> Tuple[str, str]:
+        return (str(dfn), self._normalize_model(model))
+
+    def _lock(self, dfn: str, model: str | None) -> threading.Lock:
+        key = self._key(dfn, model)
+        if key not in self._locks:
+            self._locks[key] = threading.Lock()
+        return self._locks[key]
 
     def _prune(self):
         if self._ttl <= 0:
             return
         now = time.time()
-        to_del: List[str] = []
+        to_del: List[Tuple[str, str]] = []
         for k, v in list(self._store.items()):
             if (now - v.updated_at) > self._ttl:
                 to_del.append(k)
@@ -71,12 +81,20 @@ class RagStore:
                 del self._store[k]
             except Exception:
                 pass
+            try:
+                del self._locks[k]
+            except Exception:
+                pass
         # capacity control (LRU-ish by updated_at)
         if len(self._store) > self._capacity:
-            victims = sorted(self._store.values(), key=lambda x: x.updated_at)[: max(0, len(self._store)-self._capacity)]
-            for v in victims:
+            victims = sorted(self._store.items(), key=lambda kv: kv[1].updated_at)[: max(0, len(self._store)-self._capacity)]
+            for key, _ in victims:
                 try:
-                    del self._store[v.dfn]
+                    del self._store[key]
+                except Exception:
+                    pass
+                try:
+                    del self._locks[key]
                 except Exception:
                     pass
 
@@ -115,14 +133,15 @@ class RagStore:
             chunks.extend(window)
         return clean_chunks_remove_duplicates_and_boilerplate(chunks)
 
-    def ensure_index(self, dfn: str, doc_index: DocumentSearchIndex, force: bool = False) -> Dict[str, Any]:
+    def ensure_index(self, dfn: str, doc_index: DocumentSearchIndex, force: bool = False, *, model: str = 'default') -> Dict[str, Any]:
         """Build chunks and BM25 for patient if not present. Always returns manifest."""
         self._prune()
-        with self._lock(dfn):
-            idx = self._store.get(dfn)
+        key = self._key(dfn, model)
+        with self._lock(dfn, model):
+            idx = self._store.get(key)
             if idx is None:
-                idx = _PatientIndex(dfn)
-                self._store[dfn] = idx
+                idx = _PatientIndex(key[0], key[1])
+                self._store[key] = idx
             source_generation = getattr(doc_index, 'generation', None)
             needs_rebuild = force or not idx.chunks or idx.source_generation != source_generation
             if not needs_rebuild and doc_index.is_stale():
@@ -139,11 +158,12 @@ class RagStore:
                 idx.document_manifest = doc_index.manifest()
             return idx.manifest()
 
-    def embed_now(self, dfn: str) -> Dict[str, Any]:
+    def embed_now(self, dfn: str, *, model: str = 'default') -> Dict[str, Any]:
         """Embed existing chunks if Azure OpenAI is configured; no-op otherwise."""
         self._prune()
-        with self._lock(dfn):
-            idx = self._store.get(dfn)
+        key = self._key(dfn, model)
+        with self._lock(dfn, model):
+            idx = self._store.get(key)
             if idx is None or not idx.chunks:
                 return {'error': 'patient not indexed'}
             # If no Azure key, keep lexical-only (skip dev placeholder vectors)
@@ -169,14 +189,15 @@ class RagStore:
 
     # --- Selective embedding helpers ---
 
-    def embed_subset(self, dfn: str, note_ids: Set[str]) -> Dict[str, Any]:
+    def embed_subset(self, dfn: str, note_ids: Set[str], *, model: str = 'default') -> Dict[str, Any]:
         """Embed only chunks whose note_id is in the provided set.
         Creates a zero-vector matrix for others so hybrid search remains aligned.
         No-ops to lexical-only when Azure isn't configured.
         """
         self._prune()
-        with self._lock(dfn):
-            idx = self._store.get(dfn)
+        key = self._key(dfn, model)
+        with self._lock(dfn, model):
+            idx = self._store.get(key)
             if idx is None or not idx.chunks:
                 return {'error': 'patient not indexed'}
             use_azure = bool(os.getenv('AZURE_OPENAI_API_KEY'))
@@ -219,7 +240,7 @@ class RagStore:
                 pass
             return idx.manifest()
 
-    def embed_docs_policy(self, dfn: str, doc_index: DocumentSearchIndex) -> Dict[str, Any]:
+    def embed_docs_policy(self, dfn: str, doc_index: DocumentSearchIndex, *, model: str = 'default') -> Dict[str, Any]:
         """Embed per policy:
         - First 100 most recent Progress Notes
         - All Discharge Summaries, Consults, and Radiology documents
@@ -238,7 +259,7 @@ class RagStore:
             if note_id:
                 note_candidates.append((note_id, doc_class, doc_type, date))
         if not note_candidates:
-            return self.status(dfn)
+            return self.status(dfn, model=model)
         progress: List[Tuple[str, str]] = []
         others: Set[str] = set()
         for note_id, doc_class, doc_type, date in note_candidates:
@@ -258,37 +279,39 @@ class RagStore:
         top_prog = [nid for _, nid in progress[:100]]
         selection = set(top_prog) | others
         if not selection:
-            return self.status(dfn)
-        return self.embed_subset(dfn, selection)
+            return self.status(dfn, model=model)
+        return self.embed_subset(dfn, selection, model=model)
 
-    def retrieve(self, dfn: str, query: str, top_k: int = 12) -> List[Dict[str, Any]]:
+    def retrieve(self, dfn: str, query: str, top_k: int = 12, *, model: str = 'default') -> List[Dict[str, Any]]:
         self._prune()
-        idx = self._store.get(dfn)
+        idx = self._store.get(self._key(dfn, model))
         if idx is None or not idx.chunks:
             return []
         return hybrid_search(query, idx.chunks, idx.vectors, bm25_index=idx.bm25, top_k=top_k)
 
-    def status(self, dfn: str) -> Dict[str, Any]:
+    def status(self, dfn: str, *, model: str = 'default') -> Dict[str, Any]:
         self._prune()
-        idx = self._store.get(dfn)
+        key = self._key(dfn, model)
+        idx = self._store.get(key)
         if idx is None:
-            return {'dfn': dfn, 'indexed': False}
+            return {'dfn': key[0], 'model': key[1], 'indexed': False}
         m = idx.manifest()
         m['indexed'] = True
         return m
 
     # --- Ingestion of raw note texts (fallback path) ---
-    def ingest_texts(self, dfn: str, items: List[Dict[str, Any]]) -> Dict[str, Any]:
+    def ingest_texts(self, dfn: str, items: List[Dict[str, Any]], *, model: str = 'default') -> Dict[str, Any]:
         """Ingest a list of note texts into the patient index.
         items: [{ id: str, text: str, date?: str, title?: str }]
         Rebuilds BM25; vectors are left as-is and will be re-embedded on demand.
         """
         self._prune()
-        with self._lock(dfn):
-            idx = self._store.get(dfn)
+        key = self._key(dfn, model)
+        with self._lock(dfn, model):
+            idx = self._store.get(key)
             if idx is None:
-                idx = _PatientIndex(dfn)
-                self._store[dfn] = idx
+                idx = _PatientIndex(key[0], key[1])
+                self._store[key] = idx
             # Build chunks and append
             from .rag import sliding_window_chunk, remove_boilerplate_phrases
             new_chunks: List[Dict[str, Any]] = []
@@ -318,6 +341,19 @@ class RagStore:
                 idx.generation += 1
                 idx.updated_at = time.time()
             return idx.manifest()
+
+    def clear(self, dfn: str, *, model: str | None = None) -> None:
+        """Remove cached RAG indexes for a patient (optionally scoped to a model)."""
+        keys = [k for k in list(self._store.keys()) if k[0] == str(dfn) and (model is None or k[1] == self._normalize_model(model))]
+        for key in keys:
+            try:
+                del self._store[key]
+            except Exception:
+                pass
+            try:
+                del self._locks[key]
+            except Exception:
+                pass
 
 
 # Singleton store for app

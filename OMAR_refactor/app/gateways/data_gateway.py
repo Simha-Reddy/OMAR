@@ -1,19 +1,21 @@
 from __future__ import annotations
-from typing import Any, Dict, List, Protocol, Tuple, Optional
+
+from typing import Any, Dict, List, Optional, Protocol
+
 
 class DataGateway(Protocol):
     """Abstract interface for patient data reads."""
+
     def get_demographics(self, dfn: str) -> Dict[str, Any]:
         ...
+
     def get_vpr_domain(self, dfn: str, domain: str, params: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
         ...
+
     def get_vpr_fullchart(self, dfn: str, params: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
-        """Return full VPR JSON by omitting the domain filter (large payload).
-        Optional params can include start/stop or other supported flags.
-        """
+        """Return full VPR JSON by omitting the domain filter (large payload)."""
         ...
 
-    # Lab RPC supplemental helpers (ORWCV/ORWOR)
     def get_lab_panels(
         self,
         dfn: str,
@@ -30,18 +32,28 @@ class DataGateway(Protocol):
         ...
 
     def get_document_texts(self, dfn: str, doc_ids: List[str]) -> Dict[str, List[str]]:
-        """Return full text lines for the requested TIU document ids.
-
-        Implementations may use different transport strategies (single VPR call vs.
-        individual TIU RPCs). The return value maps each requested doc id to the
-        corresponding list of text lines. Any ids that cannot be resolved should be
-        omitted from the result.
-        """
+        """Return full text lines for requested TIU document ids."""
         ...
 
-    # Optional: generic RPC for CPRS-style calls (patient search, sensitive check)
-    def call_rpc(self, *, context: str, rpc: str, parameters: Optional[list[dict]] = None, json_result: bool = False, timeout: int = 60) -> Any:  # type: ignore[override]
+    def get_document_index_entries(
+        self,
+        dfn: str,
+        params: Optional[Dict[str, Any]] = None,
+    ) -> List[Dict[str, Any]]:
+        """Return normalized document entries that include hydrated note content when available."""
         ...
+
+    def call_rpc(
+        self,
+        *,
+        context: str,
+        rpc: str,
+        parameters: Optional[list[dict]] = None,
+        json_result: bool = False,
+        timeout: int = 60,
+    ) -> Any:
+        ...
+
 
 class GatewayError(RuntimeError):
     pass

@@ -8,6 +8,7 @@ from dataclasses import dataclass, asdict, field
 from typing import Optional, Dict, Any
 
 from flask import Blueprint, request, jsonify, current_app
+from ...utils.context import merge_context
 from ..providers import get_transcription_provider, TranscriptionResult
 
 bp = Blueprint('scribe_api', __name__)
@@ -319,23 +320,24 @@ def transcript():
         if sid:
             sess = _load_session(sid)
             if not sess:
-                return jsonify({ 'error': 'unknown session_id' }), 404
-            return jsonify({
+                return jsonify(merge_context({ 'error': 'unknown session_id' })), 404
+            payload = {
                 'source': 'session',
                 'session_id': sess.session_id,
                 'patient_id': sess.patient_id,
                 'status': sess.status,
                 'last_seq': sess.last_seq,
                 'transcript': sess.transcript or ''
-            })
+            }
+            return jsonify(merge_context(payload, dfn=sess.patient_id))
         if pid:
             uid = _get_user_id()
             info = _load_ephemeral_transcript(uid, pid)
             # Optional filter by visit_id if provided
             want_vid = (request.args.get('visit_id') or '').strip()
             if want_vid and info.get('visit_id') and info.get('visit_id') != want_vid:
-                return jsonify({ 'error': 'unknown visit_id for this patient' }), 404
-            return jsonify({
+                return jsonify(merge_context({ 'error': 'unknown visit_id for this patient' }, dfn=pid)), 404
+            payload = {
                 'source': 'ephemeral',
                 'patient_id': pid,
                 'session_id': info.get('scribe_session_id') or None,
@@ -343,10 +345,11 @@ def transcript():
                 'status': info.get('scribe_status') or None,
                 'visit_id': info.get('visit_id') or None,
                 'transcript': info.get('transcript') or ''
-            })
-        return jsonify({ 'error': 'session_id or patient_id required' }), 400
+            }
+            return jsonify(merge_context(payload, dfn=pid))
+        return jsonify(merge_context({ 'error': 'session_id or patient_id required' })), 400
     except Exception as e:
-        return jsonify({ 'error': f'failed to load transcript: {e}' }), 500
+        return jsonify(merge_context({ 'error': f'failed to load transcript: {e}' })), 500
 
 
 @bp.route('/stop', methods=['POST'])

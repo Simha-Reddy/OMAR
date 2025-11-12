@@ -3,6 +3,7 @@ import os
 from typing import List, Dict, Any, Optional
 
 from flask import Blueprint, request, jsonify, current_app
+from ...utils.context import merge_context
 
 
 bp = Blueprint('scribe_note', __name__)
@@ -88,7 +89,7 @@ def create_note():
 			temperature = 0.2
 
 		if not user_prompt and not transcript and not current_draft:
-			return jsonify({ 'error': 'Nothing to draft: provide a prompt, transcript, or existing draft.' }), 400
+			return jsonify(merge_context({ 'error': 'Nothing to draft: provide a prompt, transcript, or existing draft.' })), 400
 
 		system_preface = _read_system_preface()
 		# Compose a single user message including the chosen prompt, transcript, and current draft
@@ -118,9 +119,9 @@ def create_note():
 				synthesized.append(f"[Prev Draft]\n{current_draft[:2000]}")
 			reply = "\n\n".join(synthesized) or "[Empty draft]"
 
-		return jsonify({ 'note': reply, 'messages': messages })
+		return jsonify(merge_context({ 'note': reply, 'messages': messages }))
 	except Exception as e:
-		return jsonify({ 'error': f'failed to create note: {e}' }), 500
+		return jsonify(merge_context({ 'error': f'failed to create note: {e}' })), 500
 
 
 @bp.post('/chat_feedback')
@@ -160,6 +161,6 @@ def chat_feedback():
 			last_user = next((m['content'] for m in reversed(norm) if m.get('role') == 'user' and m.get('content')), '')
 			reply = f"[DEV ECHO] {last_user[:2000]}"
 
-		return jsonify({ 'reply': reply })
+		return jsonify(merge_context({ 'reply': reply }))
 	except Exception as e:
-		return jsonify({ 'error': f'chat failed: {e}' }), 500
+		return jsonify(merge_context({ 'error': f'chat failed: {e}' })), 500

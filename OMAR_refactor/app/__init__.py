@@ -162,8 +162,11 @@ def create_app():
         from .query.blueprints.query_api import bp as query_bp
     except Exception:
         query_bp = None
-    # RAG API removed in favor of in-model retrieval via /api/query
-    rag_bp = None
+    # Documents API: document index hydration + embedding endpoints shared across models
+    try:
+        from .query.blueprints.rag_api import bp as documents_bp
+    except Exception:
+        documents_bp = None
     # Scribe API (audio ingestion/transcription)
     try:
         from .scribe.blueprints.scribe_api import bp as scribe_bp
@@ -201,7 +204,35 @@ def create_app():
     app.register_blueprint(patient_bp, url_prefix='/api/patient')
     if query_bp is not None:
         app.register_blueprint(query_bp, url_prefix='/api/query')
-    # rag_bp intentionally not registered
+    if documents_bp is not None:
+        app.register_blueprint(documents_bp, url_prefix='/api/documents')
+        try:
+            app.add_url_rule(
+                '/api/query/index/start',
+                endpoint='documents_index_start_legacy',
+                view_func=app.view_functions['documents_api.start_index'],
+                methods=['POST']
+            )
+            app.add_url_rule(
+                '/api/query/index/embed',
+                endpoint='documents_index_embed_legacy',
+                view_func=app.view_functions['documents_api.embed_index'],
+                methods=['POST']
+            )
+            app.add_url_rule(
+                '/api/query/index/embed-docs',
+                endpoint='documents_index_embed_docs_legacy',
+                view_func=app.view_functions['documents_api.embed_docs'],
+                methods=['POST']
+            )
+            app.add_url_rule(
+                '/api/query/index/status',
+                endpoint='documents_index_status_legacy',
+                view_func=app.view_functions['documents_api.index_status'],
+                methods=['GET']
+            )
+        except Exception:
+            pass
     if scribe_bp is not None:
         app.register_blueprint(scribe_bp, url_prefix='/api/scribe')
     if scribe_note_bp is not None:

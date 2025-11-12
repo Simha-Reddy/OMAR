@@ -17,6 +17,7 @@ except Exception:  # pragma: no cover
 from .data_gateway import DataGateway, GatewayError
 from .vpr_xml_parser import parse_vpr_results_xml
 from ..services.labs_rpc import filter_panels, parse_orwcv_lab, parse_orwor_result
+from ..services.transforms import vpr_to_quick_notes
 
 
 # ---------------------------------------------------------------------------
@@ -251,6 +252,19 @@ def _normalize_domain_item(domain: Optional[str], item: Dict[str, Any]) -> Dict[
     else:
         base = _normalize_telecoms_recursive(base)
     return base
+
+
+def _extract_payload_items(payload: Any) -> List[Dict[str, Any]]:
+    if isinstance(payload, dict):
+        data_block = payload.get("data")
+        if isinstance(data_block, dict) and isinstance(data_block.get("items"), list):
+            return [entry for entry in data_block["items"] if isinstance(entry, dict)]
+        items = payload.get("items")
+        if isinstance(items, list):
+            return [entry for entry in items if isinstance(entry, dict)]
+    if isinstance(payload, list):
+        return [entry for entry in payload if isinstance(entry, dict)]
+    return []
 
 
 def _ensure_xml_lib():
@@ -1116,6 +1130,163 @@ class VistaDualSocketGateway(DataGateway):
             "meta": {"domain": "fullchart", "dfn": str(dfn), "total": len(items)},
             "data": {"items": items, "totalItems": len(items)},
         }
+
+    @staticmethod
+    def _resolve_document_ids(
+        index: int,
+        quick: Dict[str, Any],
+        raw: Optional[Dict[str, Any]],
+    ) -> Tuple[str, Optional[str]]:
+        doc_id: Optional[str] = None
+        rpc_id: Optional[str] = None
+
+        if isinstance(raw, dict):
+            raw_rpc = raw.get("id") or raw.get("localId")
+            if raw_rpc:
+                rpc_id = str(raw_rpc)
+                doc_id = str(raw_rpc)
+            raw_uid = raw.get("uid") or raw.get("uidLong")
+            if raw_uid:
+                doc_id = str(raw_uid)
+
+        if not doc_id:
+            quick_uid = quick.get("uid") or quick.get("uidLong")
+            if quick_uid:
+                doc_id = str(quick_uid)
+
+        if not doc_id and quick.get("id"):
+            doc_id = str(quick.get("id"))
+
+        if not doc_id:
+            doc_id = str(index)
+
+        if rpc_id is not None:
+            rpc_id = str(rpc_id)
+
+        return doc_id, rpc_id
+
+    @staticmethod
+    def _extract_text_from_raw(raw: Optional[Dict[str, Any]]) -> str:
+        if not isinstance(raw, dict):
+            return ""
+
+        text_field = raw.get("text")
+        blocks: List[str] = []
+
+        def _maybe_add(val: Any) -> None:
+            if isinstance(val, str):
+                trimmed = val.strip()
+                if trimmed:
+                    blocks.append(trimmed)
+
+        if isinstance(text_field, list):
+            for block in text_field:
+                if isinstance(block, dict):
+                    for key in ("content", "text", "summary", "value"):
+                        if block.get(key):
+                            _maybe_add(str(block[key]))
+                else:
+                    _maybe_add(block)
+        elif isinstance(text_field, dict):
+            for key in ("content", "text", "summary", "value"):
+                if text_field.get(key):
+                    _maybe_add(str(text_field[key]))
+        else:
+            _maybe_add(text_field)
+
+        if not blocks:
+            for key in ("content", "body", "documentText", "noteText", "clinicalText", "report", "impression"):
+                maybe = raw.get(key)
+                if isinstance(maybe, dict):
+                    for sub_key in ("content", "text"):
+                        if maybe.get(sub_key):
+                            _maybe_add(str(maybe[sub_key]))
+                else:
+                    _maybe_add(maybe)
+
+        return "\n".join(blocks)
+
+    def get_document_index_entries(
+        self,
+        dfn: str,
+        params: Optional[Dict[str, Any]] = None,
+    ) -> List[Dict[str, Any]]:
+        clean_params: Dict[str, Any] = {}
+        for key, value in (params or {}).items():
+            if value is None:
+                continue
+            if str(key).lower() == "text":
+                continue
+            clean_params[str(key)] = value
+
+        payload = self.get_vpr_domain(dfn, "document", params=clean_params or None)
+        quick_items = vpr_to_quick_notes(payload)
+        if not isinstance(quick_items, list):
+            quick_items = []
+        raw_items = _extract_payload_items(payload)
+
+        entries: List[Dict[str, Any]] = []
+        entries_by_doc: Dict[str, Dict[str, Any]] = {}
+        missing_rpc_map: Dict[str, str] = {}
+
+        for idx, quick_entry in enumerate(quick_items):
+            quick_dict = dict(quick_entry) if isinstance(quick_entry, dict) else {}
+            raw_entry = raw_items[idx] if idx < len(raw_items) else None
+            doc_id, rpc_id = self._resolve_document_ids(idx, quick_dict, raw_entry)
+            if doc_id in entries_by_doc:
+                continue
+
+            note_text = self._extract_text_from_raw(raw_entry)
+
+            entry: Dict[str, Any] = {
+                "doc_id": doc_id,
+                "quick": quick_dict,
+                "raw": raw_entry if isinstance(raw_entry, dict) else raw_entry,
+                "text": note_text,
+                "rpc_id": rpc_id,
+            }
+
+            entries.append(entry)
+            entries_by_doc[doc_id] = entry
+
+            if (not note_text) and rpc_id:
+                missing_rpc_map[str(rpc_id)] = doc_id
+
+        if missing_rpc_map:
+            try:
+                rpc_texts = self.get_document_texts(dfn, list(missing_rpc_map.keys()))
+            except GatewayError:
+                rpc_texts = {}
+            for requested_id, lines in (rpc_texts or {}).items():
+                doc_id = missing_rpc_map.get(str(requested_id))
+                if not doc_id:
+                    continue
+                if doc_id not in entries_by_doc:
+                    continue
+                entry = entries_by_doc[doc_id]
+                if isinstance(lines, list):
+                    joined = "\n".join(str(segment) for segment in lines if str(segment).strip())
+                else:
+                    joined = str(lines or "")
+                if joined.strip():
+                    entry["text"] = joined
+
+        def _entry_sort_key(entry: Dict[str, Any]) -> str:
+            quick_block = entry.get("quick")
+            if isinstance(quick_block, dict):
+                date_val = quick_block.get("date") or quick_block.get("referenceDate")
+                if date_val:
+                    return str(date_val)
+            raw_block = entry.get("raw")
+            if isinstance(raw_block, dict):
+                for key in ("date", "dateTime", "referenceDate", "entered", "referenceDateTime"):
+                    candidate = raw_block.get(key)
+                    if candidate:
+                        return str(candidate)
+            return ""
+
+        entries.sort(key=_entry_sort_key, reverse=True)
+        return entries
 
     def get_document_texts(self, dfn: str, doc_ids: List[str]) -> Dict[str, List[str]]:  # type: ignore[override]
         if not doc_ids:

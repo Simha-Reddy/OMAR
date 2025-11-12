@@ -5,6 +5,7 @@ import requests
 from typing import Any, Dict, List, Optional, Tuple
 from .data_gateway import DataGateway, GatewayError
 from ..services.labs_rpc import filter_panels, parse_orwor_result, parse_orwcv_lab
+from ..services.transforms import vpr_to_quick_notes
 
 BASE_URL = os.getenv("VISTA_API_BASE_URL", "https://vista-api-x.vetext.app/api")
 API_KEY = os.getenv("VISTA_API_KEY")
@@ -296,3 +297,121 @@ class VistaApiXGateway(DataGateway):
 
         text = "\n".join(blocks)
         return text.splitlines()
+
+    @staticmethod
+    def _resolve_document_ids(
+        index: int,
+        quick: Dict[str, Any],
+        raw: Optional[Dict[str, Any]],
+    ) -> Tuple[str, Optional[str]]:
+        doc_id = None
+        rpc_id = None
+
+        if isinstance(raw, dict):
+            raw_rpc = raw.get("id") or raw.get("localId")
+            if raw_rpc:
+                rpc_id = str(raw_rpc)
+                doc_id = str(raw_rpc)
+            raw_uid = raw.get("uid") or raw.get("uidLong")
+            if raw_uid:
+                doc_id = str(raw_uid)
+
+        if not doc_id:
+            quick_uid = quick.get("uid") or quick.get("uidLong")
+            if quick_uid:
+                doc_id = str(quick_uid)
+
+        if not doc_id and quick.get("id"):
+            doc_id = str(quick.get("id"))
+
+        if not doc_id:
+            doc_id = str(index)
+
+        if rpc_id is not None:
+            rpc_id = str(rpc_id)
+
+        return doc_id, rpc_id
+
+    def get_document_index_entries(
+        self,
+        dfn: str,
+        params: Optional[Dict[str, Any]] = None,
+    ) -> List[Dict[str, Any]]:
+        payload_params: Dict[str, Any] = {}
+        for key, value in (params or {}).items():
+            if value is None:
+                continue
+            payload_params[str(key)] = value
+        text_requested = any(str(k).lower() == "text" for k in payload_params.keys())
+        if not text_requested:
+            payload_params["text"] = "1"
+
+        vpr_payload = self.get_vpr_domain(dfn, "document", params=payload_params)
+        quick_items = vpr_to_quick_notes(vpr_payload)
+        if not isinstance(quick_items, list):
+            quick_items = []
+        raw_items = self._iter_document_items(vpr_payload)
+
+        entries: List[Dict[str, Any]] = []
+        entries_by_doc: Dict[str, Dict[str, Any]] = {}
+        missing_rpc_map: Dict[str, str] = {}
+
+        for idx, quick_entry in enumerate(quick_items):
+            quick_dict = dict(quick_entry) if isinstance(quick_entry, dict) else {}
+            raw_entry = raw_items[idx] if idx < len(raw_items) else None
+            doc_id, rpc_id = self._resolve_document_ids(idx, quick_dict, raw_entry)
+            if doc_id in entries_by_doc:
+                continue
+
+            lines = self._extract_text_lines(raw_entry) if isinstance(raw_entry, dict) else []
+            text_value = "\n".join(lines) if lines else ""
+
+            entry: Dict[str, Any] = {
+                "doc_id": doc_id,
+                "quick": quick_dict,
+                "raw": raw_entry if isinstance(raw_entry, dict) else raw_entry,
+                "text": text_value,
+                "rpc_id": rpc_id,
+            }
+
+            entries.append(entry)
+            entries_by_doc[doc_id] = entry
+
+            if not text_value and rpc_id:
+                missing_rpc_map[str(rpc_id)] = doc_id
+
+        if missing_rpc_map:
+            try:
+                missing_texts = self.get_document_texts(dfn, list(missing_rpc_map.keys()))
+            except GatewayError:
+                missing_texts = {}
+            for requested_id, lines in (missing_texts or {}).items():
+                doc_id = missing_rpc_map.get(str(requested_id))
+                if not doc_id:
+                    continue
+                if doc_id not in entries_by_doc:
+                    continue
+                entry = entries_by_doc[doc_id]
+                if isinstance(lines, list):
+                    joined = "\n".join(str(segment) for segment in lines if str(segment).strip())
+                else:
+                    joined = str(lines or "")
+                if joined.strip():
+                    entry["text"] = joined
+
+        def _entry_sort_key(entry: Dict[str, Any]) -> str:
+            quick_block = entry.get("quick")
+            if isinstance(quick_block, dict):
+                date_val = quick_block.get("date") or quick_block.get("referenceDate")
+                if date_val:
+                    return str(date_val)
+            raw_block = entry.get("raw")
+            if isinstance(raw_block, dict):
+                for key in ("date", "dateTime", "referenceDate", "entered", "referenceDateTime"):
+                    candidate = raw_block.get(key)
+                    if candidate:
+                        return str(candidate)
+            return ""
+
+        entries.sort(key=_entry_sort_key, reverse=True)
+        return entries

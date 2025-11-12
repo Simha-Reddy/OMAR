@@ -1,21 +1,42 @@
 from __future__ import annotations
-from flask import Blueprint, request, jsonify
+import os
+from typing import Any, Mapping
+from flask import Blueprint, request, jsonify, session as flask_session
 from ...services.patient_service import PatientService
 from ...services.document_search_service import get_or_build_index_for_dfn
-from ...gateways.vista_api_x_gateway import VistaApiXGateway
+from ...gateways.factory import get_gateway
 from ..query_models.default.services.rag_store import store
 
-bp = Blueprint('rag_api', __name__)
+bp = Blueprint('documents_api', __name__)
 
 
 def _get_patient_service() -> PatientService:
-    from flask import session as flask_session
-    import os
-    station = str(flask_session.get('station') or os.getenv('DEFAULT_STATION','500'))
-    duz = str(flask_session.get('duz') or os.getenv('DEFAULT_DUZ','983'))
-    gw = VistaApiXGateway(station=station, duz=duz)
+    station = str(flask_session.get('station') or os.getenv('DEFAULT_STATION', '500'))
+    duz = str(flask_session.get('duz') or os.getenv('DEFAULT_DUZ', '983'))
+    gw = get_gateway(station=station, duz=duz)
     return PatientService(gateway=gw)
 
+
+def _extract_model(data: Mapping[str, Any] | None) -> str:
+    if not data:
+        return 'default'
+    for key in ('model', 'queryModel', 'query_model', 'ragModel'):
+        if not hasattr(data, 'get'):
+            break
+        value = data.get(key)
+        if value is None:
+            continue
+        if isinstance(value, list) and value:
+            candidate = value[0]
+        else:
+            candidate = value
+        if isinstance(candidate, str):
+            candidate = candidate.strip()
+        else:
+            candidate = str(candidate).strip()
+        if candidate:
+            return candidate
+    return 'default'
 
 @bp.post('/index/start')
 def start_index():
@@ -24,13 +45,14 @@ def start_index():
         dfn = (data.get('dfn') or data.get('patientId') or data.get('localId') or '').strip()
         if not dfn:
             return jsonify({'error': 'dfn is required'}), 400
-        st = store.status(dfn)
+        model = _extract_model(data)
+        st = store.status(dfn, model=model)
         svc = _get_patient_service()
         doc_index = get_or_build_index_for_dfn(dfn, gateway=svc.gateway, force=not (st.get('indexed') and int(st.get('chunks', 0)) > 0))
-        manifest = store.ensure_index(dfn, doc_index, force=not (st.get('indexed') and int(st.get('chunks', 0)) > 0))
+        manifest = store.ensure_index(dfn, doc_index, force=not (st.get('indexed') and int(st.get('chunks', 0)) > 0), model=model)
         try:
             if manifest.get('lexical_only', True):
-                store.embed_docs_policy(dfn, doc_index)
+                store.embed_docs_policy(dfn, doc_index, model=model)
         except Exception:
             pass
         return jsonify({'status': 'ok', 'manifest': manifest})
@@ -45,7 +67,8 @@ def embed_index():
         dfn = (data.get('dfn') or data.get('patientId') or data.get('localId') or '').strip()
         if not dfn:
             return jsonify({'error': 'dfn is required'}), 400
-        manifest = store.embed_now(dfn)
+        model = _extract_model(data)
+        manifest = store.embed_now(dfn, model=model)
         if 'error' in manifest:
             return jsonify(manifest), 400
         return jsonify({'status': 'ok', 'manifest': manifest})
@@ -67,10 +90,11 @@ def embed_docs():
         if not isinstance(ids, list) or not ids:
             return jsonify({'error': 'ids is required'}), 400
         ids_set = set(str(x) for x in ids if x is not None)
-        st = store.status(dfn)
+        model = _extract_model(data)
+        st = store.status(dfn, model=model)
         svc = _get_patient_service()
         doc_index = get_or_build_index_for_dfn(dfn, gateway=svc.gateway, force=not (st.get('indexed') and int(st.get('chunks', 0)) > 0))
-        manifest = store.ensure_index(dfn, doc_index, force=not (st.get('indexed') and int(st.get('chunks', 0)) > 0))
+        manifest = store.ensure_index(dfn, doc_index, force=not (st.get('indexed') and int(st.get('chunks', 0)) > 0), model=model)
         if manifest.get('chunks', 0) == 0:
             try:
                 params = { 'id': ','.join(list(ids_set)[:50]) }  # cap batch
@@ -94,10 +118,10 @@ def embed_docs():
                     date = it.get('referenceDateTime') or it.get('dateTime') or it.get('entered') or ''
                     items.append({ 'id': nid, 'text': txt, 'title': title, 'date': date })
                 if items:
-                    store.ingest_texts(dfn, items)
+                    store.ingest_texts(dfn, items, model=model)
             except Exception:
                 pass
-        manifest = store.embed_subset(dfn, ids_set)
+        manifest = store.embed_subset(dfn, ids_set, model=model)
         if 'error' in manifest:
             return jsonify(manifest), 400
         return jsonify({'status': 'ok', 'manifest': manifest})
@@ -111,7 +135,8 @@ def index_status():
         dfn = (request.args.get('dfn') or request.args.get('patientId') or request.args.get('localId') or '').strip()
         if not dfn:
             return jsonify({'error': 'dfn is required'}), 400
-        st = store.status(dfn)
+        model = _extract_model(request.args)
+        st = store.status(dfn, model=model)
         return jsonify(st)
     except Exception as e:
         return jsonify({'error': str(e)}), 500

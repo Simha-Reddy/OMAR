@@ -224,10 +224,10 @@ class DefaultQueryModelImpl:
             used_rag_store = False
             if doc_index is not None:
                 try:
-                    manifest = rag_store.ensure_index(str(dfn), doc_index)
+                    manifest = rag_store.ensure_index(str(dfn), doc_index, model=self.model_id)
                     try:
                         if manifest.get('lexical_only', True):
-                            rag_store.embed_docs_policy(str(dfn), doc_index)
+                            rag_store.embed_docs_policy(str(dfn), doc_index, model=self.model_id)
                     except Exception:
                         pass
                     if mode != 'summary':
@@ -240,7 +240,7 @@ class DefaultQueryModelImpl:
                     K_PER = 12
                     for rq in rewrites:
                         try:
-                            res = rag_store.retrieve(str(dfn), rq, top_k=K_PER)
+                            res = rag_store.retrieve(str(dfn), rq, top_k=K_PER, model=self.model_id)
                             if res:
                                 runs.append(res)
                         except Exception:
@@ -678,13 +678,13 @@ class DefaultQueryModelImpl:
             doc_index = None
         if doc_index is not None:
             try:
-                manifest = rag_store.ensure_index(str(dfn), doc_index)
+                manifest = rag_store.ensure_index(str(dfn), doc_index, model=self.model_id)
                 try:
                     if manifest.get('lexical_only', True):
-                        rag_store.embed_docs_policy(str(dfn), doc_index)
+                        rag_store.embed_docs_policy(str(dfn), doc_index, model=self.model_id)
                 except Exception:
                     pass
-                top_chunks = rag_store.retrieve(str(dfn), query, top_k=12) or []
+                top_chunks = rag_store.retrieve(str(dfn), query, top_k=12, model=self.model_id) or []
                 used_rag_store = True
             except Exception:
                 used_rag_store = False

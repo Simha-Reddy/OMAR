@@ -181,7 +181,12 @@
       const header='| Date | Test | Result | Units | Abn |\n|---|---|---|---|---|';
       const rows=arr.map(r=>{
         const date=String(normDate(r)).slice(0,10);
-        const test=r.test||r.localName||r.name||r.display||r.code||r.loinc||'';
+        const specimenRaw = r ? (r.specimen ?? r.specimenType ?? r.sample ?? r.source ?? r.bodySite ?? null) : null;
+        let specimen='';
+        if(typeof specimenRaw === 'string') specimen = specimenRaw;
+        else if(specimenRaw && typeof specimenRaw === 'object') specimen = specimenRaw.name || specimenRaw.display || specimenRaw.text || specimenRaw.code || '';
+        const baseTest=r.test||r.localName||r.name||r.display||r.code||r.loinc||'';
+        const test = specimen ? `${baseTest} (${specimen})` : baseTest;
         let result=''; if(r.result!=null) result=String(r.result); else if(r.value!=null) result=String(r.value);
         const units=r.units||r.unit||'';
         const abn = (r.flag||r.interpretation||r.abnormal)? String(r.flag||r.interpretation||(r.abnormal?'abn':'')) : '';
@@ -415,7 +420,7 @@
         if(since && !start) start = since; if(start) qs.set('start', start); if(end) qs.set('end', end);
         if(allParam!=null) qs.set('all', String(allParam));
   const j = await apiQuick('labs', Object.fromEntries(qs));
-        let labs = Array.isArray(j) ? j : (j?.labs || j?.items || []);
+  let labs = Array.isArray(j) ? j : (Array.isArray(j?.result) ? j.result : (j?.result && Array.isArray(j.result.items) ? j.result.items : (j?.labs || j?.items || [])));
         // If mode is 'last', select the latest per test key
         if (mode === 'last'){
           const normDate=(r)=> (r && (r.resulted||r.collected||r.date||'')) || '';
