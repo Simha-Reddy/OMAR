@@ -225,13 +225,21 @@ class VistaApiXGateway(DataGateway):
         if not isinstance(vpr_payload, dict):
             return []
         collection: List[Any] = []
-        data = vpr_payload.get("data")
-        if isinstance(data, dict) and isinstance(data.get("items"), list):
-            collection = list(data["items"])
-        else:
-            top_items = vpr_payload.get("items")
-            if isinstance(top_items, list):
-                collection = list(top_items)
+        payload_block = vpr_payload.get("payload")
+        if isinstance(payload_block, dict):
+            payload_data = payload_block.get("data")
+            if isinstance(payload_data, dict) and isinstance(payload_data.get("items"), list):
+                collection = list(payload_data["items"])
+            elif isinstance(payload_block.get("items"), list):
+                collection = list(payload_block["items"])
+        if not collection:
+            data = vpr_payload.get("data")
+            if isinstance(data, dict) and isinstance(data.get("items"), list):
+                collection = list(data["items"])
+            else:
+                top_items = vpr_payload.get("items")
+                if isinstance(top_items, list):
+                    collection = list(top_items)
         return [item for item in collection if isinstance(item, dict)]
 
     @staticmethod
@@ -341,10 +349,9 @@ class VistaApiXGateway(DataGateway):
         for key, value in (params or {}).items():
             if value is None:
                 continue
+            if str(key).lower() == "text":
+                continue
             payload_params[str(key)] = value
-        text_requested = any(str(k).lower() == "text" for k in payload_params.keys())
-        if not text_requested:
-            payload_params["text"] = "1"
 
         vpr_payload = self.get_vpr_domain(dfn, "document", params=payload_params)
         quick_items = vpr_to_quick_notes(vpr_payload)

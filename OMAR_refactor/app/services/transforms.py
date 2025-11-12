@@ -298,6 +298,21 @@ def _parse_any_datetime_to_iso(val: Any) -> Optional[str]:
     return None
 
 
+def _iso_to_mmddyyyy(val: Optional[str]) -> Optional[str]:
+    if not val:
+        return None
+    try:
+        text = str(val).strip()
+        if not text:
+            return None
+        if text.endswith('Z'):
+            text = text[:-1] + '+00:00'
+        dt_obj = dt.datetime.fromisoformat(text)
+        return dt_obj.strftime('%m/%d/%Y')
+    except Exception:
+        return None
+
+
 def to_fileman_datetime(val: Any) -> Optional[str]:
     """Convert common date/time representations to FileMan date/time string.
     Accepted inputs:
@@ -586,38 +601,112 @@ def vpr_to_quick_vitals(vpr_payload: Any) -> List[Dict[str, Any]]:
     for it in items:
         if not isinstance(it, dict):
             continue
-        vt_raw = (
-            it.get('typeCode')
-            or it.get('type')
-            or it.get('typeName')
-            or it.get('vitalType')
-            or it.get('name')
-            or ''
+        def _measurement_entries(container: Dict[str, Any]) -> List[Dict[str, Any]]:
+            entries: List[Dict[str, Any]] = []
+            block = container.get('measurements')
+            if isinstance(block, dict):
+                candidates = (
+                    block.get('measurement')
+                    or block.get('measurements')
+                    or block.get('items')
+                    or block.get('value')
+                )
+                if isinstance(candidates, list):
+                    entries.extend([c for c in candidates if isinstance(c, dict)])
+            elif isinstance(block, list):
+                entries.extend([c for c in block if isinstance(c, dict)])
+            single = container.get('measurement')
+            if isinstance(single, dict):
+                entries.append(single)
+            elif isinstance(single, list):
+                entries.extend([c for c in single if isinstance(c, dict)])
+            if not entries:
+                entries.append(container)
+            return entries
+
+        parent_location = it.get('location') or it.get('facility')
+        parent_dt_val = (
+            it.get('observed')
+            or it.get('observationDateTime')
+            or it.get('dateTime')
+            or it.get('taken')
+            or it.get('when')
+            or it.get('entered')
         )
-        code = _normalize_vital_code(vt_raw)
-        display = None
-        default_unit = None
-        if code and code in _VITAL_TYPE_MAP:
-            display, default_unit = _VITAL_TYPE_MAP[code]
-        if not display:
-            display = (it.get('typeName') or it.get('name') or vt_raw or '').strip() or code or ''
-        val = it.get('result') or it.get('value') or it.get('measurement') or ''
-        units = _sanitize_vital_unit(it.get('units') or it.get('unit'), val)
-        if not units:
-            units = default_unit
-        dt_val = it.get('observed') or it.get('dateTime') or it.get('taken')
-        dt_iso = _parse_any_datetime_to_iso(dt_val)
-        record: Dict[str, Any] = {
-            'type': display,
-            'value': val,
-            'units': units,
-            'takenDate': dt_iso,
-        }
-        if code:
-            record['code'] = code
-        if it.get('location'):
-            record['location'] = it.get('location')
-        out.append(record)
+        parent_dt_iso = _parse_any_datetime_to_iso(parent_dt_val)
+
+        for entry in _measurement_entries(it):
+            if not isinstance(entry, dict):
+                continue
+            vt_raw = (
+                entry.get('typeCode')
+                or entry.get('type')
+                or entry.get('typeName')
+                or entry.get('vitalType')
+                or entry.get('name')
+                or entry.get('label')
+                or it.get('typeCode')
+                or it.get('type')
+                or it.get('name')
+                or ''
+            )
+            val = (
+                entry.get('result')
+                or entry.get('value')
+                or entry.get('measurement')
+                or entry.get('reading')
+                or ''
+            )
+            # Skip entries with no identifying type and no value
+            if not str(vt_raw).strip() and not str(val).strip():
+                continue
+
+            code = _normalize_vital_code(vt_raw)
+            display = None
+            default_unit = None
+            if code and code in _VITAL_TYPE_MAP:
+                display, default_unit = _VITAL_TYPE_MAP[code]
+            if not display:
+                display = (
+                    entry.get('typeName')
+                    or entry.get('name')
+                    or entry.get('label')
+                    or str(vt_raw)
+                    or code
+                    or ''
+                ).strip()
+
+            units_raw = entry.get('units') or entry.get('unit') or entry.get('ucumUnits')
+            units = _sanitize_vital_unit(units_raw, val)
+            if not units and isinstance(units_raw, str) and units_raw.strip():
+                units = units_raw.strip()
+            if not units:
+                units = default_unit
+
+            dt_val = (
+                entry.get('observed')
+                or entry.get('observationDateTime')
+                or entry.get('dateTime')
+                or entry.get('taken')
+                or parent_dt_val
+            )
+            dt_iso = _parse_any_datetime_to_iso(dt_val) or parent_dt_iso
+
+            record: Dict[str, Any] = {
+                'type': display,
+                'value': val,
+                'units': units,
+                'takenDate': dt_iso,
+            }
+            if code:
+                record['code'] = code
+            location = entry.get('location') or parent_location
+            if location:
+                record['location'] = location
+            measurement_id = entry.get('id') or entry.get('measurementId')
+            if measurement_id is not None:
+                record['measurementId'] = str(measurement_id)
+            out.append(record)
     return out
 
 
@@ -639,7 +728,10 @@ def vpr_to_quick_notes(vpr_payload: Any) -> List[Dict[str, Any]]:
         # National title is nested under nationalTitle.title when present
         try:
             nt = it.get('nationalTitle') or {}
-            national_title = (nt.get('title') if isinstance(nt, dict) else None) or None
+            # Some feeds use 'name' instead of 'title'
+            national_title = None
+            if isinstance(nt, dict):
+                national_title = nt.get('title') or nt.get('name') or None
         except Exception:
             national_title = None
         status = it.get('statusName') or it.get('status') or None
@@ -647,8 +739,131 @@ def vpr_to_quick_notes(vpr_payload: Any) -> List[Dict[str, Any]]:
         date = it.get('referenceDateTime') or it.get('dateTime') or it.get('entered')
         date_iso = _parse_any_datetime_to_iso(date)
         facility = it.get('facilityName') or None
+        if not facility:
+            try:
+                fac_obj = it.get('facility')
+                if isinstance(fac_obj, dict):
+                    facility = fac_obj.get('name') or fac_obj.get('displayName') or fac_obj.get('value') or None
+            except Exception:
+                facility = facility
         encounter_name = it.get('encounterName') or None
-        author = it.get('authorDisplayName') or it.get('clinician') or None
+        if not encounter_name:
+            try:
+                enc_obj = it.get('encounter')
+                if isinstance(enc_obj, dict):
+                    encounter_name = enc_obj.get('name') or enc_obj.get('displayName') or enc_obj.get('value') or None
+            except Exception:
+                encounter_name = encounter_name
+
+        def _coerce_author_name(source: Any) -> Optional[str]:
+            if source is None:
+                return None
+            if isinstance(source, dict):
+                for key in ('displayName', 'name', 'text', 'value'):
+                    val = source.get(key)
+                    if isinstance(val, str) and val.strip():
+                        return val.strip()
+                # fall back to joined string if dict has string repr only
+                try:
+                    # some payloads embed the name under nested 'author' dict
+                    nested = source.get('author') if isinstance(source.get('author'), dict) else None
+                    if nested:
+                        return _coerce_author_name(nested)
+                except Exception:
+                    pass
+                return None
+            if isinstance(source, list):
+                for entry in source:
+                    name = _coerce_author_name(entry)
+                    if name:
+                        return name
+                return None
+            if isinstance(source, str):
+                s = source.strip()
+                return s or None
+            try:
+                s = str(source).strip()
+                return s or None
+            except Exception:
+                return None
+
+        author_obj = it.get('author') if isinstance(it, dict) else None
+        clinicians = None
+        def _normalize_clinicians(value: Any) -> Optional[List[Dict[str, Any]]]:
+            if isinstance(value, list):
+                return [c for c in value if isinstance(c, dict)] or None
+            if isinstance(value, dict):
+                if 'clinician' in value and isinstance(value['clinician'], list):
+                    return [c for c in value['clinician'] if isinstance(c, dict)] or None
+                if 'provider' in value and isinstance(value['provider'], list):
+                    return [c for c in value['provider'] if isinstance(c, dict)] or None
+                return [value] if value else None
+            return None
+
+        try:
+            clinicians = _normalize_clinicians(it.get('clinicians') or it.get('providers'))
+        except Exception:
+            clinicians = None
+        # Some VPR feeds embed clinician/author info inside the first text block
+        # (e.g., items[].text = [ { 'clinicians': [...], 'content': '...' } ]).
+        # If top-level clinicians/providers are not present, try to extract from
+        # nested text blocks so author/provider fields get propagated.
+        if not clinicians:
+            try:
+                text_blocks = it.get('text') if isinstance(it, dict) else None
+                if isinstance(text_blocks, list):
+                    for blk in text_blocks:
+                        if isinstance(blk, dict):
+                            maybe = _normalize_clinicians(blk.get('clinicians') or blk.get('providers'))
+                            if maybe:
+                                clinicians = maybe
+                                break
+            except Exception:
+                clinicians = clinicians
+        author_record = None
+        if isinstance(clinicians, list):
+            for c in clinicians:
+                if not isinstance(c, dict):
+                    continue
+                role = str(c.get('role') or '').strip().upper()
+                if role == 'A':
+                    author_record = c
+                    break
+            if author_record is None:
+                author_record = next((c for c in clinicians if isinstance(c, dict)), None)
+
+        author = (
+            _coerce_author_name(it.get('authorDisplayName'))
+            or _coerce_author_name(it.get('clinician'))
+            or _coerce_author_name(author_record.get('name') if isinstance(author_record, dict) else None)
+            or _coerce_author_name(it.get('authorName'))
+            or _coerce_author_name(author_obj)
+        )
+
+        if isinstance(author_obj, dict):
+            if not author:
+                author = _coerce_author_name(author_obj)
+            provider_type = author_obj.get('providerType') or author_obj.get('type') or None
+            provider_class = author_obj.get('classification') or author_obj.get('specialization') or None
+        else:
+            provider_type = None
+            provider_class = None
+
+        # When clinician record present, prefer its metadata but keep existing values as fallback
+        if isinstance(author_record, dict):
+            provider_type = provider_type or author_record.get('providerType') or author_record.get('type') or author_record.get('service') or None
+            provider_class = provider_class or author_record.get('classification') or author_record.get('specialization') or None
+
+        # If author arrived as dict on the item itself, preserve it for potential client needs
+        if isinstance(author_obj, dict) and author:
+            author_obj = dict(author_obj)
+            author_obj['name'] = author  # ensure name key aligns with display
+        else:
+            author_obj = None
+
+        # TIU identifiers needed for downstream viewers/text fetches
+        local_id = it.get('localId') or it.get('id') or None
+        uid = it.get('uid') or None
         obj: Dict[str, Any] = {
             'title': title,
             'status': status,
@@ -666,6 +881,24 @@ def vpr_to_quick_notes(vpr_payload: Any) -> List[Dict[str, Any]]:
             obj['encounterName'] = encounter_name
         if author:
             obj['author'] = author
+        if author_obj:
+            obj['_author'] = author_obj
+        if provider_type:
+            pt = str(provider_type).strip()
+            if pt:
+                obj['authorProviderType'] = pt
+        if provider_class:
+            pc = str(provider_class).strip()
+            if pc:
+                obj['authorClassification'] = pc
+        if local_id is not None:
+            lid = str(local_id).strip()
+            if lid:
+                obj['docId'] = lid
+        if uid is not None:
+            uid_val = str(uid).strip()
+            if uid_val:
+                obj['uid'] = uid_val
         out.append(obj)
     return out
 
@@ -797,18 +1030,76 @@ def vpr_to_quick_problems(vpr_payload: Any) -> List[Dict[str, Any]]:
             or it.get('problem')
             or ''
         )
-        status = it.get('statusName') or it.get('status') or it.get('clinicalStatus') or None
+        status_code = None
+        status_val = it.get('statusName')
+        if isinstance(status_val, dict):
+            status_code = status_val.get('code') or status_val.get('value')
+        else:
+            status_code = it.get('statusCode') or status_code
+        if not status_val:
+            status_val = it.get('status')
+        if isinstance(status_val, dict):
+            status_code = status_code or status_val.get('code') or status_val.get('value')
+            status_val = (
+                status_val.get('name')
+                or status_val.get('displayName')
+                or status_val.get('text')
+                or status_val.get('status')
+            )
+        if not status_val:
+            status_val = it.get('clinicalStatus')
+        clinical_status = it.get('clinicalStatus')
+        if isinstance(clinical_status, dict):
+            clinical_status = (
+                clinical_status.get('name')
+                or clinical_status.get('displayName')
+                or clinical_status.get('text')
+            )
+        if isinstance(status_val, dict):
+            status_val = (
+                status_val.get('name')
+                or status_val.get('displayName')
+                or status_val.get('text')
+                or status_val.get('status')
+            )
+        if status_val is None:
+            status_val = ''
+        status = str(status_val).strip() or None
+        status_code_out = None
+        if status_code is not None:
+            status_code_out = str(status_code).strip() or None
+        clinical_status_out = None
+        if clinical_status is not None:
+            clinical_status_out = str(clinical_status).strip() or None
         onset = it.get('onset') or it.get('dateOfOnset') or it.get('entered')
         resolved = it.get('resolved') or it.get('dateResolved')
         icd = it.get('icdCode') or it.get('icd') or None
         snomed = it.get('snomedCode') or it.get('sctid') or None
+        problem_text = str(problem or '').strip()
+        problem_clean = problem_text
+        extracted_snomed = None
+        if '(SCT' in problem_clean:
+            idx = problem_clean.find('(SCT')
+            tail = problem_clean[idx:]
+            problem_clean = problem_clean[:idx].rstrip(' -')
+            code_parts = tail.split()
+            if len(code_parts) >= 2:
+                extracted = ''.join(ch for ch in code_parts[1] if ch.isdigit())
+                if extracted:
+                    extracted_snomed = extracted
+        onset_iso = _parse_any_datetime_to_iso(onset)
+        onset_display = _iso_to_mmddyyyy(onset_iso)
+        resolved_iso = _parse_any_datetime_to_iso(resolved)
+        resolved_display = _iso_to_mmddyyyy(resolved_iso)
         out.append({
-            'problem': problem,
+            'problem': problem_clean,
             'status': status,
-            'onsetDate': _parse_any_datetime_to_iso(onset),
-            'resolvedDate': _parse_any_datetime_to_iso(resolved),
+            'statusCode': status_code_out,
+            'clinicalStatus': clinical_status_out,
+            'onsetDate': onset_display or onset_iso,
+            'resolvedDate': resolved_display or resolved_iso,
             'icdCode': icd,
-            'snomedCode': snomed,
+            'snomedCode': extracted_snomed or snomed,
         })
     return out
 

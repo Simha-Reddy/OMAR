@@ -1,7 +1,7 @@
 (function(){
   window.WorkspaceModules = window.WorkspaceModules || {};
   const MODULE_NAME = 'Documents';
-  const DOCUMENT_COLUMNS = ['date','title','author','encounter','national'];
+  const DOCUMENT_COLUMNS = ['date','title','author','providerType','classification','encounter'];
 
   function ensureSharedStyles(){
     const id = 'workspace-shared-detail-styles';
@@ -178,7 +178,14 @@
       const date = it.date || it.referenceDateTime || it.entered || it.dateTime || '';
       const author = it.author || it.authorDisplayName || it.authorName || it.provider || it.providerName || '';
       const encounter = it.encounter || it.visit || it.location || '';
-  const nationalTitle = it.nationalTitle || it.normalTitle || it.standardTitle || '';
+      let providerType = it.authorProviderType || it.providerType || '';
+      let classification = it.authorClassification || it.providerClassification || '';
+      if (!providerType && it.author && typeof it.author === 'object'){
+        providerType = it.author.providerType || providerType;
+      }
+      if (!classification && it.author && typeof it.author === 'object'){
+        classification = it.author.classification || it.author.specialization || classification;
+      }
       const facility = it.facility || '';
       const dtype = it.documentType || it.type || '';
       const docId = it.docId || it.doc_id || '';
@@ -195,8 +202,9 @@
           ${snippet}
         </td>
         <td class="doc-cell doc-author">${escapeHtml(author)}</td>
+        <td class="doc-cell doc-provider-type">${escapeHtml(providerType)}</td>
+        <td class="doc-cell doc-provider-class">${escapeHtml(classification)}</td>
         <td class="doc-cell doc-encounter">${escapeHtml(encounter)}</td>
-  <td class="doc-cell doc-national">${escapeHtml(nationalTitle)}</td>
       </tr>`;
     };
 
@@ -205,8 +213,9 @@
       + '<th data-col-key="date">Date</th>'
       + '<th data-col-key="title">Title</th>'
       + '<th data-col-key="author">Author</th>'
+      + '<th data-col-key="providerType">Provider Type</th>'
+      + '<th data-col-key="classification">Classification</th>'
       + '<th data-col-key="encounter">Encounter</th>'
-  + '<th data-col-key="national">National Title</th>'
       + '</tr></thead>';
     html += '<tbody>';
     if (group){

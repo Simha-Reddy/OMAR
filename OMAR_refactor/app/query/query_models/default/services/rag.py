@@ -320,13 +320,24 @@ class RagEngine:
         return ''
 
     def build_chunks_from_vpr_documents(self, vpr_payload: Any) -> List[Dict[str, Any]]:
-        items = []
+        items: List[Dict[str, Any]] = []
         try:
             if isinstance(vpr_payload, dict):
-                d = vpr_payload.get('data') or {}
-                items = (d.get('items') if isinstance(d, dict) else None) or vpr_payload.get('items') or []
+                payload_block = vpr_payload.get('payload')
+                if isinstance(payload_block, dict):
+                    data_block = payload_block.get('data')
+                    if isinstance(data_block, dict) and isinstance(data_block.get('items'), list):
+                        items = list(data_block['items'])  # type: ignore[arg-type]
+                    elif isinstance(payload_block.get('items'), list):
+                        items = list(payload_block['items'])  # type: ignore[arg-type]
+                if not items:
+                    d = vpr_payload.get('data') or {}
+                    if isinstance(d, dict) and isinstance(d.get('items'), list):
+                        items = list(d['items'])  # type: ignore[arg-type]
+                    elif isinstance(vpr_payload.get('items'), list):
+                        items = list(vpr_payload['items'])  # type: ignore[arg-type]
             elif isinstance(vpr_payload, list):
-                items = vpr_payload
+                items = list(vpr_payload)
         except Exception:
             items = []
         all_chunks: List[Dict[str, Any]] = []

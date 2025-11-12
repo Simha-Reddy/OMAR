@@ -294,11 +294,26 @@ class DocumentSearchIndex:
                 missing_doc_ids.discard(doc_id)
 
             title = str(quick.get('title') or '')
-            author = str(quick.get('author') or '')
+            author_value = quick.get('author')
+            if isinstance(author_value, dict):
+                author_value = author_value.get('name') or author_value.get('displayName') or author_value.get('text')
+            author = str(author_value or '')
             dtype = str(quick.get('documentType') or '')
             dclass = str(quick.get('documentClass') or '')
             date = str(quick.get('date') or quick.get('referenceDate') or '')
             nt = str(quick.get('nationalTitle') or '')
+
+            provider_value = quick.get('authorProviderType')
+            if isinstance(provider_value, dict):
+                provider_value = provider_value.get('name') or provider_value.get('value')
+            author_provider_type = str(provider_value or '')
+
+            classification_value = quick.get('authorClassification')
+            if isinstance(classification_value, dict):
+                classification_value = classification_value.get('name') or classification_value.get('value')
+            author_classification = str(classification_value or '')
+            encounter_name = str(quick.get('encounterName') or quick.get('encounter') or '')
+            facility_name = str(quick.get('facility') or '')
 
             meta_entry: Dict[str, Any] = {
                 'title': title,
@@ -309,6 +324,15 @@ class DocumentSearchIndex:
                 'nationalTitle': nt,
             }
 
+            if author_provider_type:
+                meta_entry['authorProviderType'] = author_provider_type
+            if author_classification:
+                meta_entry['authorClassification'] = author_classification
+            if encounter_name:
+                meta_entry['encounterName'] = encounter_name
+            if facility_name:
+                meta_entry['facility'] = facility_name
+
             if isinstance(raw, dict):
                 if raw.get('uid'):
                     meta_entry['uid'] = str(raw.get('uid'))
@@ -318,6 +342,17 @@ class DocumentSearchIndex:
                     meta_entry['localTitle'] = str(raw.get('localTitle'))
                 elif raw.get('localName'):
                     meta_entry['localTitle'] = str(raw.get('localName'))
+                if not meta_entry.get('encounterName'):
+                    enc = raw.get('encounterName') or raw.get('encounter')
+                    try:
+                        if isinstance(enc, dict):
+                            enc_val = enc.get('name') or enc.get('displayName') or enc.get('value')
+                        else:
+                            enc_val = enc
+                        if enc_val:
+                            meta_entry['encounterName'] = str(enc_val)
+                    except Exception:
+                        pass
                 fac_obj = raw.get('facility') if isinstance(raw.get('facility'), dict) else None
                 if isinstance(fac_obj, dict):
                     try:
@@ -326,7 +361,7 @@ class DocumentSearchIndex:
                             meta_entry['facility'] = str(fac_name)
                     except Exception:
                         pass
-                elif raw.get('facilityName'):
+                elif raw.get('facilityName') and not meta_entry.get('facility'):
                     meta_entry['facility'] = str(raw.get('facilityName'))
                 nt_obj = raw.get('nationalTitle') if isinstance(raw.get('nationalTitle'), dict) else None
                 if isinstance(nt_obj, dict):
@@ -349,11 +384,41 @@ class DocumentSearchIndex:
                             meta_entry[k] = str(name_val)
                     else:
                         meta_entry[k] = str(sub)
-                if raw.get('clinicians'):
+                clinician_block = raw.get('clinicians')
+                if clinician_block:
                     try:
-                        meta_entry['clinicians'] = raw.get('clinicians')
+                        meta_entry.setdefault('clinicians', clinician_block)
                     except Exception:
                         pass
+                    provider_type = meta_entry.get('authorProviderType')
+                    classification = meta_entry.get('authorClassification')
+                    if not (provider_type and classification):
+                        try:
+                            normalized = clinician_block
+                            if isinstance(normalized, dict) and 'clinician' in normalized:
+                                normalized = normalized.get('clinician')
+                            if isinstance(normalized, list):
+                                for record in normalized:
+                                    if not isinstance(record, dict):
+                                        continue
+                                    role = str(record.get('role') or '').strip().upper()
+                                    # Favor author role when multiple entries exist
+                                    if role and role != 'A' and (provider_type and classification):
+                                        continue
+                                    if not provider_type:
+                                        value = record.get('providerType') or record.get('type')
+                                        if value:
+                                            provider_type = str(value)
+                                            meta_entry['authorProviderType'] = provider_type
+                                    if not classification:
+                                        value = record.get('classification') or record.get('specialization')
+                                        if value:
+                                            classification = str(value)
+                                            meta_entry['authorClassification'] = classification
+                                    if provider_type and classification:
+                                        break
+                        except Exception:
+                            pass
 
             if rpc_id:
                 meta_entry['rpc_id'] = rpc_id

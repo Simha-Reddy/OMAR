@@ -52,12 +52,21 @@ function toQuery(params) {
   return s ? ('?' + s) : '';
 }
 
+function unwrapResult(payload) {
+  if (!payload || typeof payload !== 'object') return payload;
+  if (Object.prototype.hasOwnProperty.call(payload, 'result') && Object.prototype.hasOwnProperty.call(payload, 'context')) {
+    return payload.result;
+  }
+  return payload;
+}
+
 async function quick(domain, params) {
   const dfn = requireDFN();
   const q = toQuery(params);
   const res = await fetch(`/api/patient/${encodeURIComponent(dfn)}/quick/${encodeURIComponent(domain)}${q}`, { credentials: 'same-origin' });
   if (!res.ok) throw new Error(`HTTP ${res.status}`);
-  return res.json();
+  const payload = await res.json();
+  return unwrapResult(payload);
 }
 
 async function list(domain, params) {
@@ -65,7 +74,8 @@ async function list(domain, params) {
   const q = toQuery(params);
   const res = await fetch(`/api/patient/${encodeURIComponent(dfn)}/list/${encodeURIComponent(domain)}${q}`, { credentials: 'same-origin' });
   if (!res.ok) throw new Error(`HTTP ${res.status}`);
-  return res.json();
+  const payload = await res.json();
+  return unwrapResult(payload);
 }
 
 async function vpr(domain, params) {
@@ -73,28 +83,36 @@ async function vpr(domain, params) {
   const q = toQuery(params);
   const res = await fetch(`/api/patient/${encodeURIComponent(dfn)}/vpr/${encodeURIComponent(domain)}${q}`, { credentials: 'same-origin' });
   if (!res.ok) throw new Error(`HTTP ${res.status}`);
-  return res.json();
+  const payload = await res.json();
+  return unwrapResult(payload);
 }
 
 async function ask(query, extra = {}) {
   const body = { query, ...extra };
   try { body.patient = Object.assign({}, body.patient || {}, { DFN: requireDFN() }); } catch {}
   const res = await csrfFetch('/api/query/ask', { method: 'POST', body: JSON.stringify(body) });
-  return res.json();
+  const payload = await res.json();
+  return unwrapResult(payload);
 }
 
 async function ragResults(query, extra = {}) {
   const body = { query, ...extra };
   try { body.patient = Object.assign({}, body.patient || {}, { DFN: requireDFN() }); } catch {}
   const res = await csrfFetch('/api/query/rag_results', { method: 'POST', body: JSON.stringify(body) });
-  try { return await res.json(); } catch { return { results: [] }; }
+  try {
+    const payload = await res.json();
+    return unwrapResult(payload);
+  } catch { return { results: [] }; }
 }
 
 async function resetQueryHistory(extra = {}) {
   const body = { patient: { DFN: '' }, ...extra };
   try { body.patient = Object.assign({}, body.patient || {}, { DFN: requireDFN() }); } catch {}
   const res = await csrfFetch('/api/query/reset', { method: 'POST', body: JSON.stringify(body) });
-  try { return await res.json(); } catch { return { status: 'error' }; }
+  try {
+    const payload = await res.json();
+    return unwrapResult(payload);
+  } catch { return { status: 'error' }; }
 }
 
 // Documents helpers
@@ -103,7 +121,8 @@ async function documentsSearch(params) {
   const q = toQuery(params);
   const res = await fetch(`/api/patient/${encodeURIComponent(dfn)}/documents/search${q}`, { credentials: 'same-origin' });
   if (!res.ok) throw new Error(`HTTP ${res.status}`);
-  return res.json();
+  const payload = await res.json();
+  return unwrapResult(payload);
 }
 
 async function documentsTextBatch(ids) {
@@ -111,7 +130,8 @@ async function documentsTextBatch(ids) {
   const body = { ids: Array.isArray(ids) ? ids : [] };
   const res = await csrfFetch(`/api/patient/${encodeURIComponent(dfn)}/documents/text-batch`, { method: 'POST', body: JSON.stringify(body) });
   if (!res.ok) throw new Error(`HTTP ${res.status}`);
-  return res.json();
+  const payload = await res.json();
+  return unwrapResult(payload);
 }
 
 // RAG: embed a specific list of documents for the current patient

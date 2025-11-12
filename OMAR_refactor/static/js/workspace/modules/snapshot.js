@@ -372,7 +372,81 @@
     out.sort((a,b)=> a.d - b.d);
     return out;
   }
-  function renderAllergies(listEl, allergies){ if(!allergies||!allergies.length){ listEl.innerHTML='<li class="vital-empty">No allergies on file</li>'; return; } for(const a of allergies){ const li=document.createElement('li'); li.style.cursor='pointer'; const name=titleCase(a.substance||'Allergy'); const crit=a.criticality? ` (${titleCase(String(a.criticality))})` : ''; li.textContent = name + crit; li.addEventListener('click', (e)=>{ e.stopPropagation(); const rows=[]; const recorded = a.recordedDate || a.enteredDate; if(recorded) rows.push(`Recorded: ${fmtDateOnly(recorded)}`); if(a.onsetDateTime||a.onset) rows.push(`Onset: ${fmtDateOnly(a.onsetDateTime||a.onset)}`); if(a.lastOccurrence) rows.push(`Last Occurrence: ${fmtDate(a.lastOccurrence)}`); if(a.clinicalStatus||a.status) rows.push(`Status: ${a.clinicalStatus||a.status}`); if(a.verificationStatus) rows.push(`Verification: ${a.verificationStatus}`); const cats=((a.category||[]).join(', ')); if(cats) rows.push(`Category: ${cats}`); const rx=(a.reactions||[]).flatMap(r=> (r.manifestations||[])); if(Array.isArray(a.reactions) && a.reactions.length && (!rx||!rx.length)){ rows.push('Reactions: '+a.reactions.join('; ')); } else if(rx&&rx.length){ rows.push('Reactions: '+rx.join('; ')); } togglePopover(li, name, rows); }); listEl.appendChild(li); } }
+  function _collectReactionNames(allergy){
+    const names = [];
+    const push = (value)=>{
+      const text = (value == null ? '' : String(value)).trim();
+      if(!text) return;
+      if(!names.includes(text)) names.push(text);
+    };
+    try{
+      const rawList = Array.isArray(allergy && allergy.reactions) ? allergy.reactions : [];
+      rawList.forEach(entry=>{
+        if(entry == null) return;
+        if(typeof entry === 'string'){
+          push(entry);
+          return;
+        }
+        if(typeof entry === 'object'){
+          push(entry.name || entry.reaction || entry.displayName || entry.text || entry.value);
+          const mans = Array.isArray(entry.manifestations) ? entry.manifestations : [];
+          mans.forEach(m=>{
+            if(m == null) return;
+            if(typeof m === 'string'){ push(m); }
+            else if(typeof m === 'object'){ push(m.name || m.display || m.text || m.reaction); }
+          });
+        }
+      });
+    }catch(_e){}
+    return names;
+  }
+
+  function renderAllergies(listEl, allergies){
+    if(!allergies || !allergies.length){
+      listEl.innerHTML = '<li class="vital-empty">No allergies on file</li>';
+      return;
+    }
+    listEl.innerHTML = '';
+    for(const a of allergies){
+      const li = document.createElement('li');
+      li.style.cursor = 'pointer';
+      const name = titleCase(a.substance || 'Allergy');
+      const crit = a.criticality ? ` (${titleCase(String(a.criticality))})` : '';
+
+      const titleSpan = document.createElement('span');
+      titleSpan.textContent = name + crit;
+      titleSpan.style.fontWeight = '600';
+      li.appendChild(titleSpan);
+
+      const reactionNames = _collectReactionNames(a);
+      if(reactionNames.length){
+        const reactionsSpan = document.createElement('span');
+        reactionsSpan.textContent = ' — ' + reactionNames.join(', ');
+        reactionsSpan.style.marginLeft = '6px';
+        reactionsSpan.style.color = '#6b7280';
+        reactionsSpan.style.fontSize = '0.85em';
+        li.appendChild(reactionsSpan);
+      }
+
+      li.addEventListener('click', (e)=>{
+        e.stopPropagation();
+        const rows = [];
+        const recorded = a.recordedDate || a.enteredDate;
+        if(recorded) rows.push(`Recorded: ${fmtDateOnly(recorded)}`);
+        if(a.onsetDateTime || a.onset) rows.push(`Onset: ${fmtDateOnly(a.onsetDateTime || a.onset)}`);
+        if(a.lastOccurrence) rows.push(`Last Occurrence: ${fmtDate(a.lastOccurrence)}`);
+        if(a.clinicalStatus || a.status) rows.push(`Status: ${a.clinicalStatus || a.status}`);
+        if(a.verificationStatus) rows.push(`Verification: ${a.verificationStatus}`);
+        const cats = ((a.category || []).join(', '));
+        if(cats) rows.push(`Category: ${cats}`);
+        const reactionsDisplay = reactionNames.length ? reactionNames : _collectReactionNames(a);
+        if(reactionsDisplay.length) rows.push('Reactions: ' + reactionsDisplay.join('; '));
+        togglePopover(li, name, rows);
+      });
+
+      listEl.appendChild(li);
+    }
+  }
   function medStatusBucket(m){ const s=(m.status||'').toLowerCase(); if(s.includes('discont')||s.includes('stopp')) return 'discontinued'; const now=new Date(); if(s.includes('expired')) return 'expired'; if(m.endDate){ const ed=new Date(m.endDate); if(ed && !Number.isNaN(ed) && ed<now) return 'expired'; } if(s.includes('active')) return 'active'; if(s.includes('pending')) return 'pending'; return 'other'; }
 
   function normalizeMedication(m){
@@ -428,7 +502,7 @@
       groups[bucket].push(norm);
     });
 
-    const order = activeOnly ? ['active','pending'] : ['active','pending','expired','discontinued','other'];
+  const order = activeOnly ? ['active'] : ['active','pending','expired','discontinued','other'];
     const recent = [];
     order.forEach(bucket => {
       const arr = groups[bucket] || [];
@@ -460,23 +534,25 @@
       const nameSpan = document.createElement('span');
       nameSpan.textContent = med.name;
       nameSpan.style.fontWeight = '600';
-  nameSpan.style.color = bucket === 'active' ? brandBlue() : 'var(--paper-contrast, #333)';
+      nameSpan.style.color = bucket === 'active' ? brandBlue() : 'var(--paper-contrast, #333)';
       li.appendChild(nameSpan);
 
-      const metaSpan = document.createElement('span');
-      metaSpan.style.marginLeft = '8px';
-      metaSpan.style.color = '#666';
-      metaSpan.style.fontSize = '0.9em';
-      const metaParts = [];
-      metaParts.push(med.statusLabel);
-      if(med.startDate) metaParts.push('Start ' + fmtDateOnly(med.startDate));
-      if(med.endDate) metaParts.push('End ' + fmtDateOnly(med.endDate));
-      if(!med.endDate && med.startDate){
-        const days = Math.round((Date.now() - med.startDate.getTime()) / (1000*60*60*24));
-        if(Number.isFinite(days) && days > 0) metaParts.push(days + ' days ago');
+      if(!activeOnly){
+        const metaSpan = document.createElement('span');
+        metaSpan.style.marginLeft = '8px';
+        metaSpan.style.color = '#666';
+        metaSpan.style.fontSize = '0.9em';
+        const metaParts = [];
+        metaParts.push(med.statusLabel);
+        if(med.startDate) metaParts.push('Start ' + fmtDateOnly(med.startDate));
+        if(med.endDate) metaParts.push('End ' + fmtDateOnly(med.endDate));
+        if(!med.endDate && med.startDate){
+          const days = Math.round((Date.now() - med.startDate.getTime()) / (1000*60*60*24));
+          if(Number.isFinite(days) && days > 0) metaParts.push(days + ' days ago');
+        }
+        metaSpan.textContent = metaParts.join(' - ');
+        li.appendChild(metaSpan);
       }
-      metaSpan.textContent = metaParts.join(' - ');
-      li.appendChild(metaSpan);
 
       li.addEventListener('click', (ev)=>{
         ev.stopPropagation();
@@ -493,7 +569,7 @@
       listEl.appendChild(more);
     }
 
-    return { count: recent.length };
+  return { count: recent.length };
   }
   function isDiabetesProblem(p){ return /diabetes/i.test((p.name||p.problem||'').toString()); }
   async function renderProblems(listEl, problems, meds, opts){
@@ -514,9 +590,10 @@
     for(const p of ordered){
       const li=document.createElement('li');
       li.style.cursor='pointer';
-      const name=titleCase(stripParenCodes(p.name||p.problem||'Problem'));
       const sTxt=(p.status||'').toString().toLowerCase();
       const isAct = sTxt.includes('active') && !sTxt.includes('inactive') && !sTxt.includes('resolved');
+      const baseName = (p && (p.problem || p.name)) ? String(p.problem || p.name) : 'Problem';
+      const name = isAct ? baseName : titleCase(stripParenCodes(baseName));
       const status = (!activeOnly && !isAct) ? ' (Inactive)' : '';
       li.textContent = name + status;
       li.addEventListener('click', async (e)=>{
@@ -850,7 +927,7 @@
 
   const algs = makeSection('Allergies'); algs.det.open=true; const algList = Array.isArray(data&&data.allergies)? data.allergies : []; renderAllergies(algs.ul, algList); algs.sum.textContent = `Allergies (${algList.length})`; wrap.appendChild(algs.det);
 
-  const meds = makeSection('Medications'); meds.det.open=true; const medRes = renderMeds(meds.ul, (data&&data.medications)||[], { activeOnly: false }); meds.sum.textContent = `Medications (${medRes.count})`; wrap.appendChild(meds.det);
+  const meds = makeSection('Active Medications'); meds.det.open=true; const medRes = renderMeds(meds.ul, (data&&data.medications)||[], { activeOnly: true }); meds.sum.textContent = `Active Medications (${medRes.count})`; wrap.appendChild(meds.det);
 
     mount.appendChild(wrap);
   }
