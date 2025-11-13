@@ -1,0 +1,12 @@
+Flask==2.3.3
+Flask-Session==0.7.0
+gunicorn==21.2.0
+waitress==2.1.2
+python-dotenv==1.0.1
+requests==2.31.0
+redis==5.0.4
+fakeredis==2.23.2
+openai==1.40.3
+numpy==1.26.4
+pytest==7.4.4
+xmltodict==0.13.0

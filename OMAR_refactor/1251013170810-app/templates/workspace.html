@@ -1,0 +1,1759 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="va">
+<head>
+    <meta charset="UTF-8">
+    <title>Workspace</title>
+    <link rel="icon" type="image/x-icon" href="/static/js/icon.ico">
+    <!-- Load refactor styles (theme + base) -->
+    <link rel="stylesheet" href="/static/styles/theme.css">
+    <link rel="stylesheet" href="/static/styles/style.css">
+    <!-- CSRF token for client-side fetches -->
+    <meta name="csrf-token" content="{{ csrf_token }}">
+    <script>
+        // Force WAV for Azure REST compatibility and increase chunk size slightly for better accuracy
+        window.FORCE_WAV_RECORDING = true;        // Use PCM16 WAV instead of WebM/OGG Opus
+        window.SCRIBE_CHUNK_MS = 4000;            // 4s chunks tend to produce more stable text from short-audio REST
+    </script>
+    <!-- Tabulator CSS (optional) -->
+    <!-- <link href="/static/lib/tabulator.min.css" rel="stylesheet"> -->
+    
+    <script src="/static/js/csrf_fetch.js"></script>
+    <script src="/static/js/popups.js"></script>
+    <script src="/static/js/omar_history_popup.js"></script>
+        <!-- Shared dot-phrases utility -->
+        <script src="/static/lib/dot_phrases.js"></script>
+        <script>
+            // Flag for scripts to detect Workspace context
+            window.__IS_WORKSPACE = true;
+        </script>
+        {% if enable_width_detection %}
+        <script>
+            // Width-based mobile detection and redirect
+            (function() {
+                const BREAKPOINT = 640; // Smaller mobile breakpoint
+                function checkWidthAndRedirect() {
+                    const width = window.innerWidth;
+                    const goMobile = width <= BREAKPOINT;
+                    // Only redirect to mobile if narrow and not explicitly forced to desktop
+                    if (goMobile && !window.location.search.includes('desktop=1')) {
+                        const currentUrl = new URL(window.location);
+                        const params = new URLSearchParams(currentUrl.search);
+                        params.delete('desktop'); // Remove desktop override if present
+                        const mobileUrl = '/workspace/mobile' + (params.toString() ? '?' + params.toString() : '');
+                        window.location.replace(mobileUrl);
+                    }
+                }
+
+                // Initial check and on resize (debounced)
+                checkWidthAndRedirect();
+                let resizeTimeout;
+                window.addEventListener('resize', function() {
+                    clearTimeout(resizeTimeout);
+                    resizeTimeout = setTimeout(checkWidthAndRedirect, 200);
+                });
+            })();
+        </script>
+        {% endif %}
+</head>
+<body data-safe-modules-enabled="{{ 'true' if safe_modules_enabled else 'false' }}">
+    <div class="global-top-bar">
+        <div class="left-controls">
+            <a href="/" class="header-title">OMAR</a>
+            <button id="recordBtn"
+                    class="circle-btn image-record-btn"
+                    title="Record"
+                    aria-label="Record"
+                    data-visual="image"
+                    data-start-src="/static/images/start_Recording_circle_button.png"
+                    data-stop-src="/static/images/stop_Recording_circle_button.png">
+                <img id="recordBtnImg" src="/static/images/start_Recording_circle_button.png" alt="Start Recording" />
+            </button>
+            <!-- left area intentionally minimal -->
+        </div>        <!-- middle area: centered patient display -->
+                <div class="global-center">
+                        <span id="patientLookupResults" style="font-weight:bold; cursor:pointer;" title="Click to view demographics" role="button" tabindex="0"></span>
+                                    <button id="heyQuickBtn" class="hey-quick-btn" title="Quick Hey OMAR" aria-label="Quick Hey OMAR" style="margin-left:8px;">
+                                        <img src="/static/images/hey_OMAR_button.png" alt="Hey OMAR" />
+                                    </button>
+                        
+                </div>
+        <div class="right-controls">
+            <a href="/archive">📁 Archive</a>
+            <a href="/settings">⚙️ Settings</a>
+            <a href="/workspace/mobile">📱 Mobile View</a>
+            <!-- Show only when CPRS sync is paused/held -->
+            <button id="cprsResumeBtn" title="Resume CPRS auto-sync" aria-label="Resume CPRS auto-sync" style="display:none; margin-left:8px; padding:6px 10px; border-radius:6px; border:1px solid #b8860b; background:#fef9e7; color:#5a4e3a; cursor:pointer;">
+                ⟲ Resume CPRS
+            </button>
+            <!-- Desktop search input (hidden on narrow screens; toggled by mobile search button) -->
+            <input type="text" id="patientSearchInput" placeholder="Patient Search (Name or Initial+Last4)" autocomplete="off" style="width:320px; margin-left:8px;">
+            <!-- Mobile/narrow search button (shows overlay input) -->
+            <button id="mobileSearchBtn" class="mobile-search-btn" aria-label="Search" title="Search" style="display:none;">
+                <img class="search-icon" src="/static/images/search_icon.png" alt="Search" />
+            </button>
+            <button id="hamburgerBtn" class="hamburger-btn" aria-label="Menu">&#9776;</button>
+        </div>
+    </div>
+    <div id="mobileMenu" class="mobile-menu">
+            <a href="/archive">📁 Archive</a>
+            <a href="/settings">⚙️ Settings</a>
+            <a href="/workspace/mobile">📱 Mobile View</a>
+        <!-- New: Exit app (clears unsaved data, closes connections, returns to landing) -->
+        <hr class="mobile-menu-separator">
+        <a href="#" class="end-session-link" onclick="exitApp();return false;" title="Exit">🚪 Exit</a>    </div>    <!-- Workspace Content: Two-pane layout with draggable divider -->
+    <div class="workspace-container">
+        <div class="workspace-pane workspace-left-pane" id="leftPane">
+            <div class="tab-container" id="leftTabContainer">
+                <div class="tab-bar" id="leftTabBar">
+                    <!-- Tabs will be dynamically added here -->
+                </div>
+                <div class="tab-content-area" id="leftTabContent">
+                    <!-- Tab content will be dynamically shown here -->
+                </div>
+            </div>
+        </div>
+        
+        <div class="workspace-divider" id="workspaceDivider">
+            <div class=" divider-handle"></div>
+        </div>
+        
+        <div class="workspace-pane workspace-right-pane" id="rightPane">
+            <div class="tab-container" id="rightTabContainer">
+                <div class="tab-bar" id="rightTabBar">
+                    <!-- Tabs will be dynamically added here -->
+                </div>
+                <div class="tab-content-area" id="rightTabContent">
+                    <!-- Tab content will be dynamically shown here -->
+                </div>
+            </div>
+        </div>
+    </div>    <style>        .workspace-container {
+            display: flex;
+            /* Fill visible viewport below the fixed global top bar */
+            position: fixed;
+            top: var(--topbar-h, 60px);
+            left: 0;
+            right: 0;
+            bottom: 0;
+            height: auto; /* computed by fixed edges */
+            background-color: var(--color-primary);
+            margin-top: 0; /* remove double-compensation */
+            overflow: hidden; /* prevent page scrollbars; panes manage their own */
+        }
+
+        .workspace-pane {
+            height: 100%;
+            overflow: hidden;
+            min-width: 200px; /* Minimum pane width */
+    }        .workspace-left-pane {
+            flex: 0 0 50%; /* Initial 50% width */
+            background-color: var(--color-primary); /* Match global top bar */
+        }
+
+    .workspace-right-pane {
+            flex: 1;
+            background-color: var(--color-primary); /* Match global top bar */
+            /* Match left pane: remove extra shadow/border */
+            box-shadow: none;
+            border-left: none;
+            position: relative;
+            z-index: 1;
+    }        .workspace-divider {
+            width: 6px;
+            background-color: var(--color-primary); /* Match global top bar */
+            cursor: col-resize;
+            position: relative;
+            flex-shrink: 0;
+            border-left: 1px solid var(--color-primary); /* match background to hide seam */
+            border-right: 1px solid var(--color-primary); /* Remove light border by matching background */
+            transition: background-color 0.2s ease;
+        }.workspace-divider:hover {
+            background-color: var(--color-primary);
+        }
+
+        .divider-handle {
+            position: absolute;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            width: 3px;
+            height: 30px;
+            background-color: var(--paper-contrast);
+            border-radius: 2px;
+            transition: background-color 0.2s ease;
+        }
+
+        .workspace-divider:hover .divider-handle {
+            background-color: white;
+        }
+
+        /* Prevent text selection during drag */
+        .workspace-container.dragging {
+            user-select: none;
+            -webkit-user-select: none;
+            -moz-user-select: none;
+            -ms-user-select: none;
+        }        .workspace-container.dragging .workspace-divider {
+            background-color: var(--color-primary);
+        }
+
+        /* Tab System Styles */
+        .tab-container {
+            height: 100%;
+            display: flex;
+            flex-direction: column;
+        }        .tab-bar {
+            display: flex;
+            /* single-row: do not wrap */
+            flex-wrap: nowrap;
+            /* enable horizontal scroll when overflow */
+            overflow-x: auto;
+            overflow-y: hidden;
+            /* Match global top bar color */
+            background-color: var(--color-primary);
+            border-bottom: none;
+            min-height: 0;
+            /* remove row height cap used for wrapping */
+            max-height: none;
+            flex-shrink: 0;
+            padding: 0 8px;
+            align-items: flex-end;
+            /* remove wrapped-rows settings */
+            align-content: initial;
+            row-gap: 0;
+            margin-bottom: -1px;
+            margin-top: 6px;
+            position: relative;
+            z-index: 6;
+            /* avoid accidental vertical scroll on trackpads */
+            scrollbar-width: thin; /* Firefox */
+            white-space: nowrap;
+        }        .tab {
+            position: relative;
+            background-color: #d4c5a9; /* Darker inactive tab background */
+            border: 1px solid var(--paper-border); /* Use paper border */
+            border-bottom: none;
+            border-radius: 12px 12px 0 0; /* More rounded for manila folder effect */
+            /* Reduced left padding to minimize gap */
+            padding: 8px 12px 7px 6px; /* Reduced left padding from 12px to 6px */
+            margin-right: 4px; /* Reduced space between tabs */
+            margin-left: 6px; /* Shift tab headers to the right by several pixels */
+            margin-bottom: 0; /* no extra bottom gap; row-gap handles wrapped rows */
+            cursor: pointer;
+            user-select: none;
+            white-space: nowrap;
+            min-width: 56px; /* allow tighter tabs before scrolling */
+            max-width: 280px; /* soft cap so few tabs don’t stretch excessively */
+            display: flex;
+            align-items: center;
+            font-size: 15px; /* Increased font size from 13px to 15px for bigger labels */
+            font-weight: 500;
+            transition: all 0.3s ease;
+            /* Remove gradients - use flat colors */
+            background: #d4c5a9; /* Darker inactive background */
+            color: #5a4e3a; /* Darker text for inactive tabs */
+            /* allow tabs to shrink to fit container; distribute space */
+            flex: 1 1 auto;
+            /* remove any shadows */
+            box-shadow: none !important;
+            opacity: 0.8; /* Make inactive tabs slightly transparent */
+        }.tab:hover {
+            background: #e0d1b5; /* Slightly lighter on hover for inactive tabs */
+            border-color: #c4a574;
+            box-shadow: none !important;
+            transform: none !important;
+            opacity: 0.9; /* Slightly less transparent on hover */
+        }        .tab.active {
+            background: var(--paper-panel); /* Bright active background */
+            border-color: #b8860b;
+            z-index: 10;
+            color: var(--paper-contrast); /* Strong contrast for active tab */
+            font-weight: 600;
+            opacity: 1; /* Full opacity for active tab */
+            /* Create unbroken line with content area */
+            border-bottom: none; /* visually erase line under active tab */
+            margin-bottom: -1px;
+            position: relative;
+            box-shadow: none !important;
+            transform: none !important;
+            /* Add subtle elevation effect */
+            box-shadow: 0 2px 4px rgba(0,0,0,0.1) !important;
+        }
+
+        /* Create visual bridge between active tab and content */
+        .tab.active::before {
+            content: '';
+            position: absolute;
+            bottom: -3px; /* extend further to fully cover the content top border */
+            left: 0;
+            right: 0;
+            height: 6px; /* thicker bridge to mask any subpixel seam */
+            background-color: var(--paper-panel);
+            z-index: 15;
+            pointer-events: none;
+        }
+
+        /* Add separator line between active and inactive tabs */
+        .tab.active::after {
+            content: '';
+            position: absolute;
+            right: -2px;
+            top: 4px;
+            bottom: 4px;
+            width: 1px;
+            background-color: #b8860b;
+            z-index: 12;
+        }
+
+        /* Remove separator line on the last active tab */
+        .tab.active:last-child::after {
+            display: none;
+        }        /* Match left pane: keep right-pane active tabs consistent (no extra emphasis) */
+        .workspace-right-pane .tab.active {
+            background: var(--paper-panel);
+            border-color: #b8860b;
+            border-width: 1px;
+            border-bottom: none; /* keep right-pane consistent */
+            margin-bottom: -1px;
+            opacity: 1; /* Full opacity for active tab */
+            box-shadow: 0 2px 4px rgba(0,0,0,0.1) !important; /* Match left pane elevation */
+        }
+        
+        /* Ensure right pane inactive tabs match left pane styling */
+        .workspace-right-pane .tab:not(.active) {
+            background: #d4c5a9;
+            color: #5a4e3a;
+            opacity: 0.8;
+        }
+        
+        .workspace-right-pane .tab.active::after { 
+            content: '';
+            position: absolute;
+            right: -2px;
+            top: 4px;
+            bottom: 4px;
+            width: 1px;
+            background-color: #b8860b;
+            z-index: 12;
+        }
+
+        .tab.dragging {
+            opacity: 0.6;
+            transform: rotate(3deg) translateY(-5px);
+            z-index: 1000;
+        }
+        
+        .tab.drop-target {
+            border-left: 4px solid #b8860b;
+            background: #fef9e7;
+            box-shadow: none !important;
+        }        
+        
+        .tab-content-area {
+            flex: 1;
+            overflow: auto;
+            background-color: var(--paper-panel);
+            padding: 20px;
+            margin: 0 10px 10px 10px; /* Add margins for cleaner look */
+            border-radius: 8px; /* Rounded corners */
+            /* Remove shadow */
+            border: 1px solid var(--paper-border);
+            /* Ensure content area connects with active tab */
+            position: relative;
+            z-index: 5;
+            min-height: 0; /* Allow children to size to full height */
+        }
+
+        .tab-content {
+            display: none;
+        }
+
+        .tab-content.active {
+            display: block;
+            height: 100%; /* Let modules like Documents fill the visible tab */
+        }
+
+        /* Make the tab content body fill and allow children to flex */
+        .tab-content .tab-content-body {
+            display: flex;
+            flex-direction: column;
+            height: 100%;
+            min-height: 0; /* prevent overflow and allow inner flex items to grow */
+        }
+
+        /* Workspace Documents module: make it fill the tab height and be responsive */
+        .tab-content .documents-module {
+            display: flex;
+            flex-direction: column;
+            height: 100%;
+            min-height: 0; /* allow children to shrink */
+        }
+        .tab-content .documents-module .documents-table-container {
+            flex: 1;
+            display: flex;
+            min-height: 0;
+        }
+        .tab-content .documents-module #documentsTableWrap,
+        .tab-content .documents-module .documents-table-wrap {
+            flex: 1;
+            height: 100% !important; /* override global clamp */
+            max-height: none !important;
+            min-height: 0 !important;
+            resize: none !important; /* disable manual resizing inside workspace */
+            overflow: hidden; /* Tabulator manages internal scroll */
+        }
+        .tab-content .documents-module #documentsTable { height: 100%; }
+
+        /* Desktop Workspace: Documents table single-line rows with horizontal scroll */
+        /* Keep mobile (workspace_mobile.html) unchanged since this CSS is only loaded on desktop workspace */
+        #documentsTable .tabulator-row .tabulator-cell {
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
+        }
+        #documentsTable .tabulator .tabulator-tableholder,
+        #documentsTable .tabulator-tableholder {
+            overflow-x: auto !important;
+        }
+
+        /* Ensure tab content area allows full-height children */
+        .tab-content-area { min-height: 0; }        /* Make tab labels truncate nicely and add a compact close button */
+        .tab .tab-label {
+            min-width: 0;              /* allow flex child to shrink */
+            flex: 1 1 auto;            /* take remaining space and shrink when needed */
+            overflow: hidden;          /* hide overflowed text */
+            text-overflow: ellipsis;   /* show ellipsis when truncated */
+            white-space: nowrap;       /* keep single line */
+        }
+        .tab .tab-close,
+        .tab button.tab-close {
+            /* reset global button styles */
+            background: transparent;
+            border: none;
+            padding: 0;
+            margin-left: 4px; /* Reduced margin */
+            width: 16px; /* Smaller close button */
+            height: 16px;
+            min-width: 16px;
+            min-height: 16px;
+            flex: 0 0 auto;            /* do not shrink close button */
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            line-height: 1;
+            font-size: 10px; /* Smaller font for close button */
+            color: #7a6a4d; /* subtle warm tone to match manila theme */
+            border-radius: 8px;
+            cursor: pointer;
+            opacity: 0.6;
+            box-shadow: none;
+        }
+        /* Restored hover/active/dragging styles for tab close button */
+        .tab:hover .tab-close { opacity: 0.85; }
+        .tab .tab-close:hover,
+        .tab .tab-close:focus {
+            background: rgba(0,0,0,0.08);
+            color: #5f5037;
+            outline: none;
+        }
+        .tab .tab-close:active { transform: scale(0.92); }
+        .tab.dragging .tab-close { visibility: hidden; }
+
+        /* Empty state for tab bars */
+        .tab-bar.empty {
+            background-color: #e5ecf3;
+            border: 2px dashed #c8d6e5;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            color: #6c757d;
+            font-style: italic;
+            border-radius: 8px;
+            margin: 10px;
+        }
+
+        .tab-bar.empty::after {
+            content: "Drop tabs here";
+        }        .tab-bar.drag-over {
+            background-color: var(--color-primary);
+            border: 2px solid var(--color-primary);
+            border-radius: 8px;
+        }/* Scrollbar styling for tab bars - horizontal */
+        .tab-bar::-webkit-scrollbar { height: 6px; }
+        .tab-bar::-webkit-scrollbar-track { background: transparent; }
+        .tab-bar::-webkit-scrollbar-thumb { background: #c1c1c1; border-radius: 3px; }
+        .tab-bar::-webkit-scrollbar-thumb:hover { background: #a8a8a8; }        /* Floating Tab Styles */
+        .floating-indicator {
+            position: fixed;
+            background: var(--color-primary);
+            color: white;
+            padding: 8px 12px;
+            border-radius: 6px;
+            font-size: 12px;
+            z-index: 10000;
+            pointer-events: none;
+            box-shadow: 0 4px 12px rgba(0,0,0,0.3);
+            display: none;
+        }
+
+        .tab.floating-candidate {
+            opacity: 0.8;
+            transform: scale(1.05);
+            z-index: 1001;
+        }
+
+    .floating-tab-window {
+            position: fixed;
+            background: white;
+            border: 2px solid var(--color-primary);
+            border-radius: 8px;
+            box-shadow: 0 8px 32px rgba(0,0,0,0.3);
+            z-index: 1000;
+            min-width: 300px;
+            min-height: 200px;
+            display: flex;
+            flex-direction: column;
+            overflow: hidden;
+            transition: box-shadow 0.2s ease, transform 0.1s ease;
+        }
+
+        .floating-tab-window:hover {
+            box-shadow: 0 12px 40px rgba(0,0,0,0.4);
+        }
+
+        .floating-tab-window.dragging {
+            opacity: 0.9;
+            z-index: 1001;
+            transform: scale(1.02);
+            box-shadow: 0 16px 48px rgba(0,0,0,0.5);
+        }
+
+        .floating-tab-header {
+            background: var(--color-primary);
+            color: white;
+            padding: 8px 12px;
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            cursor: move;
+            user-select: none;
+        }
+
+        .floating-tab-title {
+            font-weight: 600;
+            font-size: 14px;
+        }
+
+        .floating-tab-controls {
+            display: flex;
+            gap: 4px;
+        }
+
+        .floating-tab-dock,
+        .floating-tab-close {
+            background: rgba(255,255,255,0.2);
+            border: none;
+            color: white;
+            padding: 4px 8px;
+            border-radius: 4px;
+            cursor: pointer;
+            font-size: 12px;
+            transition: background 0.2s ease;
+        }
+
+        .floating-tab-dock:hover {
+            background: rgba(255,255,255,0.3);
+        }
+
+        .floating-tab-close:hover {
+            background: rgba(255,0,0,0.6);
+        }
+
+        .floating-tab-content {
+            flex: 1;
+            overflow: auto;
+            padding: 12px;
+            background: white;
+        }
+
+        .floating-tab-resize-handle {
+            position: absolute;
+            bottom: 0;
+            right: 0;
+            width: 16px;
+            height: 16px;
+            background: linear-gradient(-45deg, transparent 30%, var(--paper-border) 30%, var(--paper-border) 50%, transparent 50%);
+            cursor: nw-resize;
+        }
+
+        .floating-tab-resize-handle:hover {
+            background: linear-gradient(-45deg, transparent 25%, var(--color-primary) 25%, var(--color-primary) 50%, transparent 50%);
+        }
+
+        /* Floating tab counter */
+    .floating-tab-count {
+            position: fixed;
+            bottom: 20px;
+            right: 20px;
+            background: var(--color-primary);
+            color: white;
+            padding: 6px 12px;
+            border-radius: 20px;
+            font-size: 12px;
+            font-weight: 500;
+            z-index: 999;
+            pointer-events: none;
+            opacity: 0.8;
+            transition: opacity 0.3s ease;
+            display: none;
+        }
+
+        .floating-tab-count:hover {
+            opacity: 1;
+        }
+
+        /* Quick Hey OMAR button next to patient name */
+        .hey-quick-btn {
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            border: none !important;
+            background: transparent !important;
+            padding: 0;
+            cursor: pointer;
+            vertical-align: middle;
+            border-radius: 0 !important;
+            box-shadow: none !important;
+            position: relative; /* allow ring via ::before */
+            /* Ring tuning variables: adjust to match visible art, not PNG bounds */
+            --hey-ring-inset: 6px;         /* shrink ring box inward to hug the art */
+            --hey-ring-inset-top: initial;    /* optional per-side overrides */
+            --hey-ring-inset-right: initial;
+            --hey-ring-inset-bottom: initial;
+            --hey-ring-inset-left: initial;
+            --hey-ring-thickness: 2px;     /* ring width at rest and attention */
+            --hey-ring-spin-thickness: 2px;/* ring width while spinning */
+            /* optional: distinct flashing thickness; falls back to --hey-ring-thickness */
+            --hey-ring-flashing-thickness: initial;
+        }
+        .hey-quick-btn img {
+            height: 48px; /* 20% larger than 40px */
+            width: auto;
+            object-fit: contain;
+            display: block;
+        }
+        /* Adjust Hey OMAR ring alignment/thickness here */
+        #heyQuickBtn {
+            /* Per-side inset (align to art) */
+            --hey-ring-inset-top: 10px;
+            --hey-ring-inset-right: 15px;
+            --hey-ring-inset-bottom: 10px;
+            --hey-ring-inset-left: 15px;
+            /* Ring thickness */
+            --hey-ring-thickness: 0px;
+            --hey-ring-spin-thickness: 3px;
+            --hey-ring-flashing-thickness: 3px;
+        }
+        .hey-quick-btn:focus { outline: none; }
+        .hey-quick-btn:hover { transform: scale(1.03); background: transparent !important; }
+        .hey-quick-btn:active { transform: scale(0.98); background: transparent !important; }
+        /* Ensure VA theme button overrides do not apply any fill/border */
+        .global-top-bar .hey-quick-btn,
+        .global-top-bar .hey-quick-btn:hover,
+        .global-top-bar .hey-quick-btn:focus,
+        .global-top-bar .hey-quick-btn:active {
+            background: transparent !important;
+            border: none !important;
+            box-shadow: none !important;
+            border-radius: 0 !important;
+        }
+        /* Spinner rotation animation */
+        @keyframes heySpin { to { transform: rotate(360deg); } }
+        /* Flashing ring for attention */
+        @keyframes heyFlash { 0%, 100% { opacity: 1; } 50% { opacity: 0; } }
+        /* Always-on white ring around the button */
+        .hey-quick-btn::before {
+            content: "";
+            position: absolute;
+            /* Allow per-side fine-tuning while providing a global fallback */
+            top: var(--hey-ring-inset-top, var(--hey-ring-inset, 6px));
+            right: var(--hey-ring-inset-right, var(--hey-ring-inset, 6px));
+            bottom: var(--hey-ring-inset-bottom, var(--hey-ring-inset, 6px));
+            left: var(--hey-ring-inset-left, var(--hey-ring-inset, 6px));
+            border-radius: 999px;
+            border: var(--hey-ring-thickness, 2px) solid #fff; /* solid white ring at rest */
+            pointer-events: none;
+            box-sizing: border-box;
+            opacity: 1;
+            transition: opacity 0.15s ease;
+        }
+        /* While loading: switch ring to spinner style and rotate */
+        .hey-quick-btn.hey-loading::before {
+            border: var(--hey-ring-spin-thickness, 2px) solid rgba(255,255,255,0.28);
+            border-top-color: #fff;
+            animation: heySpin 0.9s linear infinite;
+        }
+        /* When attention (answer ready but tab not seen): flash the white ring */
+        .hey-quick-btn.hey-attn::before {
+            border: var(--hey-ring-flashing-thickness, var(--hey-ring-thickness, 2px)) solid #fff;
+            animation: heyFlash 1s ease-in-out infinite;
+        }
+
+        /* Hey OMAR tab header: pulse between manilla and blue */
+        @keyframes tabPulseBlueManilla {
+            0%, 100% { background: #d4c5a9; color: #5a4e3a; border-color: var(--paper-border); }
+            50% { background: var(--brand-blue, #1976d2); color: #fff; border-color: var(--brand-blue-dark, #0f5bbf); }
+        }
+        .tab.hey-attn { animation: tabPulseBlueManilla 1.2s ease-in-out infinite; }
+        /* Removed older glow/pulse effects */
+
+        /* Responsive: hide desktop search input when narrow; show magnifying glass button */
+        .mobile-search-btn { display: none; background: transparent !important; border: none !important; padding: 0 !important; }
+        @media (max-width: 1400px) {
+            .right-controls #patientSearchInput { display: none !important; }
+            .right-controls #mobileSearchBtn { display: inline-flex !important; }
+        }
+        /* When search overlay is open, show and position the real input as a floating panel */
+        body.search-open .global-top-bar .right-controls #patientSearchInput {
+            display: block !important;
+            position: fixed;
+            right: 10px;
+            top: calc(var(--topbar-h, 60px) + 8px);
+            width: min(92vw, 520px) !important;
+            max-width: 520px;
+            z-index: 2000;
+            background: #fff !important;
+            border: 1px solid var(--paper-border) !important;
+            box-shadow: 0 6px 20px rgba(0,0,0,0.25);
+        }
+
+        /* Tab Context Menu */
+        .tab-context-menu {
+            background: white;
+            border: 1px solid var(--paper-border);
+            border-radius: 6px;
+            box-shadow: 0 4px 12px rgba(0,0,0,0.15);
+            padding: 4px 0;
+            min-width: 150px;
+        }
+
+        .context-menu-item {
+            padding: 8px 12px;
+            cursor: pointer;
+            font-size: 13px;
+            transition: background-color 0.15s ease;
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+
+        .context-menu-item:hover {
+            background-color: #f5f5f5;
+        }
+
+        .context-menu-item:active {
+            background-color: #e8e8e8;
+        }
+
+        /* Record button styling to match global top bar height */
+        .global-top-bar .circle-btn.image-record-btn {
+            height: 48px; /* 20% larger */
+            width: 48px;  /* 20% larger */
+            padding: 0;
+            border: none;
+            background: white; /* White circle background */
+            border-radius: 50%;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            cursor: pointer;
+            transition: all 0.2s ease;
+        }
+
+        /* Enlarge the mobile search button icon a bit as well */
+        .global-top-bar .mobile-search-btn { height: 43px; width: 43px; }
+        .global-top-bar .mobile-search-btn .search-icon { height: 100%; width: 100%; object-fit: contain; display: block; }
+
+        .global-top-bar .circle-btn.image-record-btn img {
+            height: 100%;
+            width: 100%;
+            object-fit: contain;
+        }
+
+        .global-top-bar .circle-btn.image-record-btn:hover {
+            transform: scale(1.05);
+        }
+
+        .global-top-bar .circle-btn.image-record-btn:active {
+            transform: scale(0.95);
+        }
+
+        /* Workspace Module Styles */
+        .module-loading {
+            padding: 20px;
+            text-align: center;
+            color: var(--paper-contrast);
+        }
+
+        .module-error {
+            padding: 20px;
+            text-align: center;
+            color: #d32f2f;
+            background-color: #ffebee;
+            border: 1px solid #ffcdd2;
+            border-radius: 4px;
+            margin: 10px;
+        }
+
+        .module-placeholder {
+            background-color: var(--paper-panel);
+            border: 1px solid var(--paper-border);
+            border-radius: 8px;
+            padding: 15px;
+            margin-top: 15px;
+        }
+
+        .module-placeholder pre {
+            background-color: #f5f5f5;
+            padding: 10px;
+            border-radius: 4px;
+            font-size: 12px;
+            overflow-x: auto;
+        }
+
+        .module-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 20px;
+            padding-bottom: 10px;
+            border-bottom: 1px solid var(--paper-border);
+        }
+
+        .module-header h3 {
+            margin: 0;
+            color: var(--paper-contrast);
+        }
+
+        .refresh-btn, .save-btn, .clear-btn {
+            background-color: var(--paper-panel);
+            border: 1px solid var(--paper-border);
+            padding: 6px 12px;
+            border-radius: 4px;
+            cursor: pointer;
+            font-size: 13px;
+            transition: all 0.2s ease;
+        }
+
+        .refresh-btn:hover, .save-btn:hover, .clear-btn:hover {
+            background-color: #e8eff5;
+            border-color: #c4a574;
+        }
+
+        .save-btn {
+            background-color: #4caf50;
+            color: white;
+            border-color: #4caf50;
+        }
+
+        .save-btn:hover {
+            background-color: #45a049;
+        }
+
+        .clear-btn {
+            background-color: #f44336;
+            color: white;
+            border-color: #f44336;
+        }
+
+        .clear-btn:hover {
+            background-color: #da190b;
+        }
+
+        /* Vitals Module Styles */
+        .vitals-module {
+            height: 100%;
+            display: flex;
+            flex-direction: column;
+        }
+
+        .vitals-content {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 20px;
+            flex: 1;
+        }
+
+        .vitals-sidebar-workspace {
+            background-color: var(--paper-panel);
+            border: 1px solid var(--paper-border);
+            border-radius: 8px;
+            padding: 15px;
+        }
+
+        .vital-item {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            padding: 8px 0;
+            border-bottom: 1px solid var(--paper-border);
+        }
+
+        .vital-item:last-child {
+            border-bottom: none;
+        }
+
+        .vital-item label {
+            font-weight: 600;
+            color: var(--paper-contrast);
+        }
+
+        .vital-value {
+            font-weight: bold;
+            color: #1976d2;
+        }
+
+        .vital-date {
+            font-size: 12px;
+            color: #666;
+        }
+
+        .vital-empty {
+            text-align: center;
+            color: #666;
+            font-style: italic;
+            padding: 20px;
+        }
+
+        /* Labs Module Styles */
+        .labs-module {
+            height: 100%;
+            display: flex;
+            flex-direction: column;
+        }
+
+        .labs-controls {
+            display: flex;
+            gap: 10px;
+            align-items: center;
+        }
+
+        .labs-content {
+            flex: 1;
+            display: flex;
+            flex-direction: column;
+        }
+
+        .labs-summary {
+            margin-bottom: 20px;
+            background-color: var(--paper-panel);
+            border: 1px solid var(--paper-border);
+            border-radius: 8px;
+            padding: 15px;
+        }
+
+        .key-labs-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+            gap: 15px;
+        }
+
+        .key-lab-category h4 {
+            margin: 0 0 10px 0;
+            color: var(--paper-contrast);
+            font-size: 14px;
+        }
+
+        .lab-item {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            padding: 5px 0;
+            font-size: 13px;
+        }
+
+        .lab-item.abnormal .lab-value {
+            color: #d32f2f;
+            font-weight: bold;
+        }
+
+        .lab-name {
+            font-weight: 500;
+        }
+
+        .lab-date {
+            font-size: 11px;
+            color: #666;
+        }
+
+        .labs-table-container {
+            flex: 1;
+            border: 1px solid var(--paper-border);
+            border-radius: 8px;
+            overflow: hidden;
+        }
+
+        .abnormal-result {
+            color: #d32f2f;
+            font-weight: bold;
+        }
+
+        .status-abnormal {
+            color: #d32f2f;
+            background-color: #ffebee;
+            padding: 2px 6px;
+            border-radius: 3px;
+            font-size: 11px;
+        }
+
+        .status-normal {
+            color: #2e7d32;
+            background-color: #e8f5e8;
+            padding: 2px 6px;
+            border-radius: 3px;
+            font-size: 11px;
+        }
+
+        /* Note Module Styles */
+        .note-module {
+            height: 100%;
+            display: flex;
+            flex-direction: column;
+        }
+
+        .note-controls {
+            display: flex;
+            gap: 10px;
+            align-items: center;
+        }
+
+        .note-content {
+            flex: 1;
+            display: flex;
+            flex-direction: column;
+        }
+
+        .note-toolbar {
+            display: flex;
+            gap: 8px;
+            align-items: center;
+            padding: 8px;
+            background-color: var(--paper-panel);
+            border: 1px solid var(--paper-border);
+            border-bottom: none;
+            border-radius: 8px 8px 0 0;
+        }
+
+        .toolbar-btn {
+            background-color: transparent;
+            border: 1px solid var(--paper-border);
+            padding: 4px 8px;
+            border-radius: 3px;
+            cursor: pointer;
+            font-size: 12px;
+            transition: all 0.2s ease;
+        }
+
+        .toolbar-btn:hover {
+            background-color: #e8eff5;
+        }
+
+        .word-count {
+            margin-left: auto;
+            font-size: 12px;
+            color: #666;
+        }
+
+        .note-editor {
+            flex: 1;
+            border: 1px solid var(--paper-border);
+            border-top: none;
+            border-bottom: none;
+            padding: 15px;
+            font-family: 'Courier New', monospace;
+            font-size: 14px;
+            line-height: 1.5;
+            resize: none;
+            outline: none;
+            background-color: white;
+        }
+
+        .note-footer {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            padding: 8px;
+            background-color: var(--paper-panel);
+            border: 1px solid var(--paper-border);
+            border-top: none;
+            border-radius: 0 0 8px 8px;
+        }
+
+        .auto-save-status {
+            font-size: 12px;
+            color: #4caf50;
+            opacity: 0.6;
+            transition: opacity 0.3s ease;
+        }
+
+        .note-stats {
+            font-size: 12px;
+            color: #666;
+        }
+
+        .note-history {
+            margin-top: 20px;
+            background-color: var(--paper-panel);
+            border: 1px solid var(--paper-border);
+            border-radius: 8px;
+            padding: 15px;
+            max-height: 200px;
+            overflow-y: auto;
+        }
+
+        .note-history h4 {
+            margin: 0 0 10px 0;
+            font-size: 14px;
+            color: var(--paper-contrast);
+        }
+
+        .recent-note-item {
+            padding: 8px;
+            border: 1px solid var(--paper-border);
+            border-radius: 4px;
+            margin-bottom: 8px;
+            cursor: pointer;
+            transition: all 0.2s ease;
+        }
+
+        .recent-note-item:hover {
+            background-color: #e8eff5;
+        }
+
+        .note-preview {
+            font-size: 13px;
+            color: var(--paper-contrast);
+            margin-bottom: 4px;
+        }
+
+        .note-date {
+            font-size: 11px;
+            color: #666;
+        }        .no-notes {
+            text-align: center;
+            color: #666;
+            font-style: italic;
+            padding: 20px;
+        }
+
+        /* Documents Module Styles */
+        .documents-module {
+            display: flex;
+            flex-direction: column;
+            height: 100%;
+            background-color: var(--paper-background);
+            font-family: inherit;
+        }
+
+        .documents-controls {
+            background-color: var(--paper-panel);
+            border: 1px solid var(--paper-border);
+            border-radius: 8px;
+            padding: 12px;
+            margin-bottom: 12px;
+            flex-shrink: 0; /* Prevent controls from shrinking */
+        }
+
+        .docs-top-row, .docs-middle-row, .docs-bottom-row {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            margin-bottom: 8px;
+            flex-wrap: wrap; /* allow controls to wrap to next line to prevent overflow */
+        }
+
+        .docs-bottom-row {
+            margin-bottom: 0;
+        }
+
+        .docs-search-group {
+            display: flex;
+            align-items: center;
+            gap: 4px;
+        }
+
+        .docs-search-group input {
+            flex: 1;
+            min-width: 200px;
+        }
+
+        .auto-index-toggle, .indexed-filter {
+            display: flex;
+            align-items: center;
+            gap: 4px;
+            font-size: 13px;
+            color: var(--paper-contrast);
+        }
+
+        .documents-status {
+            margin-bottom: 12px;
+            flex-shrink: 0; /* Prevent status from shrinking */
+        }
+
+        .docs-status-text {
+            font-size: 13px;
+            color: var(--paper-contrast);
+            margin-bottom: 4px;
+        }
+
+        .docs-size-estimate {
+            font-size: 12px;
+            color: #666;
+        }
+
+        .documents-table-container {
+            flex: 1;
+            display: flex;
+            flex-direction: column;
+            min-height: 0;
+            overflow: hidden; /* Ensure proper containment */
+        }
+
+        .documents-table-wrap {
+            position: relative;
+            flex: 1;
+            border: 1px solid var(--paper-border);
+            border-radius: 8px;
+            overflow: hidden;
+            background-color: white;
+            min-height: 0; /* Allow shrinking to fit container */
+        }
+
+        .documents-table {
+            height: 100%;
+            width: 100%;
+        }
+
+        /* Document Viewer Overlay */
+        .doc-viewer-overlay {
+            position: absolute;
+            top: 0;
+            left: 0;
+            right: 0;
+            bottom: 0;
+            background-color: white;
+            border: 1px solid var(--paper-border);
+            border-radius: 8px;
+            display: flex;
+            flex-direction: column;
+            z-index: 10;
+            /* Match Hey OMAR modal depth */
+            box-shadow: 0 8px 24px rgba(0,0,0,0.25);
+        }
+
+        .doc-viewer-header {
+            background-color: var(--paper-panel);
+            border-bottom: 1px solid var(--paper-border);
+            padding: 8px;
+        }
+
+        .doc-tabs {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            margin-bottom: 8px;
+        }
+
+        .doc-tab-nav {
+            background: none;
+            border: 1px solid var(--paper-border);
+            border-radius: 4px;
+            padding: 4px 8px;
+            cursor: pointer;
+            font-size: 14px;
+        }
+
+        .doc-tab-nav:hover {
+            background-color: #e8eff5;
+        }
+
+        .doc-tab-strip {
+            display: flex;
+            gap: 4px;
+            flex: 1;
+        }
+
+        .doc-tab {
+            background-color: white;
+            border: 1px solid var(--paper-border);
+            border-radius: 8px 8px 0 0;
+            padding: 6px 12px;
+            cursor: pointer;
+            font-size: 12px;
+            transition: all 0.2s ease;
+            max-width: 200px;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+        }
+
+        .doc-tab:hover {
+            background-color: #f5f5f5;
+        }
+
+        .doc-tab-active {
+            background-color: var(--paper-accent) !important;
+            color: white;
+        }
+
+        .doc-tab[data-state="disabled"] {
+            opacity: 0.5;
+            cursor: not-allowed;
+        }
+
+        .doc-tab-close {
+            background: none;
+            border: 1px solid var(--paper-border);
+            border-radius: 4px;
+            padding: 4px 8px;
+            cursor: pointer;
+            font-size: 14px;
+            margin-left: auto;
+        }
+
+        .doc-tab-close:hover {
+            background-color: #ffebee;
+            color: #d32f2f;
+        }
+
+        .doc-viewer-controls {
+            display: flex;
+            align-items: center;
+            gap: 12px;
+        }
+
+        .doc-title {
+            font-weight: bold;
+            flex: 1;
+            font-size: 14px;
+            color: var(--paper-contrast);
+        }
+
+        .doc-status {
+            font-size: 12px;
+            color: #666;
+        }
+
+        .doc-viewer-content {
+            flex: 1;
+            padding: 15px;
+            overflow-y: auto;
+            font-family: 'Courier New', monospace;
+            font-size: 13px;
+            line-height: 1.5;
+            white-space: pre-wrap;
+            background-color: white;
+            color: var(--paper-contrast);
+        }
+
+        .doc-viewer-content:focus {
+            outline: 2px solid var(--paper-accent);
+            outline-offset: -2px;
+        }
+
+        /* Search and Q&A Panel */
+        .documents-search-panel {
+            margin-top: 12px;
+            background-color: var(--paper-panel);
+            border: 1px solid var(--paper-border);
+            border-radius: 8px;
+            overflow: hidden;
+        }
+
+        .search-qa-tabs {
+            display: flex;
+            background-color: var(--paper-panel);
+            border-bottom: 1px solid var(--paper-border);
+        }
+
+        .search-qa-tab {
+            flex: 1;
+            background: none;
+            border: none;
+            padding: 12px;
+            cursor: pointer;
+            font-size: 14px;
+            transition: all 0.2s ease;
+            border-bottom: 2px solid transparent;
+        }
+
+        .search-qa-tab:hover {
+            background-color: #e8eff5;
+        }
+
+        .search-qa-tab.active {
+            background-color: white;
+            border-bottom-color: var(--paper-accent);
+            font-weight: bold;
+        }
+
+        .search-qa-content {
+            display: none;
+            padding: 15px;
+            background-color: white;
+        }
+
+        .search-qa-content.active {
+            display: block;
+        }
+
+        .search-input-group, .ask-input-group {
+            display: flex;
+            gap: 8px;
+            margin-bottom: 12px;
+        }
+
+        .notes-ask-inline {
+            display: flex;
+            gap: 4px;
+            flex: 1;
+            align-items: center;
+        }
+
+        .notes-ask-inline input {
+            flex: 1;
+        }
+
+        .mic-btn {
+            background-color: #f5f5f5;
+            border: 1px solid var(--paper-border);
+            border-radius: 50%;
+            width: 36px;
+            height: 36px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            cursor: pointer;
+            font-size: 16px;
+            transition: all 0.2s ease;
+        }
+
+        .mic-btn:hover {
+            background-color: #e8eff5;
+            transform: scale(1.05);
+        }
+
+        .mic-btn.mic-active {
+            background-color: #ffeb3b;
+            box-shadow: 0 0 var(--ask-glow, 12px) rgba(255, 235, 59, 0.6);
+            animation: pulse 1.5s infinite;
+        }
+
+        @keyframes pulse {
+            0%, 100% { opacity: 1; }
+            50% { opacity: 0.7; }
+        }
+
+        .hold-active .mic-btn {
+            background-color: #4caf50;
+            color: white;
+        }
+
+        .voice-status {
+            font-size: 12px;
+            color: #666;
+            margin-top: 4px;
+            min-height: 16px;
+        }
+
+        .ask-actions {
+            margin-bottom: 12px;
+        }
+
+        .search-results, .answer-box {
+            max-height: 300px;
+            overflow-y: auto;
+            background-color: #f9f9f9;
+            border: 1px solid var(--paper-border);
+            border-radius: 4px;
+            padding: 12px;
+        }
+
+        .search-hit {
+            margin-bottom: 12px;
+            padding: 8px;
+            background-color: white;
+            border: 1px solid var(--paper-border);
+            border-radius: 4px;
+        }
+
+        .search-hit a {
+            color: var(--paper-accent);
+            text-decoration: none;
+            font-weight: bold;
+        }
+
+        .search-hit a:hover {
+            text-decoration: underline;
+        }
+
+        .search-hit pre {
+            margin-top: 8px;
+            font-size: 12px;
+            white-space: pre-wrap;
+            background-color: #f5f5f5;
+            padding: 8px;
+            border-radius: 3px;
+        }
+
+        .notes-answer {
+            line-height: 1.6;
+        }
+
+        .notes-citations {
+            margin-top: 12px;
+            padding-top: 8px;
+            border-top: 1px solid var(--paper-border);
+            font-size: 13px;
+        }
+
+        .excerpt-citation {
+            color: var(--paper-accent);
+            text-decoration: none;
+            font-weight: bold;
+            margin-right: 4px;
+        }
+
+        .excerpt-citation:hover {
+            text-decoration: underline;
+        }
+
+        /* Tabulator customizations for documents */
+        .documents-table .tabulator-header {
+            background-color: var(--paper-panel);
+            border-bottom: 1px solid var(--paper-border);
+        }
+
+        .documents-table .tabulator-col-title {
+            font-weight: bold;
+            color: var(--paper-contrast);
+        }
+
+        .documents-table .tabulator-row:nth-child(even) {
+            background-color: #f9f9f9;
+        }
+
+        .documents-table .tabulator-row:hover {
+            background-color: #e8eff5;
+        }
+
+        .documents-table .tabulator-row.tabulator-selected {
+            background-color: rgba(var(--paper-accent-rgb, 74, 144, 226), 0.1);
+        }
+
+        .idx-icon {
+            font-size: 14px;
+        }
+
+        .idx-ok { color: #4caf50; }
+        .idx-progress { color: #ff9800; }
+        .idx-queued { color: #9e9e9e; }
+        .idx-err { color: #f44336; }
+
+        /* Keyword highlighting */
+        .doc-keyword-highlight {
+            background-color: #ffeb3b;
+            padding: 0 2px;
+            border-radius: 2px;
+        }
+
+        .excerpt-highlight {
+            background-color: #ffeb3b !important;
+            padding: 0 2px;
+            border-radius: 2px;
+        }
+
+        /* Responsive adjustments */
+        @media (max-width: 768px) {
+            .docs-top-row, .docs-middle-row, .docs-bottom-row {
+                flex-wrap: wrap;
+            }
+            
+            .docs-search-group {
+                width: 100%;
+            }
+            
+            .doc-tabs {
+                flex-wrap: wrap;
+            }
+            
+            .search-input-group, .ask-input-group {
+                flex-direction: column;
+            }
+        }
+    </style>
+
+    <!-- Patient Demographics Modal (mirrors explore.html) -->
+    <div id="patientDemoModal" style="display:none; position:fixed; inset:0; background:rgba(0,0,0,0.45); z-index:1000; align-items:center; justify-content:center;"></div>
+      <div style="background:white; border-radius:8px; width:min(720px, 92vw); max-height:90vh; display:flex; flex-direction:column; box-shadow:0 8px 30px rgba(0,0,0,0.35);">
+        <div style="display:flex; align-items:center; justify-content:space-between; padding:10px 14px; border-bottom:1px solid #eee;">
+          <div id="patientDemoTitle" style="font-weight:600;">Patient Demographics</div>
+          <button id="patientDemoCloseBtn" style="background:transparent; border:none; font-size:20px; cursor:pointer;" aria-label="Close">×</button>
+        </div>
+        <div id="patientDemoContent" style="padding:14px 16px; overflow:auto;"></div>
+      </div>
+    </div>
+
+    <style>
+    /* Ensure the top bar patient name is keyboard accessible */
+    #patientLookupResults { outline: none; }
+    #patientLookupResults:focus { outline: 2px solid var(--paper-accent); outline-offset: 2px; }
+    </style>
+
+        <script src="/static/lib/marked.min.js"></script>
+        <script>
+            // Header spinner + attention pulse wiring for Hey OMAR
+            (function(){
+                function findHeyTab(){
+                    const leftBar = document.getElementById('leftTabBar');
+                    const rightBar = document.getElementById('rightTabBar');
+                    const byName = (bar)=> bar ? Array.from(bar.children||[]).find(t => ((t.dataset.moduleName||t.dataset.tabName||'')==='Hey OMAR')) : null;
+                    return byName(leftBar) || byName(rightBar) || null;
+                }
+                function isHeyTabActive(){
+                    const t = findHeyTab();
+                    return !!(t && t.classList && t.classList.contains('active'));
+                }
+                function setHeaderSpinner(on){
+                    const btn = document.getElementById('heyQuickBtn');
+                    if (!btn) return;
+                    btn.classList.toggle('hey-loading', !!on);
+                }
+                function setAttention(on){
+                    const btn = document.getElementById('heyQuickBtn');
+                    const tab = findHeyTab();
+                    if (btn){ btn.classList.toggle('hey-attn', !!on); }
+                    if (tab){ tab.classList.toggle('hey-attn', !!on); }
+                }
+                function bringHeyToFront(){
+                    const tab = findHeyTab();
+                    if (tab){ try { tab.click(); } catch(_e){} }
+                }
+                // Start/finish spinner
+                window.addEventListener('heyomar:query-start', ()=> setHeaderSpinner(true));
+                window.addEventListener('heyomar:query-finish', ()=> setHeaderSpinner(false));
+                // Answer ready attention if not active
+                window.addEventListener('heyomar:answer-ready', ()=>{
+                    if (!isHeyTabActive()) setAttention(true);
+                });
+                // Clicking header button while attention is on should bring tab front and stop flashing
+                function bindHeaderClick(){
+                    const headerBtn = document.getElementById('heyQuickBtn');
+                    if (!headerBtn || headerBtn._heyPulseBound) return;
+                    headerBtn._heyPulseBound = true;
+                    headerBtn.addEventListener('click', function(){
+                        if (this.classList.contains('hey-attn')){
+                            setAttention(false);
+                            bringHeyToFront();
+                        }
+                    }, { capture: true });
+                }
+                // Clicking the tab itself should also clear attention
+                function bindTabBar(){
+                    const leftBar = document.getElementById('leftTabBar');
+                    const rightBar = document.getElementById('rightTabBar');
+                    function onClick(ev){
+                        const t = findHeyTab();
+                        if (!t) return;
+                        if (ev.target === t || (ev.target && t.contains(ev.target))){ setAttention(false); }
+                    }
+                    if (leftBar && !leftBar._heyPulseBound){ leftBar._heyPulseBound = true; leftBar.addEventListener('click', onClick, true); }
+                    if (rightBar && !rightBar._heyPulseBound){ rightBar._heyPulseBound = true; rightBar.addEventListener('click', onClick, true); }
+                }
+                if (document.readyState === 'loading') {
+                    document.addEventListener('DOMContentLoaded', function(){ bindHeaderClick(); bindTabBar(); });
+                } else {
+                    bindHeaderClick(); bindTabBar();
+                }
+            })();
+        </script>
+    <!-- Adjust workspace viewport to global top bar height -->
+    <script>
+      (function(){
+        function updateTopBarVar(){
+          try{
+            var tb = document.querySelector('.global-top-bar');
+            var h = tb ? tb.offsetHeight : 60;
+            document.documentElement.style.setProperty('--topbar-h', h + 'px');
+          }catch(_e){}
+        }
+        updateTopBarVar();
+        window.addEventListener('resize', updateTopBarVar);
+        if(window.ResizeObserver){
+          try{
+            var tb = document.querySelector('.global-top-bar');
+            if(tb){ var ro = new ResizeObserver(updateTopBarVar); ro.observe(tb); }
+          }catch(_e){}
+        }
+      })();
+    </script>
+        <!-- Mobile search overlay toggle -->
+        <script>
+            (function(){
+                function bindMobileSearch(){
+                    try{
+                        var btn = document.getElementById('mobileSearchBtn');
+                        var input = document.getElementById('patientSearchInput');
+                        if(!btn || !input || btn._bound) return;
+                        btn._bound = true;
+                        btn.addEventListener('click', function(e){
+                            e.preventDefault();
+                            document.body.classList.add('search-open');
+                            // Slight delay to ensure style applied before focusing
+                            setTimeout(function(){ try{ input.value=''; input.style.display='block'; input.focus(); }catch(_e){} }, 10);
+                        });
+                        // Close overlay on Escape or when input loses focus (unless clicking inside dropdown)
+                        document.addEventListener('keydown', function(ev){ if(ev.key==='Escape'){ document.body.classList.remove('search-open'); try{ input.blur(); }catch(_e){} } });
+                        input.addEventListener('blur', function(){ setTimeout(function(){ try{
+                            var dd = document.querySelector('.patient-dropdown');
+                            var ae = document.activeElement;
+                            if (dd && (ae===dd || (ae && dd.contains(ae)))) return; // keep open if interacting with dropdown
+                            document.body.classList.remove('search-open');
+                        }catch(_e){} }, 200); });
+                    }catch(_e){}
+                }
+                if(document.readyState==='loading'){ document.addEventListener('DOMContentLoaded', bindMobileSearch); }
+                else { bindMobileSearch(); }
+            })();
+        </script>
+        <!-- Load dependencies in correct order -->
+    <script src="/static/js/SessionManager.js"></script>
+    <!-- Lightweight Scribe runtime + event bus -->
+    <script src="/static/js/scribe_runtime.js"></script>
+    <!-- NoteRecorder (audio capture + /api/scribe streaming) and provider wiring -->
+    <script src="/static/js/note.js"></script>
+    <script src="/static/js/scribe_provider_note_recorder.js"></script>
+        <script src="/static/lib/luxon.min.js"></script>
+    <!-- Tabulator JS (optional if available under /static/lib/) -->
+    <!-- <script src="/static/lib/tabulator.min.js"></script> -->
+        <script src="/static/js/app.js"></script>
+    <script src="/static/js/workspace.js"></script>
+    <script src="/static/js/hey_quick.js"></script>
+    <!-- Shared demographics overlay used across pages -->
+    <script src="/static/lib/demographics_overlay.js"></script>
+        <!-- Workspace modules and supporting scripts -->
+    <script src="/static/js/api.js"></script>
+    <script src="/static/js/patient.js"></script>
+    <script src="/static/js/selectpatient.js"></script>
+    <script src="/static/js/patient_switch.js"></script>
+        
+        <!-- Note: Deprecated agent scripts removed to prevent 404s; frontend no longer calls legacy endpoints. -->
+        <!-- Read SAFE_MODULES flag from body data attribute to avoid template braces in JS -->
+        <script>(function(){
+            var v = (document.body && document.body.dataset ? document.body.dataset.safeModulesEnabled : 'false');
+            window.SAFE_MODULES_ENABLED = (v === 'true' || v === true);
+        })();</script>
+        <!-- Enable sandbox debug mode to ease diagnostics -->
+        <script>window.SANDBOX_DEBUG = true;</script>
+  </body>
+</html>
