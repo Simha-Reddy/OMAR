@@ -660,6 +660,20 @@
         }
       }catch(_e){}
     });
+    // Ensure each vital series is sorted by time ascending so `latest()` works
+    try{
+      const byTimeAsc = (a,b)=>{
+        const ta = a && a.effectiveDateTime ? new Date(a.effectiveDateTime).getTime() : -Infinity;
+        const tb = b && b.effectiveDateTime ? new Date(b.effectiveDateTime).getTime() : -Infinity;
+        return (isNaN(ta)? -Infinity: ta) - (isNaN(tb)? -Infinity: tb);
+      };
+      vitals.bloodPressure.sort(byTimeAsc);
+      vitals.heartRate.sort(byTimeAsc);
+      vitals.respiratoryRate.sort(byTimeAsc);
+      vitals.oxygenSaturation.sort(byTimeAsc);
+      vitals.temperature.sort(byTimeAsc);
+      vitals.weight.sort(byTimeAsc);
+    }catch(_e){}
     return vitals;
   }
 
