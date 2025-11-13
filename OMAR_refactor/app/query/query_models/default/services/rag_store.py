@@ -55,6 +55,29 @@ class RagStore:
         self._ttl = max(0, int(ttl_seconds))
         self._capacity = max(1, int(capacity))
 
+    @staticmethod
+    def _embed_text_batch(texts: List[str]) -> List[List[float]]:
+        batch_size = max(1, int(os.getenv('RAG_EMBED_BATCH_SIZE', '32') or 32))
+        max_attempts = max(1, int(os.getenv('RAG_EMBED_MAX_ATTEMPTS', '3') or 3))
+        backoff_base = float(os.getenv('RAG_EMBED_BACKOFF_SECONDS', '1.5') or 1.5)
+        combined: List[List[float]] = []
+        for start in range(0, len(texts), batch_size):
+            batch = texts[start:start+batch_size]
+            if not batch:
+                continue
+            attempt = 0
+            while True:
+                try:
+                    combined.extend(emb_api.get_embeddings(batch))
+                    break
+                except Exception:
+                    attempt += 1
+                    if attempt >= max_attempts:
+                        raise
+                    sleep_for = backoff_base * (2 ** (attempt - 1))
+                    time.sleep(sleep_for)
+        return combined
+
     def _normalize_model(self, model: str | None) -> str:
         text = (model or 'default').strip()
         return text or 'default'
@@ -100,6 +123,10 @@ class RagStore:
 
     def _chunks_from_document_index(self, doc_index: DocumentSearchIndex) -> List[Dict[str, Any]]:
         chunks: List[Dict[str, Any]] = []
+        try:
+            doc_index.ensure_priority_texts()
+        except Exception:
+            pass
         for doc_id, meta, full_text in doc_index.iter_documents():
             text = (full_text or '').strip()
             if not text:
@@ -175,7 +202,7 @@ class RagStore:
                 return idx.manifest()
             texts = [c.get('text') or '' for c in idx.chunks]
             try:
-                vecs_list = emb_api.get_embeddings(texts)
+                vecs_list = self._embed_text_batch(texts)
                 # Heuristic: treat tiny vectors as placeholders
                 if vecs_list and len(vecs_list[0]) > 3:
                     idx.vectors = np.array(vecs_list, dtype=np.float32)
@@ -216,7 +243,7 @@ class RagStore:
             if not texts:
                 return idx.manifest()
             try:
-                vecs_list = emb_api.get_embeddings(texts)
+                vecs_list = self._embed_text_batch(texts)
                 if not vecs_list:
                     return idx.manifest()
                 import numpy as _np

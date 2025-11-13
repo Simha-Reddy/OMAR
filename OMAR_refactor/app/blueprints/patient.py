@@ -1,7 +1,7 @@
 from __future__ import annotations
 import json
 import os
-from typing import Any
+from typing import Any, Dict
 from flask import Blueprint, jsonify, current_app, request, g
 from ..services.patient_service import PatientService
 from ..gateways.factory import get_gateway
@@ -754,23 +754,25 @@ def documents_quick(dfn: str):
     svc = _get_patient_service()
     try:
         raw_requested = _raw_requested()
+        include_raw = request.args.get('includeRaw','0').lower() in ('1','true','yes','on')
+        include_text = request.args.get('includeText','0').lower() in ('1','true','yes','on')
+        include_enc = request.args.get('includeEncounter','0').lower() in ('1','true','yes','on')
         # Fetch raw and quick lists
-        # Request text to enable RAG chunking immediately
-        doc_params = {'text': '1'}
-        if raw_requested:
+        doc_params: Dict[str, str] = {}
+        if include_text or raw_requested:
+            doc_params['text'] = '1'
+        else:
+            doc_params['text'] = '0'
+        if raw_requested or include_raw:
             doc_params['raw'] = '1'
         vpr = svc.get_vpr_raw(dfn, 'document', params=doc_params)
         quick_list = svc.get_documents_quick(dfn, params=dict(doc_params))
 
         # Proactively build keyword index if not present (lazy in search too)
         try:
-            _ = get_or_build_index_for_dfn(str(dfn))
+            _ = get_or_build_index_for_dfn(str(dfn), gateway=svc.gateway, async_build=True)
         except Exception:
             pass
-
-        include_raw = request.args.get('includeRaw','0').lower() in ('1','true','yes','on')
-        include_text = request.args.get('includeText','0').lower() in ('1','true','yes','on')
-        include_enc = request.args.get('includeEncounter','0').lower() in ('1','true','yes','on')
 
         # Normalize filters
         def _split_params(val: str | None) -> list[str]:
@@ -946,7 +948,7 @@ def documents_list_envelope(dfn: str):
 
         # Proactively build keyword index (optional)
         try:
-            _ = get_or_build_index_for_dfn(str(dfn))
+            _ = get_or_build_index_for_dfn(str(dfn), gateway=svc.gateway, async_build=True)
         except Exception:
             pass
 

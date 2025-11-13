@@ -1,5 +1,7 @@
 from __future__ import annotations
 import os
+import threading
+import time
 from typing import Any, Mapping
 from flask import Blueprint, request, jsonify, session as flask_session
 from ...services.patient_service import PatientService
@@ -10,11 +12,59 @@ from ..query_models.default.services.rag_store import store
 bp = Blueprint('documents_api', __name__)
 
 
+_STORE_SYNC_IN_FLIGHT: set[tuple[str, str]] = set()
+
+
 def _get_patient_service() -> PatientService:
     station = str(flask_session.get('station') or os.getenv('DEFAULT_STATION', '500'))
     duz = str(flask_session.get('duz') or os.getenv('DEFAULT_DUZ', '983'))
     gw = get_gateway(station=station, duz=duz)
     return PatientService(gateway=gw)
+
+
+def _start_priority_hydration(doc_index) -> None:
+    if doc_index is None:
+        return
+
+    def _hydrate() -> None:
+        try:
+            doc_index.ensure_priority_texts()
+        except Exception:
+            pass
+
+    threading.Thread(target=_hydrate, name='DocIndexHydrate', daemon=True).start()
+
+
+def _schedule_store_sync(dfn: str, model: str, doc_index, *, force: bool = False) -> None:
+    key = (str(dfn), str(model))
+    if key in _STORE_SYNC_IN_FLIGHT or doc_index is None:
+        return
+    _STORE_SYNC_IN_FLIGHT.add(key)
+
+    def _runner() -> None:
+        try:
+            while doc_index.is_building():
+                time.sleep(0.25)
+            manifest = store.ensure_index(dfn, doc_index, force=force, model=model)
+            manifest['document_manifest'] = doc_index.manifest()
+            doc_manifest = doc_index.manifest()
+            if doc_manifest.get('missing_text', 0):
+                _start_priority_hydration(doc_index)
+            try:
+                if manifest.get('lexical_only', True):
+                    store.embed_docs_policy(dfn, doc_index, model=model)
+            except Exception:
+                pass
+        except Exception:
+            pass
+        finally:
+            _STORE_SYNC_IN_FLIGHT.discard(key)
+
+    threading.Thread(
+        target=_runner,
+        name=f'DocIndexStoreSync-{dfn}-{model}',
+        daemon=True,
+    ).start()
 
 
 def _extract_model(data: Mapping[str, Any] | None) -> str:
@@ -47,14 +97,41 @@ def start_index():
             return jsonify({'error': 'dfn is required'}), 400
         model = _extract_model(data)
         st = store.status(dfn, model=model)
+        existing_chunks = bool(st.get('indexed') and int(st.get('chunks', 0) or 0) > 0)
+        force_requested = bool(data.get('force') or data.get('rebuild'))
+        force_rebuild = force_requested or not existing_chunks
+
         svc = _get_patient_service()
-        doc_index = get_or_build_index_for_dfn(dfn, gateway=svc.gateway, force=not (st.get('indexed') and int(st.get('chunks', 0)) > 0))
-        manifest = store.ensure_index(dfn, doc_index, force=not (st.get('indexed') and int(st.get('chunks', 0)) > 0), model=model)
-        try:
-            if manifest.get('lexical_only', True):
-                store.embed_docs_policy(dfn, doc_index, model=model)
-        except Exception:
-            pass
+        build_status: dict[str, Any] = {}
+        doc_index = get_or_build_index_for_dfn(
+            dfn,
+            gateway=svc.gateway,
+            force=force_rebuild,
+            async_build=True,
+            status=build_status,
+        )
+        doc_manifest = doc_index.manifest()
+        needs_rebuild = bool(build_status.get('needs_rebuild'))
+        building = doc_index.is_building()
+
+        if not needs_rebuild and not building:
+            manifest = store.ensure_index(dfn, doc_index, force=force_rebuild, model=model)
+            manifest['document_manifest'] = doc_manifest
+            if doc_manifest.get('missing_text', 0):
+                _start_priority_hydration(doc_index)
+            try:
+                if manifest.get('lexical_only', True):
+                    store.embed_docs_policy(dfn, doc_index, model=model)
+            except Exception:
+                pass
+            manifest['building'] = False
+        else:
+            _schedule_store_sync(dfn, model, doc_index, force=force_rebuild)
+            manifest = store.status(dfn, model=model)
+            manifest['document_manifest'] = doc_manifest
+            manifest['building'] = True
+
+        manifest['build_started'] = bool(build_status.get('started_build') or building)
         return jsonify({'status': 'ok', 'manifest': manifest})
     except Exception as e:
         return jsonify({'error': str(e)}), 500
@@ -121,6 +198,10 @@ def embed_docs():
                     store.ingest_texts(dfn, items, model=model)
             except Exception:
                 pass
+        try:
+            doc_index.hydrate_texts(list(ids_set))
+        except Exception:
+            pass
         manifest = store.embed_subset(dfn, ids_set, model=model)
         if 'error' in manifest:
             return jsonify(manifest), 400

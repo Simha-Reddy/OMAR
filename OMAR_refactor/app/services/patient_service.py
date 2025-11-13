@@ -1,5 +1,5 @@
 from __future__ import annotations
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 from ..gateways.data_gateway import DataGateway, GatewayError
 from .transforms import (
     map_vpr_patient_to_quick_demographics,
@@ -18,6 +18,7 @@ from .labs_rpc import rpc_panel_to_quick_tests
 class PatientService:
     def __init__(self, gateway: DataGateway):
         self.gateway = gateway
+        self._vpr_cache: Dict[Tuple[str, str, Tuple[Tuple[str, str], ...]], Any] = {}
         # Route-friendly to VPR domain mapping when names differ
         # Map friendly route names to VPR JSON domain tokens (singular per VPR 1.0 Guide)
         # Keep common plural aliases to avoid breaking callers.
@@ -80,13 +81,35 @@ class PatientService:
         return self.gateway.get_demographics(dfn)
 
     # New: quick flattened demographics (direct VPR mapping)
+    def _freeze_params(self, params: Optional[dict]) -> Tuple[Tuple[str, str], ...]:
+        if not params:
+            return ()
+        frozen: List[Tuple[str, str]] = []
+        for key, value in params.items():
+            if isinstance(value, (list, tuple, set)):
+                joined = ','.join(str(v) for v in value)
+                frozen.append((str(key), joined))
+            else:
+                frozen.append((str(key), str(value)))
+        frozen.sort(key=lambda kv: kv[0])
+        return tuple(frozen)
+
+    def _get_vpr_cached(self, dfn: str, domain: str, params: dict | None = None):
+        dom = self.domain_alias.get(domain, domain)
+        cache_key = (str(dfn), str(dom), self._freeze_params(params))
+        if cache_key in self._vpr_cache:
+            return self._vpr_cache[cache_key]
+        payload = self.gateway.get_vpr_domain(dfn, domain=dom, params=params)
+        self._vpr_cache[cache_key] = payload
+        return payload
+
     def get_demographics_quick(self, dfn: str) -> Dict[str, Any]:
-        vpr = self.gateway.get_vpr_domain(dfn, domain='patient')
+        vpr = self._get_vpr_cached(dfn, domain='patient')
         return map_vpr_patient_to_quick_demographics(vpr)
 
     # --- Medications ---
     def get_medications_quick(self, dfn: str, params: dict | None = None):
-        vpr = self.gateway.get_vpr_domain(dfn, domain=self.domain_alias['meds'], params=params)
+        vpr = self._get_vpr_cached(dfn, domain=self.domain_alias['meds'], params=params)
         return vpr_to_quick_medications(vpr)
 
     # --- Labs ---
@@ -97,7 +120,7 @@ class PatientService:
         *,
         filters: Optional[Dict[str, Any]] = None,
     ) -> List[Dict[str, Any]]:
-        vpr = self.gateway.get_vpr_domain(dfn, domain=self.domain_alias['labs'], params=params)
+        vpr = self._get_vpr_cached(dfn, domain=self.domain_alias['labs'], params=params)
         quick_vpr = vpr_to_quick_labs(vpr)
 
         start_iso = None
@@ -175,12 +198,12 @@ class PatientService:
 
     # --- Vitals ---
     def get_vitals_quick(self, dfn: str, params: dict | None = None):
-        vpr = self.gateway.get_vpr_domain(dfn, domain=self.domain_alias['vitals'], params=params)
+        vpr = self._get_vpr_cached(dfn, domain=self.domain_alias['vitals'], params=params)
         return vpr_to_quick_vitals(vpr)
 
     # --- Notes ---
     def get_notes_quick(self, dfn: str, params: dict | None = None):
-        vpr = self.gateway.get_vpr_domain(dfn, domain=self.domain_alias['notes'], params=params)
+        vpr = self._get_vpr_cached(dfn, domain=self.domain_alias['notes'], params=params)
         return vpr_to_quick_notes(vpr)
 
     # --- Documents (unified) ---
@@ -188,7 +211,7 @@ class PatientService:
         """Unified documents quick list from VPR 'documents' domain.
         Uses the document-centric notes transform.
         """
-        vpr = self.gateway.get_vpr_domain(dfn, domain=self.domain_alias['document'], params=params)
+        vpr = self._get_vpr_cached(dfn, domain=self.domain_alias['document'], params=params)
         return vpr_to_quick_notes(vpr)
 
     def get_document_texts(self, dfn: str, doc_ids: list[str]) -> Dict[str, list[str]]:
@@ -197,34 +220,33 @@ class PatientService:
 
     # --- Radiology ---
     def get_radiology_quick(self, dfn: str, params: dict | None = None):
-        vpr = self.gateway.get_vpr_domain(dfn, domain=self.domain_alias['radiology'], params=params)
+        vpr = self._get_vpr_cached(dfn, domain=self.domain_alias['radiology'], params=params)
         return vpr_to_quick_radiology(vpr)
 
     # --- Procedures ---
     def get_procedures_quick(self, dfn: str, params: dict | None = None):
-        vpr = self.gateway.get_vpr_domain(dfn, domain=self.domain_alias['procedures'], params=params)
+        vpr = self._get_vpr_cached(dfn, domain=self.domain_alias['procedures'], params=params)
         return vpr_to_quick_procedures(vpr)
 
     # --- Encounters ---
     def get_encounters_quick(self, dfn: str, params: dict | None = None):
-        vpr = self.gateway.get_vpr_domain(dfn, domain=self.domain_alias['encounters'], params=params)
+        vpr = self._get_vpr_cached(dfn, domain=self.domain_alias['encounters'], params=params)
         return vpr_to_quick_encounters(vpr)
 
     # --- Problems ---
     def get_problems_quick(self, dfn: str, params: dict | None = None):
-        vpr = self.gateway.get_vpr_domain(dfn, domain=self.domain_alias['problems'], params=params)
+        vpr = self._get_vpr_cached(dfn, domain=self.domain_alias['problems'], params=params)
         return vpr_to_quick_problems(vpr)
 
     # --- Allergies ---
     def get_allergies_quick(self, dfn: str, params: dict | None = None):
-        vpr = self.gateway.get_vpr_domain(dfn, domain=self.domain_alias['allergies'], params=params)
+        vpr = self._get_vpr_cached(dfn, domain=self.domain_alias['allergies'], params=params)
         return vpr_to_quick_allergies(vpr)
 
     # Raw VPR passthrough
     def get_vpr_raw(self, dfn: str, domain: str, params: dict | None = None):
         # Map incoming alias to VPR canonical domain when known
-        dom = self.domain_alias.get(domain, domain)
-        return self.gateway.get_vpr_domain(dfn, domain=dom, params=params)
+        return self._get_vpr_cached(dfn, domain, params=params)
 
     # Full chart (no domain filter)
     def get_fullchart(self, dfn: str):

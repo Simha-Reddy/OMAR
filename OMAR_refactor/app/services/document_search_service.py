@@ -1,6 +1,8 @@
 from __future__ import annotations
 from typing import Any, Dict, List, Optional, Set, Tuple
+import os
 import re
+import threading
 import time
 from collections import defaultdict
 from ..gateways.data_gateway import DataGateway
@@ -15,6 +17,9 @@ except Exception:
 _REGISTRY: Dict[str, 'DocumentSearchIndex'] = {}
 
 INDEX_TTL_SECONDS = 3 * 60 * 60  # 3 hours per DFN cache lifecycle
+
+SYNC_HYDRATION_LIMIT = max(0, int(os.getenv('DOCUMENT_SYNC_HYDRATE_LIMIT', '0') or 0))
+RAG_PRIORITY_HYDRATE_LIMIT = max(20, int(os.getenv('DOCUMENT_RAG_PRIORITY_HYDRATE', '200') or 200))
 
 _term_split_re = re.compile(r'\w+|"[^"]+"')
 _word_re = re.compile(r"[A-Za-z0-9']+")
@@ -32,25 +37,68 @@ def _resolve_gateway(gateway: Optional[DataGateway]) -> Optional[DataGateway]:
     return None
 
 
+def get_index_for_dfn(
+    dfn: str,
+    *,
+    gateway: Optional[DataGateway] = None,
+    create: bool = True,
+) -> Optional['DocumentSearchIndex']:
+    key = str(dfn)
+    gw = _resolve_gateway(gateway)
+    idx = _REGISTRY.get(key)
+    if idx is None:
+        if not create:
+            return None
+        idx = DocumentSearchIndex(dfn=key, gateway=gw)
+        _REGISTRY[key] = idx
+        return idx
+    if gw is not None and not idx.matches_gateway(gw):
+        # Station/DUZ changed; start fresh index to avoid cross-site leakage
+        idx = DocumentSearchIndex(dfn=key, gateway=gw)
+        _REGISTRY[key] = idx
+    elif gw is not None:
+        idx.set_gateway(gw)
+    return idx
+
+
 def get_or_build_index_for_dfn(
     dfn: str,
     *,
     gateway: Optional[DataGateway] = None,
     force: bool = False,
+    async_build: bool = False,
+    status: Optional[Dict[str, Any]] = None,
 ) -> 'DocumentSearchIndex':
     key = str(dfn)
     gw = _resolve_gateway(gateway)
     idx = _REGISTRY.get(key)
-    if idx is not None:
-        if force or idx.is_stale() or (gw is not None and not idx.matches_gateway(gw)):
-            idx = None
-        else:
-            if gw is not None:
-                idx.set_gateway(gw)
+    created = False
     if idx is None:
         idx = DocumentSearchIndex(dfn=key, gateway=gw)
-        idx.build()
         _REGISTRY[key] = idx
+        created = True
+    elif gw is not None and not idx.matches_gateway(gw):
+        idx = DocumentSearchIndex(dfn=key, gateway=gw)
+        _REGISTRY[key] = idx
+        created = True
+    else:
+        if gw is not None:
+            idx.set_gateway(gw)
+
+    needs_rebuild = bool(force or created or idx.needs_build())
+    started_async = False
+
+    if async_build:
+        if needs_rebuild:
+            started_async = bool(idx.build_async())
+    else:
+        if needs_rebuild:
+            idx.build()
+
+    if status is not None:
+        status['needs_rebuild'] = needs_rebuild
+        status['started_build'] = started_async
+
     return idx
 
 
@@ -87,6 +135,9 @@ class DocumentSearchIndex:
         self.min_prefix_len: int = 3
         # track doc ids whose full text could not be hydrated
         self.missing_text_ids: Set[str] = set()
+        self._sync_hydration_limit = SYNC_HYDRATION_LIMIT
+        self._is_building = False
+        self._last_build_error: Optional[str] = None
         self.set_gateway(gateway)
 
     def set_gateway(self, gateway: Optional[DataGateway]) -> None:
@@ -130,17 +181,21 @@ class DocumentSearchIndex:
 
     def manifest(self) -> Dict[str, Any]:
         metadata_rich = any('clinicians' in (m or {}) or 'nationalTitleCode' in (m or {}) for m in self.meta.values())
+        hydrated = len(self.order) - len(self.missing_text_ids)
         return {
             'dfn': self.dfn,
             'documents': len(self.order),
-            'has_text': any((txt or '').strip() for txt in self.text.values()),
+            'has_text': hydrated > 0,
             'updated_at': self.updated_at,
             'generation': self.generation,
             'station': self.station,
             'duz': self.duz,
             'missing_text': len(self.missing_text_ids),
+            'hydrated': hydrated,
             'metadata_rich': metadata_rich,
             'text_complete': len(self.missing_text_ids) == 0,
+            'building': self._is_building,
+            'build_error': self._last_build_error,
         }
 
     def iter_documents(self) -> List[Tuple[str, Dict[str, str], str]]:
@@ -148,6 +203,115 @@ class DocumentSearchIndex:
         for doc_id in self.order:
             docs.append((doc_id, dict(self.meta.get(doc_id, {})), self.text.get(doc_id, '')))
         return docs
+
+    def is_building(self) -> bool:
+        return bool(self._is_building)
+
+    def needs_build(self) -> bool:
+        if not self.order:
+            return True
+        return self.is_stale()
+
+    def build_async(self) -> bool:
+        if self._is_building:
+            return False
+
+        def _runner() -> None:
+            try:
+                self.build()
+            except Exception as exc:
+                self._last_build_error = str(exc)
+
+        threading.Thread(target=_runner, name=f'DocIndexBuild-{self.dfn}', daemon=True).start()
+        return True
+
+    @staticmethod
+    def _normalize_text_value(payload: Any) -> str:
+        if isinstance(payload, list):
+            parts = [str(segment) for segment in payload if str(segment).strip()]
+            return '\n'.join(parts)
+        return str(payload or '')
+
+    def _reindex_document(self, doc_id: str) -> None:
+        # Remove existing postings for this document
+        for token in list(self.postings.keys()):
+            bucket = self.postings[token]
+            if doc_id in bucket:
+                try:
+                    del bucket[doc_id]
+                except Exception:
+                    bucket.pop(doc_id, None)
+                if not bucket:
+                    self.postings.pop(token, None)
+        text_value = self.text.get(doc_id, '')
+        tokens = self._tokenize(text_value)
+        self.doc_len[doc_id] = len(tokens)
+        for token in tokens:
+            self.postings[token][doc_id] += 1
+        meta_entry = self.meta.get(doc_id, {}) or {}
+        title = str(meta_entry.get('title') or '')
+        author = str(meta_entry.get('author') or '')
+        dtype = str(meta_entry.get('type') or '')
+        dclass = str(meta_entry.get('class') or '')
+        for field_val, boost in ((title, 3), (author, 2), (dtype, 2), (dclass, 1)):
+            if not field_val:
+                continue
+            for token in self._tokenize(field_val):
+                self.postings[token][doc_id] += boost
+        try:
+            self.vocab_sorted = sorted(self.postings.keys())
+        except Exception:
+            self.vocab_sorted = list(self.postings.keys())
+
+    def hydrate_texts(self, doc_ids: List[str]) -> int:
+        if not doc_ids:
+            return 0
+        gateway = self.gateway or _resolve_gateway(None) or VistaApiXGateway()
+        rpc_tokens: List[str] = []
+        token_to_doc: Dict[str, str] = {}
+        for doc_id in doc_ids:
+            if doc_id is None:
+                continue
+            doc_key = str(doc_id)
+            rpc_id = self.rpc_ids.get(doc_key)
+            token = str(rpc_id) if rpc_id else doc_key
+            if token in token_to_doc:
+                continue
+            rpc_tokens.append(token)
+            token_to_doc[token] = doc_key
+        if not rpc_tokens:
+            return 0
+        try:
+            fetched = gateway.get_document_texts(self.dfn, rpc_tokens)
+        except Exception:
+            fetched = {}
+        if not fetched:
+            return 0
+        updated = 0
+        for key, payload in (fetched or {}).items():
+            doc_id = token_to_doc.get(str(key))
+            if not doc_id or doc_id not in self.meta:
+                continue
+            text_value = self._normalize_text_value(payload)
+            if not text_value.strip():
+                continue
+            self.text[doc_id] = text_value
+            self.missing_text_ids.discard(doc_id)
+            self._reindex_document(doc_id)
+            updated += 1
+        return updated
+
+    def ensure_priority_texts(self, limit: Optional[int] = None) -> int:
+        target_limit = limit or RAG_PRIORITY_HYDRATE_LIMIT
+        targets: List[str] = []
+        for doc_id in self.order:
+            if doc_id in self.missing_text_ids and self.rpc_ids.get(doc_id):
+                targets.append(doc_id)
+            if target_limit and len(targets) >= target_limit:
+                break
+        if not targets:
+            return 0
+        return self.hydrate_texts(targets)
 
     def _tokenize(self, text: str) -> List[str]:
         tokens: List[str] = []
@@ -175,310 +339,321 @@ class DocumentSearchIndex:
         return phrases, terms
 
     def build(self):
-        # Reset state before rebuild to avoid carrying stale structures
-        self.postings = defaultdict(lambda: defaultdict(int))
-        self.doc_len = defaultdict(int)
-        self.meta = {}
-        self.rpc_ids = {}
-        self.text = {}
-        self.order = []
-        self.vocab_sorted = []
-        self.missing_text_ids = set()
+        waited = False
+        while self._is_building:
+            waited = True
+            time.sleep(0.05)
+        if waited and self.order and not self.is_stale():
+            return
 
-        gateway = self.gateway or VistaApiXGateway()
-        self.set_gateway(gateway)
+        self._is_building = True
+        self._last_build_error = None
         try:
-            raw_entries = gateway.get_document_index_entries(self.dfn, params={'text': '1'})
-        except Exception:
-            raw_entries = []
-        source_entries = raw_entries if isinstance(raw_entries, list) else []
+            # Reset state before rebuild to avoid carrying stale structures
+            self.postings = defaultdict(lambda: defaultdict(int))
+            self.doc_len = defaultdict(int)
+            self.meta = {}
+            self.rpc_ids = {}
+            self.text = {}
+            self.order = []
+            self.vocab_sorted = []
+            self.missing_text_ids = set()
 
-        normalized_entries: List[Dict[str, Any]] = []
-        seen_doc_ids: Set[str] = set()
-
-        for entry in source_entries:
-            if not isinstance(entry, dict):
-                continue
-            doc_id_value = entry.get('doc_id')
-            doc_id = str(doc_id_value).strip() if doc_id_value is not None else ''
-            if not doc_id:
-                quick_candidate = entry.get('quick')
-                if isinstance(quick_candidate, dict):
-                    for key in ('uid', 'uidLong', 'id', 'localId'):
-                        candidate = quick_candidate.get(key)
-                        if candidate:
-                            doc_id = str(candidate).strip()
-                            if doc_id:
-                                break
-            if not doc_id:
-                raw_candidate = entry.get('raw')
-                if isinstance(raw_candidate, dict):
-                    for key in ('uid', 'uidLong', 'id', 'localId'):
-                        candidate = raw_candidate.get(key)
-                        if candidate:
-                            doc_id = str(candidate).strip()
-                            if doc_id:
-                                break
-            if not doc_id or doc_id in seen_doc_ids:
-                continue
-            normalized_entries.append({
-                'doc_id': doc_id,
-                'quick': entry.get('quick'),
-                'raw': entry.get('raw'),
-                'text': entry.get('text'),
-                'rpc_id': entry.get('rpc_id'),
-            })
-            seen_doc_ids.add(doc_id)
-
-        def _entry_date_value(entry: Dict[str, Any]) -> str:
-            date_val = ''
-            quick_block = entry.get('quick') if isinstance(entry.get('quick'), dict) else {}
-            if isinstance(quick_block, dict):
-                raw_date = quick_block.get('date') or quick_block.get('referenceDate')
-                if raw_date:
-                    date_val = str(raw_date)
-            if not date_val:
-                raw_block = entry.get('raw') if isinstance(entry.get('raw'), dict) else {}
-                if isinstance(raw_block, dict):
-                    for key in ('date', 'dateTime', 'referenceDate', 'entered', 'referenceDateTime'):
-                        candidate = raw_block.get(key)
-                        if candidate:
-                            date_val = str(candidate)
-                            break
-            return date_val
-
-        normalized_entries.sort(key=_entry_date_value, reverse=True)
-
-        documents: Dict[str, Dict[str, Any]] = {}
-        doc_sequence: List[str] = []
-        hydration_requests: Dict[str, str] = {}
-        missing_doc_ids: Set[str] = set()
-
-        for entry in normalized_entries:
-            doc_id = entry['doc_id']
-            doc_sequence.append(doc_id)
-
-            quick_obj = entry.get('quick')
-            quick = quick_obj.copy() if isinstance(quick_obj, dict) else {}
-            raw_obj = entry.get('raw')
-            raw = raw_obj.copy() if isinstance(raw_obj, dict) else None
-
-            rpc_val = entry.get('rpc_id')
-            rpc_id = str(rpc_val).strip() if rpc_val not in (None, '') else None
-            if rpc_id:
-                self.rpc_ids[doc_id] = rpc_id
-
-            text_val = entry.get('text')
-            if isinstance(text_val, list):
-                text_str = '\n'.join(str(segment) for segment in text_val if str(segment).strip())
-            elif isinstance(text_val, str):
-                text_str = text_val
-            elif text_val is None:
-                text_str = ''
-            else:
-                text_str = str(text_val)
-
-            if not text_str.strip() and raw:
-                try:
-                    maybe = self._extract_full_text(raw)
-                except Exception:
-                    maybe = None
-                if maybe:
-                    text_str = maybe
-
-            if not text_str.strip():
-                missing_doc_ids.add(doc_id)
-                if rpc_id:
-                    hydration_requests[rpc_id] = doc_id
-            else:
-                missing_doc_ids.discard(doc_id)
-
-            title = str(quick.get('title') or '')
-            author_value = quick.get('author')
-            if isinstance(author_value, dict):
-                author_value = author_value.get('name') or author_value.get('displayName') or author_value.get('text')
-            author = str(author_value or '')
-            dtype = str(quick.get('documentType') or '')
-            dclass = str(quick.get('documentClass') or '')
-            date = str(quick.get('date') or quick.get('referenceDate') or '')
-            nt = str(quick.get('nationalTitle') or '')
-
-            provider_value = quick.get('authorProviderType')
-            if isinstance(provider_value, dict):
-                provider_value = provider_value.get('name') or provider_value.get('value')
-            author_provider_type = str(provider_value or '')
-
-            classification_value = quick.get('authorClassification')
-            if isinstance(classification_value, dict):
-                classification_value = classification_value.get('name') or classification_value.get('value')
-            author_classification = str(classification_value or '')
-            encounter_name = str(quick.get('encounterName') or quick.get('encounter') or '')
-            facility_name = str(quick.get('facility') or '')
-
-            meta_entry: Dict[str, Any] = {
-                'title': title,
-                'author': author,
-                'type': dtype,
-                'class': dclass,
-                'date': date,
-                'nationalTitle': nt,
-            }
-
-            if author_provider_type:
-                meta_entry['authorProviderType'] = author_provider_type
-            if author_classification:
-                meta_entry['authorClassification'] = author_classification
-            if encounter_name:
-                meta_entry['encounterName'] = encounter_name
-            if facility_name:
-                meta_entry['facility'] = facility_name
-
-            if isinstance(raw, dict):
-                if raw.get('uid'):
-                    meta_entry['uid'] = str(raw.get('uid'))
-                if raw.get('uidLong'):
-                    meta_entry['uidLong'] = str(raw.get('uidLong'))
-                if raw.get('localTitle'):
-                    meta_entry['localTitle'] = str(raw.get('localTitle'))
-                elif raw.get('localName'):
-                    meta_entry['localTitle'] = str(raw.get('localName'))
-                if not meta_entry.get('encounterName'):
-                    enc = raw.get('encounterName') or raw.get('encounter')
-                    try:
-                        if isinstance(enc, dict):
-                            enc_val = enc.get('name') or enc.get('displayName') or enc.get('value')
-                        else:
-                            enc_val = enc
-                        if enc_val:
-                            meta_entry['encounterName'] = str(enc_val)
-                    except Exception:
-                        pass
-                fac_obj = raw.get('facility') if isinstance(raw.get('facility'), dict) else None
-                if isinstance(fac_obj, dict):
-                    try:
-                        fac_name = fac_obj.get('name') or fac_obj.get('displayName') or fac_obj.get('value')
-                        if fac_name:
-                            meta_entry['facility'] = str(fac_name)
-                    except Exception:
-                        pass
-                elif raw.get('facilityName') and not meta_entry.get('facility'):
-                    meta_entry['facility'] = str(raw.get('facilityName'))
-                nt_obj = raw.get('nationalTitle') if isinstance(raw.get('nationalTitle'), dict) else None
-                if isinstance(nt_obj, dict):
-                    try:
-                        code_val = nt_obj.get('code')
-                        name_val = nt_obj.get('name')
-                        if code_val:
-                            meta_entry['nationalTitleCode'] = str(code_val)
-                        if name_val:
-                            meta_entry['nationalTitleName'] = str(name_val)
-                    except Exception:
-                        pass
-                for k in ('nationalTitleRole', 'nationalTitleService', 'nationalTitleType', 'nationalTitleSubject'):
-                    if not raw.get(k):
-                        continue
-                    sub = raw.get(k)
-                    if isinstance(sub, dict):
-                        name_val = sub.get('name') or sub.get('value')
-                        if name_val:
-                            meta_entry[k] = str(name_val)
-                    else:
-                        meta_entry[k] = str(sub)
-                clinician_block = raw.get('clinicians')
-                if clinician_block:
-                    try:
-                        meta_entry.setdefault('clinicians', clinician_block)
-                    except Exception:
-                        pass
-                    provider_type = meta_entry.get('authorProviderType')
-                    classification = meta_entry.get('authorClassification')
-                    if not (provider_type and classification):
-                        try:
-                            normalized = clinician_block
-                            if isinstance(normalized, dict) and 'clinician' in normalized:
-                                normalized = normalized.get('clinician')
-                            if isinstance(normalized, list):
-                                for record in normalized:
-                                    if not isinstance(record, dict):
-                                        continue
-                                    role = str(record.get('role') or '').strip().upper()
-                                    # Favor author role when multiple entries exist
-                                    if role and role != 'A' and (provider_type and classification):
-                                        continue
-                                    if not provider_type:
-                                        value = record.get('providerType') or record.get('type')
-                                        if value:
-                                            provider_type = str(value)
-                                            meta_entry['authorProviderType'] = provider_type
-                                    if not classification:
-                                        value = record.get('classification') or record.get('specialization')
-                                        if value:
-                                            classification = str(value)
-                                            meta_entry['authorClassification'] = classification
-                                    if provider_type and classification:
-                                        break
-                        except Exception:
-                            pass
-
-            if rpc_id:
-                meta_entry['rpc_id'] = rpc_id
-
-            documents[doc_id] = {
-                'meta': meta_entry,
-                'text': text_str,
-            }
-
-        if hydration_requests:
+            gateway = self.gateway or VistaApiXGateway()
+            self.set_gateway(gateway)
             try:
-                fallback_map = gateway.get_document_texts(self.dfn, list(hydration_requests.keys()))
+                raw_entries = gateway.get_document_index_entries(self.dfn, params={'text': '0'})
             except Exception:
-                fallback_map = {}
-            for requested_id, lines in (fallback_map or {}).items():
-                doc_id = hydration_requests.get(str(requested_id))
-                if not doc_id or doc_id not in documents:
+                raw_entries = []
+            source_entries = raw_entries if isinstance(raw_entries, list) else []
+
+            normalized_entries: List[Dict[str, Any]] = []
+            seen_doc_ids: Set[str] = set()
+
+            for entry in source_entries:
+                if not isinstance(entry, dict):
                     continue
-                if isinstance(lines, list):
-                    joined = '\n'.join(str(segment) for segment in lines if str(segment).strip())
+                doc_id_value = entry.get('doc_id')
+                doc_id = str(doc_id_value).strip() if doc_id_value is not None else ''
+                if not doc_id:
+                    quick_candidate = entry.get('quick')
+                    if isinstance(quick_candidate, dict):
+                        for key in ('uid', 'uidLong', 'id', 'localId'):
+                            candidate = quick_candidate.get(key)
+                            if candidate:
+                                doc_id = str(candidate).strip()
+                                if doc_id:
+                                    break
+                if not doc_id:
+                    raw_candidate = entry.get('raw')
+                    if isinstance(raw_candidate, dict):
+                        for key in ('uid', 'uidLong', 'id', 'localId'):
+                            candidate = raw_candidate.get(key)
+                            if candidate:
+                                doc_id = str(candidate).strip()
+                                if doc_id:
+                                    break
+                if not doc_id or doc_id in seen_doc_ids:
+                    continue
+                normalized_entries.append({
+                    'doc_id': doc_id,
+                    'quick': entry.get('quick'),
+                    'raw': entry.get('raw'),
+                    'text': entry.get('text'),
+                    'rpc_id': entry.get('rpc_id'),
+                })
+                seen_doc_ids.add(doc_id)
+
+            def _entry_date_value(entry: Dict[str, Any]) -> str:
+                date_val = ''
+                quick_block = entry.get('quick') if isinstance(entry.get('quick'), dict) else {}
+                if isinstance(quick_block, dict):
+                    raw_date = quick_block.get('date') or quick_block.get('referenceDate')
+                    if raw_date:
+                        date_val = str(raw_date)
+                if not date_val:
+                    raw_block = entry.get('raw') if isinstance(entry.get('raw'), dict) else {}
+                    if isinstance(raw_block, dict):
+                        for key in ('date', 'dateTime', 'referenceDate', 'entered', 'referenceDateTime'):
+                            candidate = raw_block.get(key)
+                            if candidate:
+                                date_val = str(candidate)
+                                break
+                return date_val
+
+            normalized_entries.sort(key=_entry_date_value, reverse=True)
+
+            documents: Dict[str, Dict[str, Any]] = {}
+            doc_sequence: List[str] = []
+            hydration_requests: Dict[str, str] = {}
+            missing_doc_ids: Set[str] = set()
+
+            for entry in normalized_entries:
+                doc_id = entry['doc_id']
+                doc_sequence.append(doc_id)
+
+                quick_obj = entry.get('quick')
+                quick = quick_obj.copy() if isinstance(quick_obj, dict) else {}
+                raw_obj = entry.get('raw')
+                raw = raw_obj.copy() if isinstance(raw_obj, dict) else None
+
+                rpc_val = entry.get('rpc_id')
+                rpc_id = str(rpc_val).strip() if rpc_val not in (None, '') else None
+                if rpc_id:
+                    self.rpc_ids[doc_id] = rpc_id
+
+                text_val = entry.get('text')
+                if isinstance(text_val, list):
+                    text_str = '\n'.join(str(segment) for segment in text_val if str(segment).strip())
+                elif isinstance(text_val, str):
+                    text_str = text_val
+                elif text_val is None:
+                    text_str = ''
                 else:
-                    joined = str(lines or '')
-                if joined.strip():
-                    documents[doc_id]['text'] = joined
+                    text_str = str(text_val)
+
+                if not text_str.strip() and raw:
+                    try:
+                        maybe = self._extract_full_text(raw)
+                    except Exception:
+                        maybe = None
+                    if maybe:
+                        text_str = maybe
+
+                if not text_str.strip():
+                    missing_doc_ids.add(doc_id)
+                    if rpc_id:
+                        hydration_requests[rpc_id] = doc_id
+                else:
                     missing_doc_ids.discard(doc_id)
 
-        self.order = doc_sequence
+                title = str(quick.get('title') or '')
+                author_value = quick.get('author')
+                if isinstance(author_value, dict):
+                    author_value = author_value.get('name') or author_value.get('displayName') or author_value.get('text')
+                author = str(author_value or '')
+                dtype = str(quick.get('documentType') or '')
+                dclass = str(quick.get('documentClass') or '')
+                date = str(quick.get('date') or quick.get('referenceDate') or '')
+                nt = str(quick.get('nationalTitle') or '')
 
-        for doc_id in self.order:
-            entry = documents.get(doc_id)
-            if not entry:
-                continue
-            meta_entry = entry.get('meta', {})
-            text_value = str(entry.get('text') or '')
+                provider_value = quick.get('authorProviderType')
+                if isinstance(provider_value, dict):
+                    provider_value = provider_value.get('name') or provider_value.get('value')
+                author_provider_type = str(provider_value or '')
 
-            self.meta[doc_id] = dict(meta_entry)
-            self.text[doc_id] = text_value
+                classification_value = quick.get('authorClassification')
+                if isinstance(classification_value, dict):
+                    classification_value = classification_value.get('name') or classification_value.get('value')
+                author_classification = str(classification_value or '')
+                encounter_name = str(quick.get('encounterName') or quick.get('encounter') or '')
+                facility_name = str(quick.get('facility') or '')
 
-            toks = self._tokenize(text_value)
-            self.doc_len[doc_id] = len(toks)
-            for token in toks:
-                self.postings[token][doc_id] += 1
+                meta_entry: Dict[str, Any] = {
+                    'title': title,
+                    'author': author,
+                    'type': dtype,
+                    'class': dclass,
+                    'date': date,
+                    'nationalTitle': nt,
+                }
 
-            title = str(meta_entry.get('title') or '')
-            author = str(meta_entry.get('author') or '')
-            dtype = str(meta_entry.get('type') or '')
-            dclass = str(meta_entry.get('class') or '')
-            for field_val, boost in ((title, 3), (author, 2), (dtype, 2), (dclass, 1)):
-                if field_val:
-                    for token in self._tokenize(field_val):
-                        self.postings[token][doc_id] += boost
+                if author_provider_type:
+                    meta_entry['authorProviderType'] = author_provider_type
+                if author_classification:
+                    meta_entry['authorClassification'] = author_classification
+                if encounter_name:
+                    meta_entry['encounterName'] = encounter_name
+                if facility_name:
+                    meta_entry['facility'] = facility_name
 
-        self.missing_text_ids = set(missing_doc_ids)
-        # build sorted vocabulary
-        try:
-            self.vocab_sorted = sorted(self.postings.keys())
-        except Exception:
-            self.vocab_sorted = list(self.postings.keys())
-        self.updated_at = time.time()
-        self.generation += 1
+                if isinstance(raw, dict):
+                    if raw.get('uid'):
+                        meta_entry['uid'] = str(raw.get('uid'))
+                    if raw.get('uidLong'):
+                        meta_entry['uidLong'] = str(raw.get('uidLong'))
+                    if raw.get('localTitle'):
+                        meta_entry['localTitle'] = str(raw.get('localTitle'))
+                    elif raw.get('localName'):
+                        meta_entry['localTitle'] = str(raw.get('localName'))
+                    if not meta_entry.get('encounterName'):
+                        enc = raw.get('encounterName') or raw.get('encounter')
+                        try:
+                            if isinstance(enc, dict):
+                                enc_val = enc.get('name') or enc.get('displayName') or enc.get('value')
+                            else:
+                                enc_val = enc
+                            if enc_val:
+                                meta_entry['encounterName'] = str(enc_val)
+                        except Exception:
+                            pass
+                    fac_obj = raw.get('facility') if isinstance(raw.get('facility'), dict) else None
+                    if isinstance(fac_obj, dict):
+                        try:
+                            fac_name = fac_obj.get('name') or fac_obj.get('displayName') or fac_obj.get('value')
+                            if fac_name:
+                                meta_entry['facility'] = str(fac_name)
+                        except Exception:
+                            pass
+                    elif raw.get('facilityName') and not meta_entry.get('facility'):
+                        meta_entry['facility'] = str(raw.get('facilityName'))
+                    nt_obj = raw.get('nationalTitle') if isinstance(raw.get('nationalTitle'), dict) else None
+                    if isinstance(nt_obj, dict):
+                        try:
+                            code_val = nt_obj.get('code')
+                            name_val = nt_obj.get('name')
+                            if code_val:
+                                meta_entry['nationalTitleCode'] = str(code_val)
+                            if name_val:
+                                meta_entry['nationalTitleName'] = str(name_val)
+                        except Exception:
+                            pass
+                    for k in ('nationalTitleRole', 'nationalTitleService', 'nationalTitleType', 'nationalTitleSubject'):
+                        if not raw.get(k):
+                            continue
+                        sub = raw.get(k)
+                        if isinstance(sub, dict):
+                            name_val = sub.get('name') or sub.get('value')
+                            if name_val:
+                                meta_entry[k] = str(name_val)
+                        else:
+                            meta_entry[k] = str(sub)
+                    clinician_block = raw.get('clinicians')
+                    if clinician_block:
+                        try:
+                            meta_entry.setdefault('clinicians', clinician_block)
+                        except Exception:
+                            pass
+                        provider_type = meta_entry.get('authorProviderType')
+                        classification = meta_entry.get('authorClassification')
+                        if not (provider_type and classification):
+                            try:
+                                normalized = clinician_block
+                                if isinstance(normalized, dict) and 'clinician' in normalized:
+                                    normalized = normalized.get('clinician')
+                                if isinstance(normalized, list):
+                                    for record in normalized:
+                                        if not isinstance(record, dict):
+                                            continue
+                                        role = str(record.get('role') or '').strip().upper()
+                                        # Favor author role when multiple entries exist
+                                        if role and role != 'A' and (provider_type and classification):
+                                            continue
+                                        if not provider_type:
+                                            value = record.get('providerType') or record.get('type')
+                                            if value:
+                                                provider_type = str(value)
+                                                meta_entry['authorProviderType'] = provider_type
+                                        if not classification:
+                                            value = record.get('classification') or record.get('specialization')
+                                            if value:
+                                                classification = str(value)
+                                                meta_entry['authorClassification'] = classification
+                                        if provider_type and classification:
+                                            break
+                            except Exception:
+                                pass
+
+                if rpc_id:
+                    meta_entry['rpc_id'] = rpc_id
+
+                documents[doc_id] = {
+                    'meta': meta_entry,
+                    'text': text_str,
+                }
+
+            if hydration_requests and self._sync_hydration_limit > 0:
+                tokens: List[str] = []
+                for doc_id in doc_sequence:
+                    if doc_id not in missing_doc_ids:
+                        continue
+                    rpc_id = self.rpc_ids.get(doc_id)
+                    if not rpc_id:
+                        continue
+                    tokens.append(str(rpc_id))
+                    if len(tokens) >= self._sync_hydration_limit:
+                        break
+                if tokens:
+                    try:
+                        fallback_map = gateway.get_document_texts(self.dfn, tokens)
+                    except Exception:
+                        fallback_map = {}
+                    for requested_id, lines in (fallback_map or {}).items():
+                        doc_id = hydration_requests.get(str(requested_id))
+                        if not doc_id or doc_id not in documents:
+                            continue
+                        joined = self._normalize_text_value(lines)
+                        if joined.strip():
+                            documents[doc_id]['text'] = joined
+                            missing_doc_ids.discard(doc_id)
+
+            self.order = doc_sequence
+
+            for doc_id in self.order:
+                entry = documents.get(doc_id)
+                if not entry:
+                    continue
+                meta_entry = entry.get('meta', {})
+                text_value = str(entry.get('text') or '')
+
+                self.meta[doc_id] = dict(meta_entry)
+                self.text[doc_id] = text_value
+                if text_value.strip():
+                    self.missing_text_ids.discard(doc_id)
+                else:
+                    self.missing_text_ids.add(doc_id)
+
+                self._reindex_document(doc_id)
+
+            # Recompute missing text set to ensure consistency with latest text assignments
+            self.missing_text_ids = {doc_id for doc_id in self.order if not (self.text.get(doc_id) or '').strip()}
+            self.updated_at = time.time()
+            self.generation += 1
+        except Exception as exc:
+            self._last_build_error = str(exc)
+            raise
+        finally:
+            self._is_building = False
 
     def _extract_full_text(self, raw_item: Dict[str, Any]) -> str | None:
         try:
