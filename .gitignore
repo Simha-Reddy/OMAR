@@ -18,13 +18,18 @@
 !/Helpful\ Resources/**
 
 # Inside OMAR_refactor, keep sensitive or generated content out of git
-OMAR_refactor/scripts/
-OMAR_refactor/examples/
-OMAR_refactor/tests/
-OMAR_refactor/archives/
-OMAR_refactor/.env
-OMAR_refactor/.venv/
-OMAR_refactor/.venv/**
-OMAR_refactor/cipher.txt
-OMAR_refactor/python/
-OMAR_refactor/python/**
+OMAR_refactor/app/.env
+OMAR_refactor/app/.env.*
+OMAR_refactor/app/cipher.txt
+OMAR_refactor/app/archives/
+OMAR_refactor/app/examples/
+OMAR_refactor/app/tests/
+OMAR_refactor/app/scripts/
+OMAR_refactor/app/deploy/.env
+OMAR_refactor/app/deploy/.env.*
+OMAR_refactor/app/.venv/
+OMAR_refactor/app/.venv/**
+OMAR_refactor/app/python/
+OMAR_refactor/app/python/**
+OMAR_refactor/app/__pycache__/
+OMAR_refactor/app/**/__pycache__/
