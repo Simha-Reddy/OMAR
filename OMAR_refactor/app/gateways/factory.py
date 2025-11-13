@@ -135,6 +135,7 @@ def set_mode_socket(site: dict, access: str, verify: str, default_context: Optio
         'host': site.get('host'),
         'port': site.get('port'),
         'key': site.get('key'),
+        'station': site.get('station'),
     }
     _reset_session_order()
     # Save creds server-side by session id (not in client cookie)

@@ -41,24 +41,45 @@ def _first_item(payload: Any) -> Dict[str, Any]:
 
 
 def _fmt_dob_fields(date_of_birth: Any) -> Tuple[Optional[str], Optional[str]]:
-    """Return (DOB_ISO, DOB_MMM_DD_YYYY) from an integer yyyymmdd or string."""
+    """Return (DOB_ISO, DOB_MMM_DD_YYYY) from common VPR DOB representations."""
     try:
-        s = str(date_of_birth or '').strip()
-        if not s:
+        raw = str(date_of_birth or '').strip()
+        if not raw:
             return None, None
-        y = m = d = None
-        if s.isdigit() and len(s) == 8:
-            y, m, d = int(s[0:4]), int(s[4:6]), int(s[6:8])
-        else:
-            try:
-                n = int(float(s))
-                s2 = f"{n:08d}"
-                y, m, d = int(s2[0:4]), int(s2[4:6]), int(s2[6:8])
-            except Exception:
+
+        # Prefer ISO-style inputs first (yyyy-mm-dd[Thh:mm:ssZ])
+        try:
+            if '-' in raw or 'T' in raw:
+                iso_candidate = raw.replace('Z', '+00:00')
+                dt_obj = dt.datetime.fromisoformat(iso_candidate)
+                dob_date = dt_obj.date()
+            else:
+                raise ValueError('not ISO')
+        except Exception:
+            # Fall back to numeric representations (yyyymmdd or FileMan yyyMMdd)
+            digits = ''.join(ch for ch in raw if ch.isdigit())
+            if not digits:
                 return None, None
-        iso = dt.date(y, m, d).isoformat()
-        mon = dt.date(y, m, d).strftime('%b').upper()
-        pretty = f"{mon} {d},{y}"
+
+            dob_date = None
+            if len(digits) >= 8:
+                possible_year = int(digits[0:4])
+                if possible_year >= 1700:
+                    month = int(digits[4:6])
+                    day = int(digits[6:8])
+                    dob_date = dt.date(possible_year, month, day)
+            if dob_date is None and len(digits) >= 7:
+                # Treat as FileMan (YYYMMDD[HHMMSS])
+                year_offset = int(digits[0:3])
+                month = int(digits[3:5])
+                day = int(digits[5:7])
+                dob_date = dt.date(year_offset + 1700, month, day)
+            if dob_date is None:
+                return None, None
+
+        iso = dob_date.isoformat()
+        mon = dob_date.strftime('%b').upper()
+        pretty = f"{mon} {dob_date.day}, {dob_date.year}"
         return iso, pretty
     except Exception:
         return None, None
@@ -1075,6 +1096,41 @@ def vpr_to_quick_problems(vpr_payload: Any) -> List[Dict[str, Any]]:
         resolved = it.get('resolved') or it.get('dateResolved')
         icd = it.get('icdCode') or it.get('icd') or None
         snomed = it.get('snomedCode') or it.get('sctid') or None
+        comment_entries: List[Dict[str, Any]] = []
+        flat_comments: List[str] = []
+        try:
+            raw_comments = it.get('comments') or []
+            if isinstance(raw_comments, list):
+                for comment in raw_comments:
+                    text_val = None
+                    entered_by_val = None
+                    entered_val = None
+                    if isinstance(comment, dict):
+                        text_val = comment.get('commentText') or comment.get('text') or comment.get('comment')
+                        entered_by_val = comment.get('enteredBy') or comment.get('user')
+                        entered_val = comment.get('entered') or comment.get('date') or comment.get('timestamp')
+                    elif isinstance(comment, str):
+                        text_val = comment
+                    if text_val is None:
+                        continue
+                    text = str(text_val).strip()
+                    if text.startswith('-'):
+                        text = text[1:].strip()
+                    if not text:
+                        continue
+                    entry: Dict[str, Any] = { 'text': text }
+                    if entered_by_val:
+                        entry['enteredBy'] = str(entered_by_val)
+                    if entered_val:
+                        entered_iso = _parse_any_datetime_to_iso(entered_val)
+                        entered_display = _iso_to_mmddyyyy(entered_iso)
+                        if entered_display or entered_iso:
+                            entry['entered'] = entered_display or entered_iso
+                    comment_entries.append(entry)
+                    flat_comments.append(text)
+        except Exception:
+            comment_entries = []
+            flat_comments = []
         problem_text = str(problem or '').strip()
         problem_clean = problem_text
         extracted_snomed = None
@@ -1091,7 +1147,7 @@ def vpr_to_quick_problems(vpr_payload: Any) -> List[Dict[str, Any]]:
         onset_display = _iso_to_mmddyyyy(onset_iso)
         resolved_iso = _parse_any_datetime_to_iso(resolved)
         resolved_display = _iso_to_mmddyyyy(resolved_iso)
-        out.append({
+        record = {
             'problem': problem_clean,
             'status': status,
             'statusCode': status_code_out,
@@ -1100,7 +1156,12 @@ def vpr_to_quick_problems(vpr_payload: Any) -> List[Dict[str, Any]]:
             'resolvedDate': resolved_display or resolved_iso,
             'icdCode': icd,
             'snomedCode': extracted_snomed or snomed,
-        })
+        }
+        if comment_entries:
+            record['comments'] = comment_entries
+        if flat_comments:
+            record['commentText'] = ' • '.join(flat_comments)
+        out.append(record)
     return out
 
 

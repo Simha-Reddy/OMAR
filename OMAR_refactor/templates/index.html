@@ -171,6 +171,19 @@
 
         function setStatus(msg){ if(statusEl){ statusEl.textContent = msg || ''; } }
 
+        function formatSiteName(site, fallback){
+          if(!site) return fallback || 'Site';
+          if(typeof site === 'string') return site;
+          if(typeof site === 'object'){
+            if(site.display) return String(site.display);
+            if(site.name && site.station) return String(site.name) + ' (' + String(site.station) + ')';
+            if(site.name) return String(site.name);
+            if(site.host) return String(site.host);
+            if(site.key) return String(site.key);
+          }
+          return fallback || 'Site';
+        }
+
         function findSiteByKey(key){
           const k = String(key || '').toLowerCase();
           return sites.find(s => String(s.key||'').toLowerCase() === k);
@@ -254,8 +267,11 @@
             });
             let j = {}; try{ j = await res.json(); }catch(_e){}
             if(!res.ok || j.error){ throw new Error(j.error || ('Login failed ('+res.status+')')); }
-            try{ localStorage.setItem('omar:lastSiteKey', String(j.key || siteKey)); }catch(_e){}
-            setStatus(isDemo ? 'DEMO mode selected' : ('Signed in to ' + (j.site || sel.name || 'Site')));
+            const sitePayload = j.site || sel || {};
+            const rememberKey = sitePayload && sitePayload.key ? sitePayload.key : siteKey;
+            try{ localStorage.setItem('omar:lastSiteKey', String(rememberKey || '')); }catch(_e){}
+            const statusLabel = formatSiteName(sitePayload, sel && (sel.name || sel.host) || siteKey);
+            setStatus(isDemo ? 'DEMO mode selected' : ('Signed in to ' + statusLabel));
             window.location.href = '/workspace';
           }catch(err){ console.warn('Login error', err); setStatus(err && err.message ? err.message : 'Login failed'); }
           finally { busy = false; if(btn){ btn.disabled = false; btn.textContent = 'Sign In'; } }
