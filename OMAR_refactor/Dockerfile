@@ -11,17 +11,23 @@ RUN apt-get update \
     && apt-get install -y --no-install-recommends build-essential curl \
     && rm -rf /var/lib/apt/lists/*
 
-COPY requirements.txt ./
+COPY requirements.txt ./requirements.txt
 RUN pip install --upgrade pip \
     && pip install --no-cache-dir -r requirements.txt
 
-COPY . .
+COPY src ./src
+COPY runtime ./runtime
+COPY gunicorn.conf.py wsgi.py ./
+
+RUN mkdir -p runtime/archives runtime/examples
 
 RUN useradd --create-home --shell /bin/bash omar \
     && chown -R omar:omar /app
 USER omar
 
-ENV HOST=0.0.0.0 \
+ENV PYTHONPATH=/app/src \
+    OMAR_RUNTIME_ROOT=/app/runtime \
+    HOST=0.0.0.0 \
     PORT=5050 \
     USE_FAKEREDIS=0
 

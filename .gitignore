@@ -21,8 +21,13 @@
 OMAR_refactor/app/.env
 OMAR_refactor/app/.env.*
 OMAR_refactor/app/cipher.txt
+OMAR_refactor/portable/.env
+OMAR_refactor/portable/.env.*
+OMAR_refactor/portable/cipher.txt
 OMAR_refactor/app/archives/
 OMAR_refactor/app/examples/
+OMAR_refactor/runtime/archives/
+OMAR_refactor/runtime/examples/
 OMAR_refactor/app/tests/
 OMAR_refactor/app/scripts/
 OMAR_refactor/app/deploy/.env

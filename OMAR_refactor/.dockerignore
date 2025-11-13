@@ -1,0 +1,22 @@
+__pycache__/
+*.py[cod]
+*.pyc
+*.so
+*.log
+.git
+.gitignore
+.vscode/
+.idea/
+.env
+.env.*
+.envrc
+.DS_Store
+Thumbs.db
+portable/
+runtime/
+tests/
+scripts/
+flyers/
+Helpful Resources/
+OMAR/
+OMAR_refactor_11_6_api_only.zip

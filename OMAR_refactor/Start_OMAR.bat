@@ -10,10 +10,11 @@ rem    - Set up the Python environment and path correctly
 rem ============================================================================
 
 set "ROOT=%~dp0"
-set "PYTHON_EXE=%ROOT%\app\python\python.exe"
-set "OMAR_DIR=%ROOT%"
-set "APP_DIR=%OMAR_DIR%\app"
-set "SERVER_SCRIPT=%APP_DIR%\run_server.py"
+set "PORTABLE_DIR=%ROOT%portable"
+set "SRC_DIR=%ROOT%src"
+set "RUNTIME_DIR=%ROOT%runtime"
+set "PYTHON_EXE=%PORTABLE_DIR%\python\python.exe"
+set "SERVER_SCRIPT=%PORTABLE_DIR%\run_server.py"
 
 rem Check if Python executable exists
 if not exist "%PYTHON_EXE%" (
@@ -33,12 +34,14 @@ if not exist "%SERVER_SCRIPT%" (
   exit /b 1
 )
 
-rem Set up Python environment (embedded interpreter in OMAR_refactor\python)
-set "PYTHONPATH=%OMAR_DIR%;%APP_DIR%;%PYTHONPATH%"
-set "PATH=%ROOT%app\python;%ROOT%OMAR_refactor\app\python\DLLs;%PATH%"
+rem Set up Python environment (embedded interpreter in portable\python)
+set "PYTHONPATH=%SRC_DIR%;%PYTHONPATH%"
+set "PATH=%PORTABLE_DIR%\python;%PORTABLE_DIR%\python\DLLs;%PATH%"
+set "OMAR_RUNTIME_ROOT=%RUNTIME_DIR%"
+set "OMAR_ENV_FILE=%PORTABLE_DIR%\.env"
 
-rem Change to OMAR directory and run the server
-cd /d "%APP_DIR%"
+rem Change to portable directory (so .env resolves) and run the server
+cd /d "%PORTABLE_DIR%"
 echo [OMAR] Starting OMAR Refactor server...
 
 rem Determine port (default 5050) and auto-open browser to landing page

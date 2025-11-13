@@ -1,0 +1,311 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Settings - SimpleScribeVA</title>
+    <link rel="icon" type="image/x-icon" href="/static/icon.ico">
+    <link rel="stylesheet" href="/static/styles/style.css">
+    <style>
+        /* Additional styles for cleaner layout */
+        .form-group {
+            margin-bottom: 16px;
+        }
+
+        .form-group label {
+            display: block;
+            font-weight: bold;
+            margin-bottom: 4px;
+        }
+
+        .form-group input,
+        .form-group textarea,
+        .form-group select {
+            width: 100%;
+            padding: 8px;
+            box-sizing: border-box;
+        }
+
+        .button-row {
+            margin-top: 16px;
+        }
+
+        .button-row button {
+            margin-right: 8px;
+        }
+
+        .module-inputs {
+        display: flex;
+        flex-direction: column;
+        gap: 10px;
+        background: #f3f6fa;
+        border-radius: 8px;
+        padding: 1em 1.2em;
+        margin-top: 0.5em;
+        border: 1px solid #e3e8ee;
+        }
+
+        .module-inputs label {
+        display: flex;
+        align-items: center;
+        font-weight: 500;
+        font-size: 1em;
+        cursor: pointer;
+        padding: 2px 0;
+        }
+
+        .module-inputs label:hover {
+        background: #eaf1fb;
+        border-radius: 4px;
+        }
+
+        .module-inputs input[type="checkbox"] {
+        accent-color: #1976d2;
+        margin-right: 0.7em;
+        width: 1.1em;
+        height: 1.1em;
+        }
+
+        .module-section {
+            margin-bottom: 32px;
+        }
+
+        /* Section containers */
+        .module-section {
+            background: #f8fafc;
+            border-radius: 10px;
+            box-shadow: 0 2px 8px rgba(0,0,0,0.04);
+            border: 1px solid #e3e8ee;
+            padding: 2rem 1.5rem 1.5rem 1.5rem;
+            margin-bottom: 36px;
+            position: relative;
+        }
+
+        /* Section headers with icons */
+        .module-section h3 {
+            display: flex;
+            align-items: center;
+            font-size: 1.25em;
+            margin-top: 0;
+            margin-bottom: 1.2em;
+            font-weight: 600;
+            letter-spacing: 0.01em;
+        }
+
+        .module-section.patient-instructions h3::before {
+            content: "💊";
+            margin-right: 0.5em;
+            font-size: 1.2em;
+        }
+
+        .module-section.templates h3::before {
+            content: "📝";
+            margin-right: 0.5em;
+            font-size: 1.2em;
+        }
+
+        .module-section.modules h3::before {
+            content: "🧩";
+            margin-right: 0.5em;
+            font-size: 1.2em;
+        }
+
+        /* Optional: accent border on left */
+        .module-section.templates {
+            border-left: 5px solid #1976d2;
+            background: #f3f8fd; /* subtle blue */
+        }
+        .module-section.modules {
+            border-left: 5px solid #43a047;
+            background: #f6fcf7; /* subtle green */
+        }
+        .module-section.patient-instructions {
+            border-left: 5px solid #8e24aa; /* purple accent */
+            background: #f9f6fc; /* subtle purple */
+        }
+
+        /* NEW: Dot-phrases orange themed block */
+        .module-section.dotphrases {
+            border-left: 5px solid #fb8c00; /* orange accent */
+            background: #fff7ed; /* subtle orange */
+        }
+        .module-section.dotphrases h3::before {
+            content: "🔸";
+            margin-right: 0.5em;
+            font-size: 1.2em;
+        }
+        .dotphrase-box { background:#fff; border:1px solid #ffd7a8; padding:12px; border-radius:8px; margin:8px 0; }
+        .dotphrase-box ul { margin: 8px 0 0 18px; }
+        .dotphrase-box li code { background:#fff3e0; padding:2px 6px; border-radius:4px; }
+
+        /* Tidy Archives block: reduce whitespace and arrange neatly */
+        .module-section.archives {
+            border-left: 5px solid #90a4ae; /* blue-grey */
+            background: #f7f9fb;
+            padding: 1.2rem 1rem 1rem 1rem; /* tighter */
+        }
+        .module-section.archives .form-group { margin-bottom: 10px; }
+        .archive-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 8px 18px; align-items: start; }
+        .archive-grid label { font-weight: 500; margin-bottom: 4px; }
+        .archive-grid small { color:#555; display:block; margin-top:4px; line-height:1.3; }
+
+        .dotphrase-link { color:#1976d2; text-decoration:underline; cursor:pointer; }
+        .dotphrase-box { display:none; background:#f9fbff; border:1px solid #e3e8ee; padding:12px; border-radius:8px; margin:12px 0; }
+        .dotphrase-box ul { margin: 8px 0 0 18px; }
+        .dotphrase-box li code { background:#eef4ff; padding:2px 6px; border-radius:4px; }
+
+        /* Match Workspace record button size/style */
+        .global-top-bar .circle-btn.image-record-btn { height: 40px; width: 40px; padding: 0; border: none; background: white; border-radius: 50%; display: flex; align-items: center; justify-content: center; cursor: pointer; transition: all 0.2s ease; }
+        .global-top-bar .circle-btn.image-record-btn img { height: 100%; width: 100%; object-fit: contain; }
+        .global-top-bar .circle-btn.image-record-btn:hover { transform: scale(1.05); }
+        .global-top-bar .circle-btn.image-record-btn:active { transform: scale(0.95); }
+    </style>
+</head>
+<body>
+    <div class="global-top-bar">
+        <div class="left-controls">
+            <a href="/" class="header-title">OMAR</a>
+            <button id="recordBtn"
+                    class="circle-btn image-record-btn"
+                    title="Record"
+                    aria-label="Record"
+                    data-visual="image"
+                    data-start-src="/static/images/start_Recording_circle_button.png"
+                    data-stop-src="/static/images/stop_Recording_circle_button.png">
+                <img id="recordBtnImg" src="/static/images/start_Recording_circle_button.png" alt="Start Recording" />
+            </button>
+        </div>
+        <div class="right-controls">
+            <a href="/archive">📁 Archive</a>
+            <a href="/workspace/mobile">📱 Mobile View</a>
+            <a href="/archive">📁 Archive</a>
+            <button id="hamburgerBtn" class="hamburger-btn" aria-label="Menu">&#9776;</button>
+        </div>
+    </div>
+    <div id="mobileMenu" class="mobile-menu">
+            <a href="/workspace">📝 Workspace</a>
+            <a href="/workspace/mobile">📱 Mobile View</a>
+            <a href="/settings">⚙️ Settings</a>
+        <hr class="mobile-menu-separator">
+        <a href="#" class="end-session-link" onclick="exitApp();return false;" title="Exit">🚪 Exit</a>
+    </div>
+    <div class="container">
+        <h2>Settings (Customize Instructions, Prompts and Modules)</h2>
+
+        <!-- Dot-Phrases Reference Section -->
+        <div class="module-section dotphrases">
+            <h3>Dot-Phrases Reference</h3>
+            <p style="margin-top:-4px;color:#5d4037;">
+                Use .token placeholders in prompts or notes. Wrap with braces to prevent expansion, e.g., {.labs/a1c:last}. Works in Hey OMAR, Note, After Visit Summary, and Scribe.
+            </p>
+            <div id="dotphraseBox" class="dotphrase-box" style="display:block;">
+                <ul id="dotphraseList"></ul>
+                <div style="margin-top:10px;">
+                    <strong>Examples</strong>
+                    <ul>
+                        <li><code>.name</code>, <code>.dob</code>, <code>.age</code>, <code>.phone</code></li>
+                        <li><code>.problems</code>, <code>.problems/active</code></li>
+                        <li><code>.meds</code>, <code>.meds/active</code></li>
+                        <li><code>.vitals/7</code> or <code>.vitals/start=2025-01-01/end=2025-06-30</code></li>
+                        <li><code>.labs/a1c:last</code> (latest per test), <code>.labs:days=30</code>, <code>.labs:range=2025-01-01..2025-06-30</code></li>
+                        <li><code>.labs/a1c,cholesterol</code> (filters by test name or LOINC)</li>
+                        <li><code>.orders:status=current,type=labs,days=14</code> or <code>.orders/current/labs/14</code></li>
+                        <li>Skip expansion: <code>{.labs/a1c:last}</code></li>
+                    </ul>
+                </div>
+            </div>
+        </div>
+
+        <!-- CPRS Sync Settings Section -->
+        <div class="module-section" style="border-left:5px solid #1565c0;background:#eef4ff;">
+            <h3>CPRS Integration</h3>
+            <div class="form-group">
+                <label style="display:flex;align-items:center;gap:8px;cursor:pointer;font-weight:600;">
+                    <input type="checkbox" id="toggleAutoCprsSync">
+                    Keep OMAR aligned with CPRS current patient (poll every 5 seconds)
+                </label>
+                <small>When enabled, OMAR automatically follows the patient you have open in CPRS. Sensitive-record warnings will be shown before switching.</small>
+            </div>
+        </div>
+
+        <!-- Archives Controls Section (tidied) -->
+        <div class="module-section archives">
+            <h3>Archive Settings</h3>
+            <div class="archive-grid">
+                <div class="form-group">
+                    <label style="display:flex;align-items:center;gap:8px;cursor:pointer;font-weight:600;">
+                        <input type="checkbox" id="toggleAutoSaveArchives">
+                        Auto-save current session to Archives (every 5 seconds)
+                    </label>
+                    <small>When enabled, selecting a new patient will create an archive like "8-27-25 at 1025 with BOB JONES" and auto-save every 5 seconds.</small>
+                </div>
+                <div class="form-group">
+                    <label style="display:flex;align-items:center;gap:8px;cursor:pointer;font-weight:600;">
+                        <input type="checkbox" id="toggleAutoDeleteArchives10d">
+                        Auto-delete Archives after 10 Days
+                    </label>
+                    <small>When enabled, archives older than 10 days are removed automatically.</small>
+                </div>
+            </div>
+        </div>
+
+        <!-- Patient Instructions Prompt Section -->
+        <div class="module-section patient-instructions">
+            <h3>Manage Patient Instructions Prompt</h3>
+            <div class="form-group">
+                <label for="patientInstructionsPromptText">Prompt Content</label>
+                <textarea id="patientInstructionsPromptText" placeholder="Enter your patient instructions prompt here..." rows="6"></textarea>
+            </div>
+            <div class="button-row">
+                <button id="savePatientInstructionsPromptBtn">Save Prompt</button>
+                <button id="clearPatientInstructionsPromptBtn">Clear</button>
+                <button id="resetPatientInstructionsPromptBtn" type="button">Reset to Default</button>
+                <span id="patientInstructionsPromptStatus" style="margin-left:12px;color:green;"></span>
+            </div>
+        </div>
+
+        <!-- Custom Prompt Templates Section -->
+        <div class="module-section templates">
+            <h3>Manage Custom Prompt Templates</h3>
+            <div style="text-align:right; margin-bottom: 0.5em;">
+                <a href="https://apps.gov.powerapps.us/play/e/default-e95f1b23-abaf-45ee-821d-b7ab251ab3bf/a/34ceda55-1a9a-415f-afde-052c61f566fe?tenantId=e95f1b23-abaf-45ee-821d-b7ab251ab3bf#" target="_blank" style="font-size:0.95em; color:#1976d2; text-decoration:underline; opacity:0.7;">VA Prompt Library</a>
+            </div>
+            <div class="form-group">
+                <label for="customTemplateDropdown">Select Template</label>
+                <select id="customTemplateDropdown">
+                    <option value="">-- Choose a template --</option>
+                </select>
+            </div>
+            <div class="form-group">
+                <label for="customTemplateName">Template Name</label>
+                <input type="text" id="customTemplateName" placeholder="Enter the name of the template">
+            </div>
+            <div class="form-group">
+                <label for="customTemplateText">Template Content</label>
+                <textarea id="customTemplateText" placeholder="Enter your custom prompt here..." rows="6"></textarea>
+            </div>
+            <div class="button-row">
+                <button onclick="saveCustomTemplate()">Save Template</button>
+                <button onclick="deleteCustomTemplate()">Delete Template</button>
+                <button onclick="clearCustomTemplateEditor()">Clear</button>
+            </div>
+        </div>
+
+        <!-- Appearance Section -->
+        <div class="module-section" style="border-left:5px solid var(--color-primary); background: var(--paper-panel);">
+            <h3>Appearance</h3>
+            <div class="form-group">
+                <label for="themeSelector">Theme</label>
+                <select id="themeSelector">
+                    <option value="va">VADesign (Default)</option>
+                    <option value="original">Original</option>
+                </select>
+                <small>Switch between the VA-inspired design and the original look. The change applies immediately and persists for future sessions.</small>
+            </div>
+        </div>
+    </div>
+    <script src="/static/SessionManager.js"></script>
+    <script src="/static/settings.js"></script>
+    <script src="/static/app.js"></script>
+        <script src="/static/popups.js"></script>
+        <script src="/static/omar_history_popup.js"></script>
+</body>
+</html>
