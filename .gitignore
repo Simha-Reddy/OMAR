@@ -22,6 +22,7 @@
 OMAR_refactor/portable/.env
 OMAR_refactor/portable/.env.*
 OMAR_refactor/portable/cipher.txt
+OMAR_refactor/portable/python/
 OMAR_refactor/runtime/archives/
 OMAR_refactor/deploy/.env
 OMAR_refactor/deploy/.env.*
