@@ -65,6 +65,7 @@
             <button class="ep" data-kind="quick" data-end="radiology">/quick/radiology</button>
             <button class="ep" data-kind="quick" data-end="procedures">/quick/procedures</button>
             <button class="ep" data-kind="quick" data-end="encounters">/quick/encounters</button>
+            <button class="ep" data-kind="quick" data-end="orders">/quick/orders</button>
           </div>
         </div>
         <div style="flex: 1 1 360px; min-width:300px;">
@@ -83,6 +84,14 @@
             <button class="ep" data-kind="vpr" data-end="encounters">/encounters</button>
           </div>
         </div>
+      </div>
+      <div style="margin-top:16px;">
+        <label for="custom-endpoint">Custom endpoint path</label>
+        <div class="row" style="gap:8px;">
+          <input type="text" id="custom-endpoint" placeholder="e.g., quick/orders?raw=1&includeRaw=1 or /api/patient/{dfn}/quick/orders" autocomplete="off" />
+          <button id="custom-endpoint-btn" class="narrow" style="flex:0 0 160px;">Fetch Custom</button>
+        </div>
+        <p class="muted" style="margin:6px 0 0 0; font-size:13px;">Use <code>{dfn}</code> or <code>:dfn</code> as a placeholder, or leave it blank to append to the patient base.</p>
       </div>
       <div style="margin-top:12px;" class="muted" id="ep-status"></div>
     </div>
@@ -209,6 +218,8 @@
       const jsonCard = qs('#json-card');
       const jsonView = qs('#json-view');
       const jsonPath = qs('#json-path');
+      const customInput = qs('#custom-endpoint');
+      const customBtn = qs('#custom-endpoint-btn');
       for (const b of document.querySelectorAll('button.ep')) {
         b.addEventListener('click', async () => {
           const dfn = (dfnEl.value || '').trim();
@@ -238,6 +249,58 @@
             epStatus.textContent = '';
           } catch (err) {
             epStatus.textContent = 'Error fetching endpoint.';
+          }
+        });
+      }
+
+      function buildCustomUrl(inputPath, dfn) {
+        const path = (inputPath || '').trim();
+        if (!path) return null;
+        if (/^https?:\/\//i.test(path)) return path;
+        const needsDfn = path.includes('{dfn}') || path.includes(':dfn');
+        if (needsDfn && !dfn) return null;
+        const normalized = path
+          .replace('{dfn}', dfn ? encodeURIComponent(dfn) : '')
+          .replace(':dfn', dfn ? encodeURIComponent(dfn) : '');
+        if (normalized.startsWith('/')) return normalized;
+        if (normalized.startsWith('api/')) return `/${normalized}`;
+        if (!dfn) return null;
+        const base = `/api/patient/${encodeURIComponent(dfn)}/`;
+        return base + normalized;
+      }
+
+      async function fetchCustomEndpoint() {
+        const rawPath = customInput ? customInput.value : '';
+        const dfn = (dfnEl.value || '').trim();
+        const url = buildCustomUrl(rawPath, dfn);
+        if (!url) {
+          epStatus.textContent = 'Enter a DFN or provide an absolute endpoint path.';
+          return;
+        }
+        epStatus.textContent = `GET ${url}`;
+        jsonCard.style.display = 'none';
+        try {
+          const resp = await fetch(url, { credentials: 'same-origin' });
+          const txt = await resp.text();
+          let pretty = txt;
+          try { const obj = JSON.parse(txt); pretty = JSON.stringify(obj, null, 2); } catch {}
+          jsonView.textContent = pretty;
+          jsonPath.textContent = url;
+          jsonCard.style.display = 'block';
+          epStatus.textContent = '';
+        } catch (err) {
+          epStatus.textContent = 'Error fetching endpoint.';
+        }
+      }
+
+      if (customBtn) {
+        customBtn.addEventListener('click', fetchCustomEndpoint);
+      }
+      if (customInput) {
+        customInput.addEventListener('keydown', (e) => {
+          if (e.key === 'Enter') {
+            e.preventDefault();
+            fetchCustomEndpoint();
           }
         });
       }

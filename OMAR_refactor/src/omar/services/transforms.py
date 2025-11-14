@@ -1541,12 +1541,20 @@ def vpr_to_quick_orders(vpr_payload: Any) -> List[Dict[str, Any]]:
         indication_text = _order_extract_string(it.get('indication') or it.get('reason') or it.get('diagnosis'))
 
         category_key = _order_categorize(service_val, group_val, order_type_name, order_name)
+        if category_key == 'other':
+            detail_low = (order_type_name or '').strip().lower()
+            if detail_low:
+                if 'schedul' in detail_low or 'appointment' in detail_low or 'appt' in detail_low:
+                    category_key = 'scheduling'
+                elif 'consult' in detail_low:
+                    category_key = 'consults'
         category_title_map = {
             'labs': 'Labs',
             'meds': 'Meds',
             'imaging': 'Imaging',
             'consults': 'Consults',
             'nursing': 'Nursing',
+            'scheduling': 'Scheduling',
             'other': 'Other',
         }
         type_display = category_title_map.get(category_key, 'Other')

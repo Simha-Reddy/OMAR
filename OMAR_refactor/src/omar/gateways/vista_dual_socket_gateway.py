@@ -1299,7 +1299,14 @@ class VistaDualSocketGateway(DataGateway):
     # VPR helpers
     # ------------------------------------------------------------------
 
-    def _wrap_domain_response(self, domain: str, dfn: str, parsed: Dict[str, Any]) -> Dict[str, Any]:
+    def _wrap_domain_response(
+        self,
+        domain: str,
+        dfn: str,
+        parsed: Dict[str, Any],
+        *,
+        raw_text: Optional[str] = None,
+    ) -> Dict[str, Any]:
         try:
             items = []
             if isinstance(parsed, dict):
@@ -1335,11 +1342,14 @@ class VistaDualSocketGateway(DataGateway):
             for key in ("version", "timeZone", "updated"):
                 if meta.get(key) and key not in data_block:
                     data_block[key] = meta.get(key)
-            return {
+            response_body: Dict[str, Any] = {
                 "items": items,
                 "meta": meta,
                 "data": data_block,
             }
+            if raw_text:
+                response_body["raw"] = raw_text
+            return response_body
         except Exception:
             return parsed
 
@@ -1359,17 +1369,29 @@ class VistaDualSocketGateway(DataGateway):
             "visit": "visits",
             "problem": "problems",
             "allergy": "reactions",
+            "order": "orders",
+            "consult": "consults",
+            "immunization": "immunizations",
+            "appointment": "appointments",
         }
         type_val = type_map.get(domain)
         if type_val:
             positional_params.append(type_val)
-        lower_params: Dict[str, Any] = {}
+        forward_params: Dict[str, Any] = {}
         if params and isinstance(params, dict):
-            lower_params = {str(k).lower(): v for k, v in params.items()}
-            start = params.get("start") or params.get("START")
-            stop = params.get("stop") or params.get("STOP")
-            max_items = params.get("max") or params.get("MAX")
-            item_id = params.get("item") or params.get("ITEM")
+            for key, value in params.items():
+                if value is None:
+                    continue
+                low = str(key).lower()
+                if low in {"raw", "rawxml", "returnraw"}:
+                    continue
+                forward_params[str(key)] = value
+        lower_params: Dict[str, Any] = {str(k).lower(): v for k, v in forward_params.items()}
+        if forward_params:
+            start = forward_params.get("start") or forward_params.get("START")
+            stop = forward_params.get("stop") or forward_params.get("STOP")
+            max_items = forward_params.get("max") or forward_params.get("MAX")
+            item_id = forward_params.get("item") or forward_params.get("ITEM")
             if any(v is not None for v in (start, stop, max_items, item_id)):
                 positional_params.append(str(start) if start else "")
                 positional_params.append(str(stop) if stop else "")
@@ -1384,11 +1406,23 @@ class VistaDualSocketGateway(DataGateway):
             # Explicitly treat document text flag as named to guarantee payload inclusion
             if not use_named_call and domain == "document" and lower_params.get("text") not in (None, ""):
                 use_named_call = True
+        capture_raw = False
+        if params and isinstance(params, dict):
+            for key, value in params.items():
+                try:
+                    text = str(value).strip().lower()
+                except Exception:
+                    text = ""
+                if text and key and str(key).strip().lower() in {"raw", "rawxml", "returnraw"}:
+                    if text not in {"0", "false", "no", "off"}:
+                        capture_raw = True
+                        break
+
         if use_named_call:
             named = {"patientId": str(dfn)}
             if domain:
                 named["domain"] = str(domain)
-            for key, value in (params or {}).items():
+            for key, value in forward_params.items():
                 if value is not None:
                     named[str(key)] = value
             raw = self._vpr_client.call_in_context(
@@ -1401,16 +1435,20 @@ class VistaDualSocketGateway(DataGateway):
         try:
             parsed_results = parse_vpr_results_xml(raw, domain=domain)
             if parsed_results.get("items"):
-                return self._wrap_domain_response(domain, dfn, parsed_results)
+                return self._wrap_domain_response(
+                    domain,
+                    dfn,
+                    parsed_results,
+                    raw_text=raw if capture_raw else None,
+                )
         except Exception:
             pass
         named = {"patientId": str(dfn)}
         if domain:
             named["domain"] = str(domain)
-        if params and isinstance(params, dict):
-            for k, v in params.items():
-                if v is not None:
-                    named[str(k)] = v
+        for k, v in forward_params.items():
+            if v is not None:
+                named[str(k)] = v
         fallback_raw = self._vpr_client.call_in_context(
             self.vpr_context,
             "VPR GET PATIENT DATA",
@@ -1419,11 +1457,21 @@ class VistaDualSocketGateway(DataGateway):
         try:
             parsed_results_2 = parse_vpr_results_xml(fallback_raw, domain=domain)
             if parsed_results_2.get("items"):
-                return self._wrap_domain_response(domain, dfn, parsed_results_2)
+                return self._wrap_domain_response(
+                    domain,
+                    dfn,
+                    parsed_results_2,
+                    raw_text=fallback_raw if capture_raw else None,
+                )
         except Exception:
             pass
         legacy = _normalize_vpr_xml_to_items(fallback_raw, domain)
-        return self._wrap_domain_response(domain, dfn, legacy)
+        return self._wrap_domain_response(
+            domain,
+            dfn,
+            legacy,
+            raw_text=fallback_raw if capture_raw else None,
+        )
 
     # ------------------------------------------------------------------
     # DataGateway interface

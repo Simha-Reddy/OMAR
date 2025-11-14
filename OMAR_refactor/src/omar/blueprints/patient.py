@@ -440,6 +440,8 @@ def _orders_type_alias(value: str | None) -> str:
         return 'consults'
     if v in ('nursing', 'nurse', 'nurs'):
         return 'nursing'
+    if v in ('schedule', 'scheduling', 'appointment', 'appointments', 'appt', 'appts'):
+        return 'scheduling'
     if v in ('other', 'misc', 'unknown'):
         return 'other'
     if v in ('all', '*', 'any'):
@@ -889,6 +891,8 @@ def orders_quick(dfn: str):
                 return 'consult' in detail or 'referral' in detail
             if type_filter == 'nursing':
                 return 'nurs' in detail or 'nursing' in detail
+            if type_filter == 'scheduling':
+                return any(token in detail for token in ('schedule', 'scheduling', 'appointment', 'appt'))
             if type_filter == 'other':
                 return True
             return False

@@ -219,6 +219,9 @@
       return orders.map(o=>{ const d=o?.date? String(o.date).slice(0,10):''; const typ=String(o?.type||''); const nm=String(o?.name||''); const st=String(o?.current_status||o?.status||''); const tail=st?` — ${st}`:''; return `• ${d}${d?': ':''}[${typ}] ${nm}${tail}`.trim(); }).join('\n');
     }catch(_e){ return 'No orders found'; }
   }
+  const ORDER_STATUS_TOKENS = new Set(['active','a','pending','pend','p','hold','unsigned','draft','completed','complete','comp','finished','done','resulted','final','discontinued','cancelled','canceled','dc','void','stopped','expired','exp','lapsed','cancel','current','actpend','active+pending','ap','cur','c','all','*','any']);
+  const ORDER_TYPE_TOKENS = new Set(['med','meds','medications','rx','pharmacy','drug','drugs','lab','labs','laboratory','chemistry','microbiology','pathology','imaging','image','radiology','rad','ct','mri','xray','x-ray','ultrasound','nuclear','pet','consult','consults','referral','gmrc','nursing','nurse','nurs','schedule','scheduling','appointment','appointments','appt','appts','other','misc','unknown','all','*','any']);
+
   function ordersTypeAlias(s){
     const v = String(s||'').trim().toLowerCase();
     if(['med','meds','medications','rx','pharmacy','drug','drugs'].includes(v)) return 'meds';
@@ -226,6 +229,7 @@
     if(['imaging','image','radiology','rad','ct','mri','xray','x-ray','ultrasound','nuclear','pet'].includes(v)) return 'imaging';
     if(['consult','consults','referral','gmrc'].includes(v)) return 'consults';
     if(['nursing','nurse','nurs'].includes(v)) return 'nursing';
+    if(['schedule','scheduling','appointment','appointments','appt','appts'].includes(v)) return 'scheduling';
     if(['other','misc','unknown'].includes(v)) return 'other';
     if(['all','*','any'].includes(v)) return 'all';
     return 'all';
@@ -242,7 +246,38 @@
   }
   function parseOrdersArgs(argStr){ let status='current', type='all', days=7; const s=String(argStr||'').trim(); if(!s) return {status,type,days};
     if(s.includes('=')||s.includes(',')){ const parts=s.split(/[\s,]+/).filter(Boolean); for(const part of parts){ const [kRaw,vRaw]=part.split('='); const k=(kRaw||'').toLowerCase(); const v=(vRaw||'').trim(); if(k==='status') status=ordersStatusAlias(v); else if(k==='type'||k==='category') type=ordersTypeAlias(v); else if(k==='days'){ const n=parseInt(v,10); if(Number.isFinite(n)&&n>0) days=n; } else if(k==='since'||k==='date'){ const dt=new Date(v); if(!isNaN(dt.getTime())){ const now=new Date(); const diffMs=Math.max(0, now-dt); days=Math.max(1, Math.ceil(diffMs/(1000*60*60*24))); } } } return {status,type,days}; }
-    const parts=s.split(/[\s/]+/).filter(Boolean); if(parts[0]) status=ordersStatusAlias(parts[0]); if(parts[1]) type=ordersTypeAlias(parts[1]); if(parts[2]){ const d=parts[2].toLowerCase(); const n=parseInt(d,10); if(Number.isFinite(n)&&n>0) days=n; else { const dt=new Date(parts[2]); if(!isNaN(dt.getTime())){ const now=new Date(); const diffMs=Math.max(0, now-dt); days=Math.max(1, Math.ceil(diffMs/(1000*60*60*24))); } } } return {status,type,days}; }
+    const parts=s.split(/[\s/]+/).filter(Boolean);
+    let statusAssigned=false;
+    let typeAssigned=false;
+    for(const token of parts){
+      if(!token) continue;
+      const low = token.toLowerCase();
+      if(/^[0-9]+$/.test(low)){
+        const n=parseInt(low,10); if(Number.isFinite(n) && n>0) days=n; continue;
+      }
+      if(!statusAssigned && ORDER_STATUS_TOKENS.has(low)){
+        status = ordersStatusAlias(low);
+        statusAssigned = true;
+        continue;
+      }
+      if(!typeAssigned && ORDER_TYPE_TOKENS.has(low)){
+        type = ordersTypeAlias(low);
+        typeAssigned = true;
+        continue;
+      }
+      if(!typeAssigned){
+        type = ordersTypeAlias(low);
+        typeAssigned = true;
+        continue;
+      }
+      if(!statusAssigned){
+        status = ordersStatusAlias(low);
+        statusAssigned = true;
+        continue;
+      }
+    }
+    return {status,type,days};
+  }
 
   // Parse natural date-ish tokens seen in commands
   function parseNaturalDate(input, defaultEnd){ try{ let s=String(input||'').trim(); if(!s) return null; const today=new Date(); const ymd=(d)=> d.toISOString().slice(0,10);
@@ -488,8 +523,16 @@
       // orders
       if (t.startsWith('orders')){
         let status='current', type='all', days=7;
-        if(t.includes(':')){ const argStr = t.split(':',2)[1] || ''; const parsed = parseOrdersArgs(argStr); status=parsed.status; type=parsed.type; days=parsed.days; }
-        else if(t.includes('/')){ const segs=t.split('/').filter(Boolean); if(segs[1]) status = ordersStatusAlias(segs[1]); if(segs[2]) type = ordersTypeAlias(segs[2]); if(segs[3]){ const n=parseInt(segs[3],10); if(Number.isFinite(n) && n>0) days=n; } }
+        if(t.includes(':')){
+          const argStr = t.split(':',2)[1] || '';
+          const parsed = parseOrdersArgs(argStr);
+          status=parsed.status; type=parsed.type; days=parsed.days;
+        }
+        else if(t.includes('/')){
+          const tail = t.split('/').slice(1).join('/');
+          const parsed = parseOrdersArgs(tail);
+          status=parsed.status; type=parsed.type; days=parsed.days;
+        }
         const params = {};
         if(status) params.status = status;
         if(type) params.type = type;
