@@ -1,8 +1,9 @@
 from __future__ import annotations
 from typing import Any, Dict, Optional
 import re
-from flask import Blueprint, jsonify, request, session as flask_session
+from flask import Blueprint, jsonify, request, session as flask_session, current_app
 from ..gateways.factory import set_mode_demo, set_mode_socket, logout_socket, get_gateway
+from ..services import user_settings
 
 bp = Blueprint('auth_api', __name__)
 
@@ -163,6 +164,13 @@ def _capture_user_identity(site: Dict[str, Any]) -> Dict[str, str]:
     name = identity.get('user_name')
     if name:
         flask_session['user_name'] = name
+    try:
+        user_settings.ensure_user_directory()
+    except Exception as exc:
+        try:
+            current_app.logger.warning('ensure_user_directory failed during login capture: %s', exc)
+        except Exception:
+            pass
     return identity
 
 
@@ -178,6 +186,13 @@ def login():
         flask_session['duz'] = '0'
         flask_session['user_name'] = 'Demo User'
         flask_session.modified = True
+        try:
+            user_settings.ensure_user_directory()
+        except Exception as exc:
+            try:
+                current_app.logger.warning('ensure_user_directory failed for demo login: %s', exc)
+            except Exception:
+                pass
         return jsonify({ 'ok': True, 'mode': 'demo' })
     sites = _list_sites_from_env()
     site = sites.get(site_key)

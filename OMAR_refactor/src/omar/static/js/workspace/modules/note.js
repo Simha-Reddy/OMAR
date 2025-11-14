@@ -6,6 +6,8 @@ window.WorkspaceModules = window.WorkspaceModules || {};
 window.WorkspaceModules['Note'] = {
     currentNote: '',
     promptData: {},
+    availablePrompts: [],
+    oneLinerPrompt: '',
     chatHistory: [],
     isRecording: false,
     statusPollInterval: null,
@@ -476,8 +478,8 @@ window.WorkspaceModules['Note'] = {
             promptSelector.addEventListener('change', (e) => {
                 const promptPreview = document.getElementById('promptPreview');
                 if (promptPreview && this.promptData) {
-                    const selectedPrompt = this.promptData[e.target.value] || '';
-                    promptPreview.value = selectedPrompt;
+                    const selectedPrompt = this.promptData[e.target.value];
+                    promptPreview.value = selectedPrompt ? selectedPrompt.full_text : '';
                     if (e.target.value) {
                         localStorage.setItem('lastPrompt', e.target.value);
                     }
@@ -626,58 +628,90 @@ window.WorkspaceModules['Note'] = {
     async loadPrompts() {
         const selector = document.getElementById('promptSelector');
         if (!selector) return;
+        const promptPreview = document.getElementById('promptPreview');
         try {
-            let data = null;
-            // Prefer server aggregation from static/prompts/note_scribe_prompts
-            try {
-                const r1 = await fetch('/get_prompts', { cache: 'no-store' });
-                if (r1.ok) data = await r1.json();
-            } catch(_e) {}
-            // Fallback to bundled JSON defaults
-            if (!data || typeof data !== 'object' || !Object.keys(data).length) {
+            let payload = null;
+            if (window.UserSettingsClient && typeof window.UserSettingsClient.getPrompts === 'function') {
                 try {
-                    const r2 = await fetch('/static/prompts/default_prompts.json', { cache: 'no-store' });
-                    if (r2.ok) data = await r2.json();
-                } catch(_e) {}
-            }
-            if (!data || typeof data !== 'object' || !Object.keys(data).length) {
-                // Final fallback: a single simple prompt
-                data = {
-                    'Primary Care Progress Note': 'Summarize the visit into a concise SOAP-style note with pertinent positives/negatives and assessment/plan.'
-                };
-            }
-
-            this.promptData = data;
-
-            // Clear and populate
-            selector.innerHTML = '';
-            for (let name in data) {
-                const option = document.createElement('option');
-                option.value = name;
-                option.text = name;
-                selector.appendChild(option);
-            }
-
-            // Determine initial selection
-            const stored = localStorage.getItem('lastPrompt');
-            let initialName = null;
-            if (stored && data[stored]) {
-                initialName = stored;
-            } else if (data['Primary Care Progress Note']) {
-                initialName = 'Primary Care Progress Note';
-            } else {
-                const first = Object.keys(data)[0];
-                if (first) initialName = first;
-            }
-
-            // Apply initial selection
-            if (initialName) {
-                selector.value = initialName;
-                const promptPreview = document.getElementById('promptPreview');
-                if (promptPreview) {
-                    promptPreview.value = data[initialName] || '';
+                    payload = await window.UserSettingsClient.getPrompts({ fields: ['scribe_prompts', 'one_liner'] });
+                } catch (apiErr) {
+                    console.warn('Note module: user settings prompt fetch failed, falling back to legacy defaults', apiErr);
                 }
-                localStorage.setItem('lastPrompt', initialName);
+            }
+
+            const defaults = (payload && payload.defaults) || {};
+            const effective = (payload && payload.prompts) || {};
+            const scribePrompts = effective.scribe_prompts || defaults.scribe_prompts || {};
+
+            let entries = [];
+            if (scribePrompts && typeof scribePrompts === 'object') {
+                entries = Object.entries(scribePrompts)
+                    .map(([id, info]) => {
+                        if (!info || typeof info !== 'object') return null;
+                        const title = String(info.title || '').trim();
+                        const fullText = String(info.full_text || info.text || '').trim();
+                        if (!title || !fullText) return null;
+                        return { id, title, full_text: fullText };
+                    })
+                    .filter(Boolean);
+            }
+
+            if (!entries.length && defaults && defaults.scribe_prompts) {
+                entries = Object.entries(defaults.scribe_prompts)
+                    .map(([id, info]) => {
+                        if (!info || typeof info !== 'object') return null;
+                        const title = String(info.title || '').trim() || id;
+                        const fullText = String(info.full_text || info.text || '').trim();
+                        if (!fullText) return null;
+                        return { id, title, full_text: fullText };
+                    })
+                    .filter(Boolean);
+            }
+
+            if (!entries.length) {
+                entries = [{
+                    id: 'primary_care_progress_note',
+                    title: 'Primary Care Progress Note',
+                    full_text: 'Summarize the visit into a concise SOAP-style note with pertinent positives/negatives and assessment/plan.'
+                }];
+            }
+
+            const map = {};
+            entries.forEach(entry => { map[entry.id] = entry; });
+            this.promptData = map;
+            this.availablePrompts = entries;
+
+            const oneLinerEffective = effective.one_liner || defaults.one_liner || '';
+            if (oneLinerEffective && typeof oneLinerEffective === 'string') {
+                this.oneLinerPrompt = oneLinerEffective;
+            }
+
+            selector.innerHTML = '';
+            entries.forEach(entry => {
+                const option = document.createElement('option');
+                option.value = entry.id;
+                option.text = entry.title;
+                selector.appendChild(option);
+            });
+
+            const stored = localStorage.getItem('lastPrompt');
+            let initialId = null;
+            if (stored && map[stored]) {
+                initialId = stored;
+            } else {
+                const preferred = entries.find(e => e.title === 'Primary Care Progress Note');
+                initialId = preferred ? preferred.id : (entries[0] ? entries[0].id : null);
+            }
+
+            if (initialId) {
+                selector.value = initialId;
+                if (promptPreview) {
+                    const selected = map[initialId];
+                    promptPreview.value = selected ? selected.full_text : '';
+                }
+                localStorage.setItem('lastPrompt', initialId);
+            } else if (promptPreview) {
+                promptPreview.value = '';
             }
         } catch (error) {
             console.error('Error loading prompts:', error);
@@ -735,6 +769,36 @@ window.WorkspaceModules['Note'] = {
           return active.map(problem => `• ${problem.name || 'Unknown problem'}`).join('\n');
     },
 
+    async _ensureOneLinerPrompt(forceRefresh = false) {
+        if (!forceRefresh && this.oneLinerPrompt) {
+            return this.oneLinerPrompt;
+        }
+        let promptText = '';
+        if (window.UserSettingsClient && typeof window.UserSettingsClient.getPrompts === 'function') {
+            try {
+                const payload = await window.UserSettingsClient.getPrompts({ fields: ['one_liner'], forceRefresh });
+                const effective = (payload && payload.prompts && payload.prompts.one_liner) || '';
+                const fallback = (payload && payload.defaults && payload.defaults.one_liner) || '';
+                promptText = effective || fallback || '';
+            } catch (err) {
+                console.warn('Note module: unable to load one-liner prompt from user settings', err);
+            }
+        }
+        if (!promptText) {
+            try {
+                const resp = await fetch('/static/prompts/one_liner.txt', { cache: 'no-store' });
+                if (resp.ok) {
+                    promptText = await resp.text();
+                }
+            } catch(_e) {}
+        }
+        if (!promptText) {
+            promptText = 'Provide a concise clinical one-liner summarizing the patient.';
+        }
+        this.oneLinerPrompt = promptText;
+        return promptText;
+    },
+
     // Insert a concise IDENTIFICATION one-liner at the top of the draft note
     async addOneLiner(){
         if (this._oneLinerBusy) return;
@@ -746,23 +810,34 @@ window.WorkspaceModules['Note'] = {
         try {
             this._oneLinerBusy = true;
             if (btn) { btn.disabled = true; btn.textContent = 'Adding…'; }
-            // Load one-liner prompt
-            const r = await fetch('/load_one_liner_prompt', { cache: 'no-store' });
-            if (!r.ok) throw new Error('Prompt not found');
-            const promptText = await r.text();
-            // Run notes QA over chart with demo masking flag
-            const demoMode = !!(window.demoMasking && window.demoMasking.enabled);
-            const res = await fetch('/explore/notes_qa', {
-                method: 'POST',
-                headers: {
-                    'Content-Type': 'application/json',
-                    'X-CSRF-Token': (window.getCsrfToken ? window.getCsrfToken() : (document.querySelector('meta[name="csrf-token"]')?.getAttribute('content') || ''))
-                },
-                body: JSON.stringify({ query: promptText, top_k: 8, demo_mode: demoMode })
-            });
-            const data = await res.json().catch(()=>({}));
-            if (!res.ok || data.error) throw new Error(data.error || `HTTP ${res.status}`);
-            const answerRaw = String(data.answer || '').trim();
+            const promptText = await this._ensureOneLinerPrompt();
+            const Api = window.Api || {};
+            const queryText = 'Generate a concise clinical one-liner for the patient';
+            const askOptions = { mode: 'summary', prompt_override: promptText };
+            let data = null;
+            if (Api.ask && typeof Api.ask === 'function') {
+                data = await Api.ask(queryText, askOptions);
+            } else {
+                const payload = { query: queryText, mode: 'summary', prompt_override: promptText };
+                if (dfn) payload.patient = { DFN: dfn };
+                const res = await fetch('/api/query/ask', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                        'X-CSRF-Token': (window.getCsrfToken ? window.getCsrfToken() : (document.querySelector('meta[name="csrf-token"]')?.getAttribute('content') || ''))
+                    },
+                    credentials: 'same-origin',
+                    body: JSON.stringify(payload)
+                });
+                data = await res.json().catch(()=>({}));
+                if (!res.ok || (data && data.error)) {
+                    throw new Error((data && data.error) || `HTTP ${res.status}`);
+                }
+            }
+            if (!data || data.error) {
+                throw new Error((data && data.error) || 'One-liner unavailable');
+            }
+            const answerRaw = String((data && data.answer) || '').trim();
             if (!answerRaw) throw new Error('No summary returned');
             const clean = this._cleanOneLinerText(answerRaw);
             const prefix = `IDENTIFICATION: ${clean}`;
@@ -962,7 +1037,8 @@ window.createNote = async function() {
             transcript = module.currentTranscript || '';
         }
 
-        const promptRaw = module.promptData[promptSelector?.value] || '';
+        const promptEntry = module.promptData[promptSelector?.value];
+        const promptRaw = promptEntry ? promptEntry.full_text : '';
         
         // Replace FHIR placeholders in prompt
         const promptText = await module.replaceFhirPlaceholdersSelective(promptRaw);
@@ -1079,7 +1155,8 @@ window.submitFeedback = async function() {
         // Ensure the current draft and prompt context are included before the user's feedback
         const currentDraft = replyDiv ? (replyDiv.innerText || '').trim() : '';
         const promptName = (document.getElementById('promptSelector')?.value || '').trim();
-        const promptText = (module && module.promptData && promptName) ? (module.promptData[promptName] || '') : '';
+        const promptEntry = (module && module.promptData && promptName) ? module.promptData[promptName] : null;
+        const promptText = promptEntry ? promptEntry.full_text : '';
 
         // If chatHistory is empty, seed with the last assistant message as the current draft
         if (!Array.isArray(module.chatHistory) || module.chatHistory.length === 0) {

@@ -36,6 +36,11 @@ def create_app():
     app.config['ARCHIVE_DIR'] = runtime_root / 'archives'
     app.config['EXAMPLES_DIR'] = runtime_root / 'examples'
     app.config['PROMPTS_ROOT'] = package_root / 'static' / 'prompts'
+    app.config['USERS_ROOT'] = package_root / 'users'
+
+    users_root = Path(app.config['USERS_ROOT'])
+    users_root.mkdir(parents=True, exist_ok=True)
+    (users_root / 'default').mkdir(parents=True, exist_ok=True)
 
     # Feature flags (placeholders)
     app.config['USE_VAX_GATEWAY'] = os.getenv('USE_VAX_GATEWAY', '1').lower() in ('1', 'true', 'yes', 'on')
@@ -223,6 +228,10 @@ def create_app():
         from .blueprints.archive_api import bp as archive_bp
     except Exception:
         archive_bp = None
+    try:
+        from .blueprints.user_settings_api import bp as user_settings_bp
+    except Exception:
+        user_settings_bp = None
 
     app.register_blueprint(general_bp)
     # Legacy-compatible endpoints at root for existing frontend JS (patient search/default list)
@@ -272,5 +281,7 @@ def create_app():
         app.register_blueprint(auth_bp)
     if archive_bp is not None:
         app.register_blueprint(archive_bp, url_prefix='/api/archive')
+    if user_settings_bp is not None:
+        app.register_blueprint(user_settings_bp)
 
     return app

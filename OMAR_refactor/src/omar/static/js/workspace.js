@@ -15,7 +15,11 @@
             try{
                 const u = (url instanceof URL) ? url : new URL(String(url), window.location.origin);
                 const p = u.pathname || '';
-                return p === '/get_patient' || p.startsWith('/fhir/orders') || p.startsWith('/quick/');
+                if (p === '/get_patient') return true;
+                if (p.startsWith('/fhir/orders')) return true;
+                if (p.startsWith('/quick/')) return true;
+                if (p.startsWith('/api/patient/') && p.includes('/quick/')) return true;
+                return false;
             }catch(_e){ return false; }
         };
         const keyFor = (url, opts)=>{
@@ -627,21 +631,43 @@ try { window.loadFullChartForPatient = undefined; } catch(_e) {}
     // Throttling policy: fetch server layout once per session; persist locally during session;
     // post to server only on session end (beforeunload) or explicit reset.
     let __serverLayoutFetched = false;
-    async function _mirrorLayoutToServer(_state, _opts = {}){
-        // Deprecated: no server layout mirroring; local-only persistence
-        return;
+    async function _mirrorLayoutToServer(stateLike, opts = {}){
+        if (!window.UserSettingsClient || typeof window.UserSettingsClient.queueLayoutSave !== 'function') {
+            return;
+        }
+        const keepalive = !!opts.keepalive;
+        const immediate = !!opts.immediate;
+        const flush = !!opts.flush;
+        const reason = opts.reason || '';
+        const layout = stateLike ? {
+            left: stateLike.left || { tabs: [], activeIndex: 0 },
+            right: stateLike.right || { tabs: [], activeIndex: 0 },
+            floating: Array.isArray(stateLike.floating) ? stateLike.floating : [],
+        } : null;
+        try {
+            if (flush && typeof window.UserSettingsClient.flushLayoutSave === 'function') {
+                await window.UserSettingsClient.flushLayoutSave({ keepalive });
+            }
+            if (reason === 'finalize' || immediate || keepalive) {
+                await window.UserSettingsClient.saveLayout(layout, { keepalive });
+            } else {
+                window.UserSettingsClient.queueLayoutSave(layout);
+            }
+        } catch (err) {
+            try { console.warn('[Workspace] Failed to mirror layout to server', err); } catch(_e){}
+        }
     }
 
     function saveLayout(){
         try{
-            const state = {
+            const layout = {
                 left: collectPane('left'),
                 right: collectPane('right'),
-                floating: collectFloatingTabs(),
-                ts: Date.now()
+                floating: collectFloatingTabs()
             };
+            const state = Object.assign({ ts: Date.now() }, layout);
             localStorage.setItem(buildLayoutStorageKey(), JSON.stringify(state));
-            // Do not mirror to server on every change; we'll finalize on exit/reset
+            _mirrorLayoutToServer(layout);
         }catch(e){ console.warn('Workspace saveLayout failed', e); }
     }
 
@@ -746,7 +772,29 @@ try { window.loadFullChartForPatient = undefined; } catch(_e) {}
     }
 
     async function _fetchServerLayout(){
-        // Deprecated: never fetch layout from server; rely on localStorage only
+        if (!window.UserSettingsClient || typeof window.UserSettingsClient.getLayout !== 'function') {
+            return null;
+        }
+        try {
+            const payload = await window.UserSettingsClient.getLayout({ includeDefaults: true });
+            if (payload && payload.layout && payload.layout.left && payload.layout.right) {
+                return payload.layout;
+            }
+            if (payload) {
+                const defaults = payload.defaults || {};
+                const overrides = payload.overrides || {};
+                const layout = {
+                    left: overrides.left || defaults.left || { tabs: [], activeIndex: 0 },
+                    right: overrides.right || defaults.right || { tabs: [], activeIndex: 0 },
+                    floating: Array.isArray(overrides.floating) ? overrides.floating : (Array.isArray(defaults.floating) ? defaults.floating : [])
+                };
+                if (layout.left && layout.right) {
+                    return layout;
+                }
+            }
+        } catch (err) {
+            try { console.warn('[Workspace] Failed to fetch user layout, falling back to local storage', err); } catch(_e){}
+        }
         return null;
     }
 
@@ -1291,7 +1339,7 @@ window.WorkspaceModules['${moduleKey}'] = {
             saveLayout();
             const raw = localStorage.getItem(buildLayoutStorageKey());
             const state = raw ? JSON.parse(raw) : null;
-            if (state) { _mirrorLayoutToServer(state, { reason: 'finalize', keepalive: true }); }
+            if (state) { _mirrorLayoutToServer(state, { reason: 'finalize', keepalive: true, flush: true }); }
         } catch(_e){}
     }); } catch(_e){}
     // On patient switch: blank then rehydrate server-saved layout for new DFN (or defaults)

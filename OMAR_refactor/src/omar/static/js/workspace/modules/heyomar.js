@@ -21,6 +21,66 @@
     </div>`;
   };
 
+  let cachedSummaryPrompt = null;
+  let cachedSummaryPromptMeta = null;
+
+  function normalizePromptEntry(entry){
+    if (!entry) return { text: '', metadata: null };
+    if (typeof entry === 'string') {
+      const txt = String(entry).trim();
+      return { text: txt, metadata: null };
+    }
+    if (typeof entry === 'object') {
+      const txt = String(entry.full_text || entry.text || '').trim();
+      if (!txt) return { text: '', metadata: null };
+      const meta = Object.assign({}, entry);
+      delete meta.full_text;
+      delete meta.text;
+      return { text: txt, metadata: Object.keys(meta).length ? meta : null };
+    }
+    return { text: '', metadata: null };
+  }
+
+  async function loadSummaryPrompt(forceRefresh = false){
+    if (!forceRefresh && typeof cachedSummaryPrompt === 'string') {
+      return { text: cachedSummaryPrompt, metadata: cachedSummaryPromptMeta };
+    }
+
+    let promptText = '';
+    let metadata = null;
+
+    if (window.UserSettingsClient && typeof window.UserSettingsClient.getPrompts === 'function') {
+      try {
+        const payload = await window.UserSettingsClient.getPrompts({ fields: ['summary_prompt'], forceRefresh });
+        const effective = normalizePromptEntry(payload && payload.prompts && payload.prompts.summary_prompt);
+        const fallback = normalizePromptEntry(payload && payload.defaults && payload.defaults.summary_prompt);
+        if (effective.text) {
+          promptText = effective.text;
+          metadata = effective.metadata;
+        } else if (fallback.text) {
+          promptText = fallback.text;
+          metadata = fallback.metadata;
+        }
+      } catch (err) {
+        try { console.warn('Hey OMAR: summary prompt fetch failed, using fallback', err); } catch(_e){}
+      }
+    }
+
+    if (!promptText) {
+      try {
+        const res = await fetch('/static/prompts/health_summary_prompt.txt', { cache: 'no-store' });
+        if (res.ok) {
+          promptText = (await res.text()).trim();
+        }
+      } catch(_e){}
+    }
+
+    cachedSummaryPrompt = promptText || '';
+    cachedSummaryPromptMeta = metadata && typeof metadata === 'object' ? metadata : null;
+
+    return { text: cachedSummaryPrompt, metadata: cachedSummaryPromptMeta };
+  }
+
   function getState(container){ return (container && container.__heyState) || null; }
   function ensureState(container){
     if (!container.__heyState) container.__heyState = { isMounted:true, id: nowId(), controllers: [], escHandler:null, limitToVisible:false, lastMatches: [] };
@@ -346,9 +406,25 @@
       // Use backend summary mode with optional local override
       const Api = window.Api || {};
       const override = (function(){ try { return localStorage.getItem('SUMMARY_PROMPT_OVERRIDE') || ''; } catch(_e){ return ''; } })();
-  const body = { mode: 'summary' };
-  try{ const st2=ensureState(container); if (st2 && st2.modelId) body.model_id = st2.modelId; }catch(_e){}
-      if (override && override.trim()) body.prompt_override = override.trim();
+      const body = { mode: 'summary' };
+      try{ const st2=ensureState(container); if (st2 && st2.modelId) body.model_id = st2.modelId; }catch(_e){}
+
+      const trimmedOverride = override && override.trim();
+      if (trimmedOverride) {
+        body.prompt_override = trimmedOverride;
+      } else {
+        try {
+          const summaryPrompt = await loadSummaryPrompt();
+          if (summaryPrompt && summaryPrompt.text) {
+            body.prompt_override = summaryPrompt.text;
+            if (summaryPrompt.metadata && summaryPrompt.metadata.id) {
+              body.prompt_id = summaryPrompt.metadata.id;
+            }
+          }
+        } catch(err) {
+          try { console.warn('Hey OMAR: unable to load summary prompt override', err); } catch(_e){}
+        }
+      }
       // Early RAG results
       try{
         const early = await (Api.ragResults ? Api.ragResults('Summary of patient', body) : Promise.resolve(null));

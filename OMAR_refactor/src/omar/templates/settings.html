@@ -108,6 +108,26 @@
             font-size: 1.2em;
         }
 
+        .module-section.summary {
+            border-left: 5px solid #3949ab;
+            background: #eef0ff;
+        }
+        .module-section.summary h3::before {
+            content: "🩺";
+            margin-right: 0.5em;
+            font-size: 1.2em;
+        }
+
+        .module-section.defaults {
+            border-left: 5px solid #00897b;
+            background: #f1fbf8;
+        }
+        .module-section.defaults h3::before {
+            content: "📚";
+            margin-right: 0.5em;
+            font-size: 1.2em;
+        }
+
         /* Optional: accent border on left */
         .module-section.templates {
             border-left: 5px solid #1976d2;
@@ -151,6 +171,70 @@
         .dotphrase-box { display:none; background:#f9fbff; border:1px solid #e3e8ee; padding:12px; border-radius:8px; margin:12px 0; }
         .dotphrase-box ul { margin: 8px 0 0 18px; }
         .dotphrase-box li code { background:#eef4ff; padding:2px 6px; border-radius:4px; }
+
+        .summary-toolbar {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 10px;
+            align-items: center;
+        }
+
+        .summary-toolbar button {
+            flex: 0 0 auto;
+        }
+
+        #summaryPromptEffectivePreview {
+            background: #fff;
+            border: 1px solid #d4d9e6;
+            border-radius: 6px;
+            padding: 10px;
+            min-height: 160px;
+            font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
+            white-space: pre-wrap;
+        }
+
+        .default-prompt-library {
+            display: flex;
+            flex-direction: column;
+            gap: 14px;
+        }
+
+        details.default-prompt-block {
+            border: 1px solid #c5e1dc;
+            border-radius: 8px;
+            background: #fff;
+            padding: 0 14px 12px;
+        }
+
+        details.default-prompt-block summary {
+            cursor: pointer;
+            font-weight: 600;
+            padding: 12px 0;
+            outline: none;
+        }
+
+        .default-prompt-toolbar {
+            display: flex;
+            justify-content: flex-end;
+            gap: 10px;
+            margin: 6px 0 10px;
+        }
+
+        .default-prompt-text {
+            background: #f7faf9;
+            border: 1px solid #d0e5df;
+            border-radius: 6px;
+            padding: 10px;
+            font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
+            white-space: pre-wrap;
+            overflow: auto;
+            max-height: 320px;
+        }
+
+        .default-prompt-meta {
+            font-size: 12px;
+            color: #2f6f63;
+        }
 
         /* Match Workspace record button size/style */
         .global-top-bar .circle-btn.image-record-btn { height: 40px; width: 40px; padding: 0; border: none; background: white; border-radius: 50%; display: flex; align-items: center; justify-content: center; cursor: pointer; transition: all 0.2s ease; }
@@ -211,6 +295,27 @@
                         <li>Skip expansion: <code>{.labs/a1c:last}</code></li>
                     </ul>
                 </div>
+            </div>
+        </div>
+
+        <!-- Clinical Summary Prompt Section -->
+        <div class="module-section summary">
+            <h3>Clinical Summary Prompt</h3>
+            <p style="margin-top:-6px;color:#3a3f65;">Customize the health summary prompt used across workspace experiences. Saving here only affects your account.</p>
+            <div class="form-group">
+                <label for="summaryPromptText">Your Custom Prompt (optional)</label>
+                <textarea id="summaryPromptText" rows="10" placeholder="Enter a custom summary prompt…"></textarea>
+            </div>
+            <div class="summary-toolbar">
+                <button type="button" id="loadSummaryDefaultBtn">Load System Default</button>
+                <button type="button" id="saveSummaryPromptBtn">Save Custom Prompt</button>
+                <button type="button" id="resetSummaryPromptBtn">Use System Default</button>
+                <span id="summaryPromptStatus" style="min-width:160px;color:#1b5e20;font-weight:500;"></span>
+            </div>
+            <div class="form-group" style="margin-top:18px;">
+                <label for="summaryPromptEffectivePreview">Current Effective Prompt (read-only)</label>
+                <textarea id="summaryPromptEffectivePreview" class="summary-preview" rows="10" readonly></textarea>
+                <small id="summaryPromptHelper" style="display:block;margin-top:6px;color:#53608f;">Loading prompt details…</small>
             </div>
         </div>
 
@@ -289,6 +394,15 @@
             </div>
         </div>
 
+        <!-- Default Prompt Library Section -->
+        <div class="module-section defaults">
+            <h3>Default Prompt Library</h3>
+            <p style="margin-top:-6px;color:#1b5e20;">Browse the built-in prompts. Copy any prompt into your own editors; defaults stay read-only.</p>
+            <div id="defaultPromptLibrary" class="default-prompt-library">
+                <p style="margin:0;color:#48655d;">Loading default prompts…</p>
+            </div>
+        </div>
+
         <!-- Appearance Section -->
         <div class="module-section" style="border-left:5px solid var(--color-primary); background: var(--paper-panel);">
             <h3>Appearance</h3>
@@ -303,6 +417,7 @@
         </div>
     </div>
     <script src="/static/SessionManager.js"></script>
+    <script src="/static/js/user_settings_client.js"></script>
     <script src="/static/settings.js"></script>
     <script src="/static/app.js"></script>
         <script src="/static/popups.js"></script>

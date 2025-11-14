@@ -6,6 +6,7 @@ window.WorkspaceModules = window.WorkspaceModules || {};
 
 (function(){
   const MOD_KEY = 'After Visit Summary';
+  let cachedPatientInstructionsPrompt = null;
 
   // Lazy loader for marked to handle load-order or missing script issues
   async function ensureMarkedLoaded(){
@@ -62,6 +63,45 @@ window.WorkspaceModules = window.WorkspaceModules || {};
       if(!ok){ try{ console.warn('[AVS] marked failed to load; falling back to plain text preview'); }catch(_e){} }
       return !!ok && !!window.marked;
     }catch(_e){ return false; }
+  }
+
+  async function loadPatientInstructionsPrompt(forceRefresh = false){
+    if (!forceRefresh && typeof cachedPatientInstructionsPrompt === 'string' && cachedPatientInstructionsPrompt) {
+      return cachedPatientInstructionsPrompt;
+    }
+
+    let promptText = '';
+
+    if (window.UserSettingsClient && typeof window.UserSettingsClient.getPrompts === 'function') {
+      try {
+        const payload = await window.UserSettingsClient.getPrompts({ fields: ['patient_instructions'], forceRefresh });
+        const effective = payload && payload.prompts && typeof payload.prompts.patient_instructions === 'string'
+          ? payload.prompts.patient_instructions.trim()
+          : '';
+        const fallback = payload && payload.defaults && typeof payload.defaults.patient_instructions === 'string'
+          ? payload.defaults.patient_instructions.trim()
+          : '';
+        promptText = effective || fallback || '';
+      } catch (err) {
+        try { console.warn('[AVS] user settings prompt fetch failed, falling back', err); } catch(_e){}
+      }
+    }
+
+    if (!promptText) {
+      try {
+        const res = await fetch('/load_patient_instructions_prompt', { cache: 'no-store' });
+        if (res.ok) {
+          promptText = (await res.text()) || '';
+        }
+      } catch(_e){}
+    }
+
+    if (!promptText) {
+      promptText = 'Provide patient-centered after visit instructions summarizing today\'s visit.';
+    }
+
+    cachedPatientInstructionsPrompt = promptText;
+    return promptText;
   }
 
   async function getTranscriptWorkspace(){
@@ -127,8 +167,7 @@ window.WorkspaceModules = window.WorkspaceModules || {};
     } catch(_e) {}
 
     // Load template
-    let promptTemplate = '';
-    try{ const res = await fetch('/load_patient_instructions_prompt'); if(res.ok) promptTemplate = await res.text(); } catch(_e){}
+    const promptTemplate = await loadPatientInstructionsPrompt();
 
     const mdInstruction = 'Please format your output as Markdown (using -, *, **, etc.) for clear printing.\n\n';
     let prompt = mdInstruction + (promptTemplate||'').replace(/\{\{transcript\}\}/g, transcript).replace(/\{\{visit_notes\}\}/g, '');

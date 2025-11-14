@@ -17,6 +17,23 @@
       .finally(()=> controllers.delete(ctrl))
       .then(r=>{ if(!r.ok) throw new Error('HTTP '+r.status); return r.json(); });
   }
+  async function fetchOrdersFallback(params){
+    const dfn = _dfn();
+    if(!dfn) return [];
+    const usp = new URLSearchParams();
+    Object.entries(params||{}).forEach(([k,v])=>{
+      if(v===undefined || v===null || v==='') return;
+      usp.set(k, String(v));
+    });
+    const qs = usp.toString();
+    const base = `/api/patient/${encodeURIComponent(dfn)}/quick/orders`;
+    const url = qs ? `${base}?${qs}` : base;
+    const raw = await jget(url);
+    if(raw && typeof raw === 'object' && !Array.isArray(raw) && Object.prototype.hasOwnProperty.call(raw, 'result') && raw.context){
+      return raw.result;
+    }
+    return raw;
+  }
   function titleCase(s){ if(!s) return ''; return String(s).toLowerCase().replace(/\b([a-z])/g, (m,a)=>a.toUpperCase()); }
   function fmtDateOnly(s){ try{ const d=new Date(s); return isNaN(d)? '' : d.toLocaleDateString(); }catch(_e){ return ''; } }
   function readSaved(key, def){ try{ const v=localStorage.getItem(key); return v!=null? v: def; }catch(_e){ return def; } }
@@ -306,13 +323,33 @@ ${draftNote || 'No draft note available'}`;
   }
 
   async function loadData(days, status, otype){
-    const d = days!=null? days : state.days;
-    const st = status || state.status || 'current';
-    const tp = otype || state.otype || 'all';
-    const url = `/fhir/orders/${encodeURIComponent(st)}/${encodeURIComponent(tp)}/${encodeURIComponent(d)}`;
-    const data = await jget(url).catch(err=>{ throw err; });
-    state.orders = Array.isArray(data)? data : (data && Array.isArray(data.orders)? data.orders : []);
-    state.days = d; state.status = st; state.otype = tp;
+    const st = (status || state.status || 'current').toString().toLowerCase();
+    const tp = (otype || state.otype || 'all').toString().toLowerCase();
+    const candidateDays = (days!=null? days : state.days);
+    const parsedDays = parseInt(String(candidateDays), 10);
+    const normalizedDays = (!Number.isNaN(parsedDays) && parsedDays >= 0) ? parsedDays : state.days;
+    const params = {};
+    if(st) params.status = st;
+    if(tp) params.type = tp;
+    if(Number.isFinite(normalizedDays) && normalizedDays > 0) params.days = String(normalizedDays);
+
+    let data;
+    if(window.Api && typeof Api.quick === 'function'){
+      try{
+        data = await Api.quick('orders', params);
+      }catch(err){
+        console.warn('Api.quick("orders") failed, falling back to fetch', err);
+        data = await fetchOrdersFallback(params).catch(e=>{ throw e; });
+      }
+    } else {
+      data = await fetchOrdersFallback(params).catch(err=>{ throw err; });
+    }
+
+    const arr = Array.isArray(data) ? data : (data && Array.isArray(data.orders) ? data.orders : []);
+    state.orders = arr;
+    state.days = normalizedDays;
+    state.status = st;
+    state.otype = tp;
 
     // After state.orders is set, auto-reconcile checklist with placed orders
     try{ reconcileChecklistWithOrders(); }catch(_e){}
@@ -579,8 +616,10 @@ ${draftNote || 'No draft note available'}`;
     const status = String(readSaved('workspace.todo.status', 'current'));
     const otype = String(readSaved('workspace.todo.type', 'all'));
     state.days = (days===1||days===7||days===90)? days : 7;
-    state.status = ['current','active','pending','all'].includes(status)? status : 'current';
-    state.otype = ['all','labs','meds'].includes(otype)? otype : 'all';
+    const allowedStatuses = ['current','active','pending','completed','discontinued','all'];
+    const allowedTypes = ['all','labs','meds','imaging','consults','nursing','other'];
+    state.status = allowedStatuses.includes(status)? status : 'current';
+    state.otype = allowedTypes.includes(otype)? otype : 'all';
     // Initialize empty checklist if not already set
     if(!Array.isArray(state.checklist)){
       state.checklist = [];
@@ -596,6 +635,8 @@ ${draftNote || 'No draft note available'}`;
               <option value="current" ${state.status==='current'?'selected':''}>Current</option>
               <option value="active" ${state.status==='active'?'selected':''}>Active</option>
               <option value="pending" ${state.status==='pending'?'selected':''}>Pending</option>
+              <option value="completed" ${state.status==='completed'?'selected':''}>Completed</option>
+              <option value="discontinued" ${state.status==='discontinued'?'selected':''}>Discontinued</option>
               <option value="all" ${state.status==='all'?'selected':''}>All</option>
             </select>
             <label for="todo-type" class="sr-only">Type</label>
@@ -603,6 +644,10 @@ ${draftNote || 'No draft note available'}`;
               <option value="all" ${state.otype==='all'?'selected':''}>All types</option>
               <option value="labs" ${state.otype==='labs'?'selected':''}>Labs</option>
               <option value="meds" ${state.otype==='meds'?'selected':''}>Meds</option>
+              <option value="imaging" ${state.otype==='imaging'?'selected':''}>Imaging</option>
+              <option value="consults" ${state.otype==='consults'?'selected':''}>Consults</option>
+              <option value="nursing" ${state.otype==='nursing'?'selected':''}>Nursing</option>
+              <option value="other" ${state.otype==='other'?'selected':''}>Other</option>
             </select>
             <label for="todo-days" class="sr-only">Time window</label>
             <select id="todo-days" aria-label="Time window">

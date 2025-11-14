@@ -6,6 +6,7 @@ from flask import Blueprint, jsonify, current_app, request, g
 from ..services.patient_service import PatientService
 from ..gateways.factory import get_gateway
 from ..services import transforms as T
+from ..services import user_settings
 from ..utils.context import merge_context
 try:
     from omar.services.loinc_index import LoincIndex
@@ -83,6 +84,14 @@ def _get_patient_service() -> PatientService:
         flask_session['station'] = str(sta_arg)
     if duz_arg:
         flask_session['duz'] = str(duz_arg)
+    if sta_arg or duz_arg:
+        try:
+            user_settings.ensure_user_directory()
+        except Exception as exc:
+            try:
+                current_app.logger.warning('ensure_user_directory failed for patient station/duz override: %s', exc)
+            except Exception:
+                pass
     station = str(flask_session.get('station') or os.getenv('DEFAULT_STATION','500'))
     duz = str(flask_session.get('duz') or os.getenv('DEFAULT_DUZ','983'))
     gw = get_gateway(station=station, duz=duz)
@@ -396,6 +405,48 @@ def _collect_params(*keys: str) -> dict:
     return out
 
 
+_STATUS_COMPLETED_PATTERNS = ('complete', 'comp', 'result', 'done', 'finish', 'final')
+_STATUS_DISCONTINUED_PATTERNS = ('discont', 'cancel', 'void', 'stop', 'expire', 'lapse')
+_STATUS_PENDING_PATTERNS = ('pend', 'hold', 'draft', 'unsigned', 'in process', 'inprocess', 'in-progress', 'require', 'pre-release', 'prerelease', 'new')
+_STATUS_ACTIVE_PATTERNS = ('active', 'current', 'released', 'processing', 'in effect', 'in-effect', 'inforce', 'in force')
+
+
+def _orders_status_alias(value: str | None) -> str:
+    v = str(value or '').strip().lower()
+    if v in ('active', 'a'):
+        return 'active'
+    if v in ('pending', 'pend', 'p', 'hold', 'unsigned', 'draft'):
+        return 'pending'
+    if v in ('completed', 'complete', 'comp', 'finished', 'done', 'resulted', 'final'):
+        return 'completed'
+    if v in ('discontinued', 'cancelled', 'canceled', 'dc', 'void', 'stopped', 'expired', 'exp', 'lapsed', 'cancel'):
+        return 'discontinued'
+    if v in ('current', 'actpend', 'active+pending', 'ap', 'cur', 'c'):
+        return 'current'
+    if v in ('all', '*', 'any'):
+        return 'all'
+    return 'current'
+
+
+def _orders_type_alias(value: str | None) -> str:
+    v = str(value or '').strip().lower()
+    if v in ('med', 'meds', 'medication', 'medications', 'pharmacy', 'rx', 'drug', 'drugs'):
+        return 'meds'
+    if v in ('lab', 'labs', 'laboratory', 'chemistry', 'microbiology', 'pathology'):
+        return 'labs'
+    if v in ('imaging', 'image', 'radiology', 'rad', 'ct', 'mri', 'xray', 'x-ray', 'ultrasound', 'nuclear', 'pet'):
+        return 'imaging'
+    if v in ('consult', 'consults', 'referral', 'gmrc'):
+        return 'consults'
+    if v in ('nursing', 'nurse', 'nurs'):
+        return 'nursing'
+    if v in ('other', 'misc', 'unknown'):
+        return 'other'
+    if v in ('all', '*', 'any'):
+        return 'all'
+    return 'all'
+
+
 def _raw_requested() -> bool:
     try:
         return str(request.args.get('raw', '')).strip().lower() in ('1','true','yes','on')
@@ -677,6 +728,305 @@ def labs_quick(dfn: str):
                     out.append(obj)
                 filtered = out
         return _json_with_optional_raw(filtered, vpr, list_label='labs')
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+@bp.get('/<dfn>/quick/orders')
+@bp.get('/<dfn>/quick/order')
+def orders_quick(dfn: str):
+    svc = _get_patient_service()
+    try:
+        raw_requested = _raw_requested()
+        include_raw = str(request.args.get('includeRaw', '0')).strip().lower() in ('1', 'true', 'yes', 'on')
+        status_filter = _orders_status_alias(request.args.get('status', 'current'))
+        type_filter = _orders_type_alias(request.args.get('type', 'all'))
+
+        params = dict(_collect_for('order'))
+        days_arg = request.args.get('days')
+        start_arg = request.args.get('start')
+        end_arg = request.args.get('end')
+
+        from datetime import datetime, timezone, timedelta
+
+        now = datetime.now(timezone.utc)
+
+        def _coerce_iso(val: str | None) -> str | None:
+            if not val:
+                return None
+            try:
+                iso = T._parse_any_datetime_to_iso(val)  # type: ignore[attr-defined]
+            except Exception:
+                iso = None
+            if iso:
+                return iso
+            try:
+                txt = str(val).strip()
+            except Exception:
+                txt = ''
+            return txt or None
+
+        start_iso = _coerce_iso(start_arg)
+        end_iso = _coerce_iso(end_arg)
+
+        days_int = None
+        if days_arg is not None:
+            try:
+                days_int = int(str(days_arg).strip() or '0')
+                if days_int <= 0:
+                    days_int = None
+            except Exception:
+                days_int = None
+
+        if days_int and not start_iso:
+            start_iso = (now - timedelta(days=days_int)).isoformat().replace('+00:00', 'Z')
+        if days_int and not end_iso:
+            end_iso = now.isoformat().replace('+00:00', 'Z')
+
+        if start_iso and start_iso.endswith('+00:00'):
+            start_iso = start_iso[:-6] + 'Z'
+        if end_iso and end_iso.endswith('+00:00'):
+            end_iso = end_iso[:-6] + 'Z'
+
+        if start_iso:
+            try:
+                fm_start = T.to_fileman_datetime(start_iso)
+                if fm_start:
+                    params['start'] = fm_start
+            except Exception:
+                pass
+        if end_iso:
+            try:
+                fm_stop = T.to_fileman_datetime(end_iso)
+                if fm_stop:
+                    params['stop'] = fm_stop
+            except Exception:
+                pass
+
+        if (raw_requested or include_raw) and 'raw' not in params:
+            params['raw'] = '1'
+
+        pass_params = params or None
+
+        vpr = svc.get_vpr_raw(dfn, 'order', params=pass_params)
+        quick = svc.get_orders_quick(dfn, params=pass_params)
+        orders = quick if isinstance(quick, list) else []
+
+        tokens_cache: dict[int, set[str]] = {}
+
+        def _status_tokens(order: dict) -> set[str]:
+            key = id(order)
+            if key in tokens_cache:
+                return tokens_cache[key]
+            tokens: set[str] = set()
+            for field in ('status_bucket', 'current_status', 'status', 'status_code'):
+                val = order.get(field)
+                if not val:
+                    continue
+                text = str(val).strip().lower()
+                if text:
+                    tokens.add(text)
+            tokens_cache[key] = tokens
+            return tokens
+
+        def _matches_patterns(token_set: set[str], patterns: tuple[str, ...]) -> bool:
+            for token in token_set:
+                for pattern in patterns:
+                    if pattern and pattern in token:
+                        return True
+            return False
+
+        def _status_matches(order: dict) -> bool:
+            bucket = str(order.get('status_bucket') or '').strip().lower()
+            tokens = _status_tokens(order)
+            if bucket:
+                tokens = set(tokens)
+                tokens.add(bucket)
+            if status_filter == 'all':
+                return True
+            if status_filter == 'current':
+                if bucket:
+                    return bucket in ('active', 'pending')
+                closed = _matches_patterns(tokens, _STATUS_COMPLETED_PATTERNS + _STATUS_DISCONTINUED_PATTERNS)
+                return not closed
+            if status_filter == 'active':
+                if bucket:
+                    return bucket == 'active'
+                return _matches_patterns(tokens, _STATUS_ACTIVE_PATTERNS)
+            if status_filter == 'pending':
+                if bucket:
+                    return bucket == 'pending'
+                return _matches_patterns(tokens, _STATUS_PENDING_PATTERNS)
+            if status_filter == 'completed':
+                if bucket:
+                    return bucket == 'completed'
+                return _matches_patterns(tokens, _STATUS_COMPLETED_PATTERNS)
+            if status_filter == 'discontinued':
+                if bucket:
+                    return bucket == 'discontinued'
+                return _matches_patterns(tokens, _STATUS_DISCONTINUED_PATTERNS)
+            return True
+
+        def _type_matches(order: dict) -> bool:
+            if type_filter == 'all':
+                return True
+            category = str(order.get('category') or '').strip().lower()
+            if category:
+                if category == type_filter:
+                    return True
+            type_text = str(order.get('type') or '').strip().lower()
+            if type_text and type_text == type_filter:
+                return True
+            detail = str(order.get('type_detail') or '').strip().lower()
+            if not detail:
+                return type_filter == 'other'
+            if type_filter == 'labs':
+                return any(token in detail for token in ('lab', 'chem', 'hemat', 'micro', 'path'))
+            if type_filter == 'meds':
+                return any(token in detail for token in ('med', 'pharm', 'rx', 'drug'))
+            if type_filter == 'imaging':
+                return any(token in detail for token in ('imaging', 'radiology', 'x-ray', 'xray', 'ct', 'mri', 'ultrasound', 'nuclear', 'pet'))
+            if type_filter == 'consults':
+                return 'consult' in detail or 'referral' in detail
+            if type_filter == 'nursing':
+                return 'nurs' in detail or 'nursing' in detail
+            if type_filter == 'other':
+                return True
+            return False
+
+        def _to_dt(val: str | None) -> datetime | None:
+            if not val:
+                return None
+            text = str(val).strip()
+            if not text:
+                return None
+            try:
+                if text.endswith('Z'):
+                    text = text[:-1] + '+00:00'
+                return datetime.fromisoformat(text)
+            except Exception:
+                try:
+                    iso_val = T._parse_any_datetime_to_iso(text)  # type: ignore[attr-defined]
+                except Exception:
+                    iso_val = None
+                if not iso_val:
+                    return None
+                try:
+                    adj = iso_val[:-1] + '+00:00' if iso_val.endswith('Z') else iso_val
+                    return datetime.fromisoformat(adj)
+                except Exception:
+                    return None
+
+        start_dt_filter = _to_dt(start_iso)
+        end_dt_filter = _to_dt(end_iso)
+
+        def _date_matches(order: dict) -> bool:
+            if not (start_dt_filter or end_dt_filter):
+                return True
+            candidates = [
+                order.get('date'),
+                order.get('start'),
+                order.get('released'),
+                order.get('entered'),
+                order.get('signed'),
+                order.get('stop'),
+            ]
+            candidate_dt = None
+            for candidate in candidates:
+                candidate_dt = _to_dt(candidate)
+                if candidate_dt:
+                    break
+            if not candidate_dt:
+                return True
+            if start_dt_filter and candidate_dt < start_dt_filter:
+                return False
+            if end_dt_filter and candidate_dt > end_dt_filter:
+                return False
+            return True
+
+        filtered: list[dict] = []
+        for order in orders:
+            if not isinstance(order, dict):
+                continue
+            if not _status_matches(order):
+                continue
+            if not _type_matches(order):
+                continue
+            if not _date_matches(order):
+                continue
+            filtered.append(order)
+
+        filtered.sort(key=lambda rec: (rec.get('date') or '', rec.get('fm_date') or ''), reverse=True)
+
+        limit_arg = request.args.get('limit')
+        if limit_arg is not None:
+            try:
+                limit_val = int(str(limit_arg).strip())
+                if limit_val > 0:
+                    filtered = filtered[:limit_val]
+            except Exception:
+                pass
+
+        if include_raw and isinstance(filtered, list):
+            raw_items = []
+            try:
+                raw_items = T._get_nested_items(vpr)  # type: ignore[attr-defined]
+            except Exception:
+                raw_items = []
+
+            def _raw_keys(raw_item: dict) -> list[str]:
+                keys: list[str] = []
+                if not isinstance(raw_item, dict):
+                    return keys
+                uid_val = raw_item.get('uid')
+                if isinstance(uid_val, str) and uid_val.strip():
+                    keys.append(uid_val.strip())
+                def _pick(node):
+                    if node is None:
+                        return None
+                    if isinstance(node, dict):
+                        for attr in ('value', 'name', 'id', 'code'):
+                            if node.get(attr):
+                                return str(node[attr])
+                        return None
+                    if isinstance(node, str):
+                        return node
+                    return None
+                id_val = _pick(raw_item.get('id'))
+                if id_val and str(id_val).strip():
+                    keys.append(str(id_val).strip())
+                result_val = _pick(raw_item.get('resultID'))
+                if result_val and str(result_val).strip():
+                    keys.append(str(result_val).strip())
+                return [k for k in keys if k]
+
+            raw_index: dict[str, dict] = {}
+            for raw in raw_items:
+                if not isinstance(raw, dict):
+                    continue
+                for key in _raw_keys(raw):
+                    if key not in raw_index:
+                        raw_index[key] = raw
+
+            enriched: list[dict] = []
+            for order in filtered:
+                obj = dict(order)
+                key_candidates = [
+                    obj.get('order_id'),
+                    obj.get('id'),
+                    obj.get('uid'),
+                    obj.get('result_id'),
+                ]
+                for key in key_candidates:
+                    if not key:
+                        continue
+                    key_str = str(key).strip()
+                    if key_str and key_str in raw_index:
+                        obj['_raw'] = raw_index[key_str]
+                        break
+                enriched.append(obj)
+            filtered = enriched
+
+        return _json_with_optional_raw(filtered, vpr, list_label='orders')
     except Exception as e:
         return jsonify({'error': str(e)}), 500
 

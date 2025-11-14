@@ -1,0 +1,61 @@
+{
+  "left": {
+    "tabs": [
+      {
+        "title": "Snapshot",
+        "module": "Snapshot",
+        "options": null,
+        "deletable": false
+      },
+      {
+        "title": "Hey OMAR",
+        "module": "Hey OMAR",
+        "options": null,
+        "deletable": false
+      },
+      {
+        "title": "Documents",
+        "module": "Documents",
+        "options": null,
+        "deletable": false
+      },
+      {
+        "title": "Labs",
+        "module": "Labs",
+        "options": null,
+        "deletable": false
+      },
+      {
+        "title": "Meds",
+        "module": "Meds",
+        "options": null,
+        "deletable": false
+      }
+    ],
+    "activeIndex": 1
+  },
+  "right": {
+    "tabs": [
+      {
+        "title": "Note",
+        "module": "Note",
+        "options": null,
+        "deletable": false
+      },
+      {
+        "title": "After Visit Summary",
+        "module": "After Visit Summary",
+        "options": null,
+        "deletable": false
+      },
+      {
+        "title": "To Do",
+        "module": "To Do",
+        "options": null,
+        "deletable": false
+      }
+    ],
+    "activeIndex": 2
+  },
+  "floating": []
+}

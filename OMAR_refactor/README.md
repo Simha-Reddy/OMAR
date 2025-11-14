@@ -2,9 +2,9 @@
 
 OMAR is an AI-connected clinical assistant for VA clinicians, intended to run alongside a primary EHR. It is a work-in-progress focused on reimagining the clinician's workspace, as well as integrating AI in a natural and carefully limited way. It includes ambient scribing of notes, tracking of tasks and orders, patient instruction creation, and a powerful natural language query system of the patient's chart.
 
-While functional now, OMAR is a framework, not a final product. It's intended to be modular and to grow over time. New query models can be dropped in and tested. New tabs that find new and effective ways of presenting information, with or without an AI connection, are encouraged. Please consider contributing.
+While functional now, OMAR is a framework, not a final product. It's intended to be modular and to grow over time. New query models can be dropped in and tested. New tabs with new and effective ways of presenting information, with or without an AI connection, are encouraged. Please consider contributing.
 
-> OMAR IS NOT INTENDED FOR CLINICAL USE AT THIS TIME (OCTOBER 2025). FOR TESTING ONLY.
+> OMAR IS NOT INTENDED FOR ROUTINE CLINICAL USE AT THIS TIME (OCTOBER 2025). FOR TESTING ONLY.
 
 ---
 

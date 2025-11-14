@@ -1,0 +1,8 @@
+{
+  "scribe_prompts": {
+    "simha_primary_care_note": {
+      "title": "Simha Primary Care Note",
+      "full_text": "Summarize the visit at a primary care clinic. Focus on chronic disease status, medication changes, patient goals, and clear follow-up actions. Use only the provided transcript and data. Remove any statements not specifically supported by the transcript or original data. Do not add any new information.\n"
+    }
+  }
+}

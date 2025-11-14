@@ -166,6 +166,356 @@ def _normalize_telecoms_recursive(obj: Any) -> Any:
     return obj
 
 
+def _ensure_list(value: Any) -> List[Any]:
+    if value is None:
+        return []
+    if isinstance(value, list):
+        return value
+    return [value]
+
+
+def _clean_text(value: Any) -> Optional[str]:
+    if value is None:
+        return None
+    if isinstance(value, bool):
+        return "true" if value else "false"
+    if isinstance(value, (int, float)):
+        return str(value)
+    if isinstance(value, str):
+        stripped = value.strip()
+        return stripped or None
+    if isinstance(value, dict):
+        for key in ("value", "text", "content", "displayName", "name", "line"):
+            if key in value:
+                resolved = _clean_text(value.get(key))
+                if resolved:
+                    return resolved
+        return None
+    if isinstance(value, list):
+        for entry in value:
+            resolved = _clean_text(entry)
+            if resolved:
+                return resolved
+        return None
+    try:
+        text = str(value).strip()
+        return text or None
+    except Exception:
+        return None
+
+
+def _collect_strings(value: Any, keys: Tuple[str, ...]) -> List[str]:
+    queue: List[Any] = list(_ensure_list(value))
+    out: List[str] = []
+    seen: set[str] = set()
+    while queue:
+        current = queue.pop(0)
+        if current is None:
+            continue
+        if isinstance(current, dict):
+            matched = False
+            for key in keys:
+                if key in current:
+                    queue.append(current[key])
+                    matched = True
+            if matched:
+                continue
+            text = _clean_text(current)
+            if text and text not in seen:
+                out.append(text)
+                seen.add(text)
+            continue
+        if isinstance(current, list):
+            queue.extend(current)
+            continue
+        text = _clean_text(current)
+        if text and text not in seen:
+            out.append(text)
+            seen.add(text)
+    return out
+
+
+def _to_iso_datetime(value: Any) -> Optional[str]:
+    text = _clean_text(value)
+    if not text:
+        return None
+    iso = _fileman_to_iso(text)
+    if iso:
+        return iso
+    try:
+        candidate = text.replace("Z", "+00:00")
+        if "T" in candidate or "-" in candidate:
+            stamp = datetime.fromisoformat(candidate)
+            stamp_utc = stamp.astimezone(timezone.utc)
+            return stamp_utc.replace(tzinfo=timezone.utc).isoformat().replace("+00:00", "Z")
+    except Exception:
+        pass
+    digits = "".join(ch for ch in text if ch.isdigit())
+    try:
+        if len(digits) >= 14:
+            year = int(digits[0:4])
+            month = int(digits[4:6])
+            day = int(digits[6:8])
+            hour = int(digits[8:10])
+            minute = int(digits[10:12])
+            second = int(digits[12:14])
+            stamp = datetime(year, month, day, hour, minute, second, tzinfo=timezone.utc)
+            return stamp.isoformat().replace("+00:00", "Z")
+        if len(digits) >= 12:
+            year = int(digits[0:4])
+            month = int(digits[4:6])
+            day = int(digits[6:8])
+            hour = int(digits[8:10])
+            minute = int(digits[10:12])
+            stamp = datetime(year, month, day, hour, minute, tzinfo=timezone.utc)
+            return stamp.isoformat().replace("+00:00", "Z")
+        if len(digits) >= 8:
+            year = int(digits[0:4])
+            month = int(digits[4:6])
+            day = int(digits[6:8])
+            stamp = datetime(year, month, day, tzinfo=timezone.utc)
+            return stamp.isoformat().replace("+00:00", "Z")
+    except Exception:
+        return None
+    return None
+
+
+def _normalize_order_clinicians(value: Any) -> List[Dict[str, Any]]:
+    entries: List[Dict[str, Any]] = []
+    for raw in _ensure_list(value):
+        if raw is None:
+            continue
+        source = raw if isinstance(raw, dict) else {"name": raw}
+        record: Dict[str, Any] = {}
+        name = None
+        for key in ("name", "displayName", "providerName", "clinicianName", "value"):
+            name = _clean_text(source.get(key))
+            if name:
+                break
+        if name:
+            record["name"] = name
+        role = _clean_text(source.get("role") or source.get("roleName") or source.get("type"))
+        if role:
+            record["role"] = role
+        uid = _clean_text(source.get("uid") or source.get("clinicianUid") or source.get("providerUid"))
+        if uid:
+            record["uid"] = uid
+        signed = _clean_text(source.get("signedDateTime") or source.get("signed") or source.get("signatureDateTime"))
+        if signed:
+            record["signedDateTime"] = signed
+            iso = _to_iso_datetime(signed)
+            if iso:
+                record["signedDateTimeIso"] = iso
+        if record:
+            entries.append(record)
+    return entries
+
+
+def _normalize_order_results(value: Any) -> List[Dict[str, Any]]:
+    entries: List[Dict[str, Any]] = []
+    for raw in _ensure_list(value):
+        if raw is None:
+            continue
+        if isinstance(raw, dict):
+            record: Dict[str, Any] = {}
+            for target, keys in (
+                ("uid", ("uid", "resultUid")),
+                ("orderUid", ("orderUid",)),
+                ("localId", ("localId", "id")),
+                ("name", ("name", "displayName")),
+                ("typeName", ("typeName", "type")),
+                ("statusName", ("statusName", "status")),
+                ("statusCode", ("statusCode",)),
+            ):
+                for key in keys:
+                    text = _clean_text(raw.get(key))
+                    if text:
+                        record[target] = text
+                        break
+            value_text = _clean_text(raw.get("value") or raw.get("result"))
+            if value_text:
+                record.setdefault("value", value_text)
+            dt_text = _clean_text(raw.get("dateTime") or raw.get("date") or raw.get("observed") or raw.get("resulted"))
+            if dt_text:
+                record["dateTime"] = dt_text
+                iso = _to_iso_datetime(dt_text)
+                if iso:
+                    record["dateTimeIso"] = iso
+            if record:
+                entries.append(record)
+        else:
+            text = _clean_text(raw)
+            if text:
+                entries.append({"value": text})
+    return entries
+
+
+def _extract_order_id(order_uid: Optional[str], local_id: Optional[str]) -> Optional[str]:
+    if local_id:
+        return local_id
+    if not order_uid:
+        return None
+    tail = order_uid.rsplit(":", 1)[-1]
+    tail = tail.strip()
+    if tail:
+        return tail
+    return None
+
+
+def _normalize_order_item(item: Dict[str, Any]) -> Dict[str, Any]:
+    data = dict(item)
+    normalized: Dict[str, Any] = dict(data)
+    normalized["domain"] = "order"
+
+    uid = _clean_text(data.get("uid"))
+    if uid:
+        normalized["uid"] = uid
+    order_uid = _clean_text(data.get("orderUid")) or uid
+    if order_uid:
+        normalized["orderUid"] = order_uid
+    local_id = _clean_text(data.get("localId") or data.get("id"))
+    if local_id:
+        normalized["localId"] = local_id
+    order_id = _extract_order_id(order_uid, local_id)
+    if order_id:
+        normalized["orderId"] = order_id
+
+    name = None
+    for key in ("name", "orderName", "displayName", "oiName"):
+        name = _clean_text(data.get(key))
+        if name:
+            break
+    if name:
+        normalized["name"] = name
+        normalized.setdefault("orderName", name)
+
+    field_map: Tuple[Tuple[str, Tuple[str, ...]], ...] = (
+        ("typeName", ("typeName", "type")),
+        ("displayGroup", ("displayGroup", "group", "groupName")),
+        ("service", ("service", "serviceName", "specialty")),
+        ("category", ("category",)),
+        ("statusName", ("statusName", "status")),
+        ("statusCode", ("statusCode", "statusId")),
+        ("statusVuid", ("statusVuid",)),
+        ("providerName", ("providerName", "provider")),
+        ("providerUid", ("providerUid", "providerId")),
+        ("facilityName", ("facilityName", "facility")),
+        ("facilityCode", ("facilityCode", "facilityId")),
+        ("locationName", ("locationName", "location", "locationDisplayName")),
+        ("locationUid", ("locationUid", "locationId")),
+        ("scheduleName", ("scheduleName", "schedule")),
+        ("urgency", ("urgency", "urgencyName")),
+        ("oiName", ("oiName", "orderableItemName")),
+        ("oiCode", ("oiCode", "orderableItemCode")),
+        ("oiPackageRef", ("oiPackageRef", "orderableItemPackageRef")),
+        ("predecessor", ("predecessor",)),
+        ("successor", ("successor",)),
+        ("enteredByName", ("enteredByName", "enteredBy")),
+        ("enteredByUid", ("enteredByUid", "enteredById")),
+        ("signerName", ("signerName", "signedByName")),
+        ("signerUid", ("signerUid", "signedByUid")),
+    )
+    for target, keys in field_map:
+        if target in normalized:
+            continue
+        for key in keys:
+            text = _clean_text(data.get(key))
+            if text:
+                normalized[target] = text
+                break
+
+    if "orderName" not in normalized and normalized.get("oiName"):
+        normalized["orderName"] = normalized["oiName"]
+        if "name" not in normalized:
+            normalized["name"] = normalized["oiName"]
+
+    provider_block = data.get("provider")
+    if "providerName" not in normalized:
+        provider_name = _clean_text(provider_block)
+        if provider_name:
+            normalized["providerName"] = provider_name
+    if "providerUid" not in normalized and isinstance(provider_block, dict):
+        provider_uid = _clean_text(provider_block.get("uid") or provider_block.get("providerUid"))
+        if provider_uid:
+            normalized["providerUid"] = provider_uid
+
+    facility_block = data.get("facility")
+    if "facilityName" not in normalized:
+        facility_name = _clean_text(facility_block)
+        if facility_name:
+            normalized["facilityName"] = facility_name
+    if "facilityCode" not in normalized and isinstance(facility_block, dict):
+        code = _clean_text(facility_block.get("code") or facility_block.get("facilityCode"))
+        if code:
+            normalized["facilityCode"] = code
+
+    location_block = data.get("location")
+    if "locationName" not in normalized:
+        location_name = _clean_text(location_block)
+        if location_name:
+            normalized["locationName"] = location_name
+    if "locationUid" not in normalized and isinstance(location_block, dict):
+        location_uid = _clean_text(location_block.get("uid") or location_block.get("locationUid"))
+        if location_uid:
+            normalized["locationUid"] = location_uid
+
+    date_fields: Tuple[Tuple[str, Tuple[str, ...]], ...] = (
+        ("entered", ("entered", "dateTime", "ordered")),
+        ("start", ("start", "startDate", "startDateTime")),
+        ("stop", ("stop", "stopDate", "stopDateTime")),
+        ("signedDateTime", ("signedDateTime", "signed", "signDateTime", "signatureDateTime")),
+        ("released", ("released", "releaseDateTime")),
+    )
+    for target, keys in date_fields:
+        if target in normalized:
+            continue
+        for key in keys:
+            raw_val = data.get(key)
+            text = _clean_text(raw_val)
+            if text:
+                normalized[target] = text
+                iso = _to_iso_datetime(text)
+                if iso:
+                    normalized[f"{target}Iso"] = iso
+                break
+
+    admin_times = _clean_text(data.get("adminTimes") or data.get("adminTime"))
+    if admin_times:
+        normalized["adminTimes"] = admin_times
+
+    instructions = _collect_strings(data.get("instructions") or data.get("instruction"), ("instructions", "instruction", "text", "line", "value"))
+    if instructions:
+        normalized["instructions"] = instructions
+        normalized["instructionsText"] = "\n".join(instructions)
+
+    content_lines = _collect_strings(data.get("content"), ("content", "text", "line", "value"))
+    if content_lines:
+        normalized["content"] = content_lines
+        normalized["contentText"] = "\n".join(content_lines)
+        normalized.setdefault("contentPreview", content_lines[0])
+
+    results = _normalize_order_results(data.get("results"))
+    if results:
+        normalized["results"] = results
+
+    clinicians_source = data.get("clinicians") or data.get("providers")
+    clinicians = _normalize_order_clinicians(clinicians_source)
+    if clinicians:
+        normalized["clinicians"] = clinicians
+        if "providerName" not in normalized:
+            provider_pick = next((c for c in clinicians if (c.get("role") or "").upper() in {"A", "P", "PROVIDER"}), None)
+            if not provider_pick and clinicians:
+                provider_pick = clinicians[0]
+            if provider_pick and provider_pick.get("name"):
+                normalized["providerName"] = provider_pick["name"]
+
+    status_name = normalized.get("statusName")
+    if status_name and "status" not in normalized:
+        normalized["status"] = status_name
+
+    return normalized
+
+
 def _normalize_patient_item(item: Dict[str, Any]) -> Dict[str, Any]:
     data = dict(item)
     if "bid" in data and "briefId" not in data:
@@ -235,6 +585,8 @@ def _normalize_domain_item(domain: Optional[str], item: Dict[str, Any]) -> Dict[
     base = _normalize_collections(base)
     if domain == "patient" and isinstance(base, dict):
         return _normalize_patient_item(base)
+    if domain == "order" and isinstance(base, dict):
+        return _normalize_order_item(base)
     if isinstance(base, dict):
         if "telecomList" in base and "telecoms" not in base:
             holder = base.pop("telecomList")

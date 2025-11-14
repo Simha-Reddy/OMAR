@@ -45,6 +45,25 @@
     }catch(_e){ return null; }
   }
 
+  // Demographics cache (memoized for a short window to avoid redundant fetches)
+  let _demoCache = null;
+  let _demoCacheAt = 0;
+  async function getDemographics(force){
+    const now = Date.now();
+    if (!force && _demoCache && (now - _demoCacheAt) < 60_000){
+      return _demoCache;
+    }
+    const payload = await apiQuick('demographics');
+    let data = {};
+    if (payload && typeof payload === 'object'){
+      if (payload.demographics && typeof payload.demographics === 'object') data = payload.demographics;
+      else data = payload;
+    }
+    _demoCache = data || {};
+    _demoCacheAt = now;
+    return _demoCache;
+  }
+
   // Patient metadata helpers
   async function getPatientMeta(){
     // Use PatientContext only; avoid legacy /get_patient
@@ -200,8 +219,27 @@
       return orders.map(o=>{ const d=o?.date? String(o.date).slice(0,10):''; const typ=String(o?.type||''); const nm=String(o?.name||''); const st=String(o?.current_status||o?.status||''); const tail=st?` — ${st}`:''; return `• ${d}${d?': ':''}[${typ}] ${nm}${tail}`.trim(); }).join('\n');
     }catch(_e){ return 'No orders found'; }
   }
-  function ordersTypeAlias(s){ const v=String(s||'').trim().toLowerCase(); if(['med','meds','medications','rx','pharmacy'].includes(v)) return 'meds'; if(['lab','labs','laboratory'].includes(v)) return 'labs'; return 'all'; }
-  function ordersStatusAlias(s){ const v=String(s||'').trim().toLowerCase(); if(['active','a'].includes(v)) return 'active'; if(['pending','p'].includes(v)) return 'pending'; if(['current','actpend','active+pending','ap','c'].includes(v)) return 'current'; if(['all','*'].includes(v)) return 'all'; return 'current'; }
+  function ordersTypeAlias(s){
+    const v = String(s||'').trim().toLowerCase();
+    if(['med','meds','medications','rx','pharmacy','drug','drugs'].includes(v)) return 'meds';
+    if(['lab','labs','laboratory','chemistry','microbiology','pathology'].includes(v)) return 'labs';
+    if(['imaging','image','radiology','rad','ct','mri','xray','x-ray','ultrasound','nuclear','pet'].includes(v)) return 'imaging';
+    if(['consult','consults','referral','gmrc'].includes(v)) return 'consults';
+    if(['nursing','nurse','nurs'].includes(v)) return 'nursing';
+    if(['other','misc','unknown'].includes(v)) return 'other';
+    if(['all','*','any'].includes(v)) return 'all';
+    return 'all';
+  }
+  function ordersStatusAlias(s){
+    const v = String(s||'').trim().toLowerCase();
+    if(['active','a'].includes(v)) return 'active';
+    if(['pending','pend','p','hold','unsigned','draft'].includes(v)) return 'pending';
+    if(['completed','complete','comp','finished','done','resulted','final'].includes(v)) return 'completed';
+    if(['discontinued','cancelled','canceled','dc','void','stopped','expired','exp','lapsed','cancel'].includes(v)) return 'discontinued';
+    if(['current','actpend','active+pending','ap','cur','c'].includes(v)) return 'current';
+    if(['all','*','any'].includes(v)) return 'all';
+    return 'current';
+  }
   function parseOrdersArgs(argStr){ let status='current', type='all', days=7; const s=String(argStr||'').trim(); if(!s) return {status,type,days};
     if(s.includes('=')||s.includes(',')){ const parts=s.split(/[\s,]+/).filter(Boolean); for(const part of parts){ const [kRaw,vRaw]=part.split('='); const k=(kRaw||'').toLowerCase(); const v=(vRaw||'').trim(); if(k==='status') status=ordersStatusAlias(v); else if(k==='type'||k==='category') type=ordersTypeAlias(v); else if(k==='days'){ const n=parseInt(v,10); if(Number.isFinite(n)&&n>0) days=n; } else if(k==='since'||k==='date'){ const dt=new Date(v); if(!isNaN(dt.getTime())){ const now=new Date(); const diffMs=Math.max(0, now-dt); days=Math.max(1, Math.ceil(diffMs/(1000*60*60*24))); } } } return {status,type,days}; }
     const parts=s.split(/[\s/]+/).filter(Boolean); if(parts[0]) status=ordersStatusAlias(parts[0]); if(parts[1]) type=ordersTypeAlias(parts[1]); if(parts[2]){ const d=parts[2].toLowerCase(); const n=parseInt(d,10); if(Number.isFinite(n)&&n>0) days=n; else { const dt=new Date(parts[2]); if(!isNaN(dt.getTime())){ const now=new Date(); const diffMs=Math.max(0, now-dt); days=Math.max(1, Math.ceil(diffMs/(1000*60*60*24))); } } } return {status,type,days}; }
@@ -225,27 +263,29 @@
     try{
       // name
       if (t === 'name' || t === 'patient'){
-        const j = await apiQuick('demographics');
+        const demo = await getDemographics();
         let full = '';
-        if (j && j.demographics){
-          const d = j.demographics;
-          full = d.Name || d.name || [d.firstName, d.lastName].filter(Boolean).join(' ').trim();
+        try{
+          full = demo.Name || demo.name || demo.displayName || demo.fullName || '';
+          if (!full){
+            const parts = [demo.firstName || demo.first_name || '', demo.lastName || demo.last_name || ''].filter(Boolean);
+            full = parts.join(' ').trim();
+          }
           if (full && /,/.test(full)){
-            const parts = String(full).split(',');
-            const last = parts[0].trim();
-            const first = parts.slice(1).join(',').trim();
+            const pieces = String(full).split(',');
+            const last = pieces[0].trim();
+            const first = pieces.slice(1).join(',').trim();
             if (first && last) full = `${first} ${last}`;
           }
-        }
+        }catch(_e){ full = ''; }
         return full || '';
       }
       // dob
       if (t === 'dob'){
-        const j = await apiQuick('demographics');
         let dob = '';
         try{
-          const d = j?.demographics || {};
-          dob = d.DOB_ISO || d.DOB || d.dob || '';
+          const d = await getDemographics();
+          dob = d.DOB_ISO || d.DOB || d.dob || d.birthDate || d.birthdate || '';
         }catch(_e){}
         if (dob && /[A-Z]{3}\s+\d{1,2},\s?\d{4}/i.test(dob)){
           try{
@@ -262,7 +302,10 @@
       // age
       if (t === 'age'){
         let dob = '';
-        try{ const j = await apiQuick('demographics'); const d = j?.demographics||{}; dob = d.DOB_ISO || d.DOB || d.dob || ''; }catch(_e){}
+        try{
+          const d = await getDemographics();
+          dob = d.DOB_ISO || d.DOB || d.dob || d.birthDate || d.birthdate || '';
+        }catch(_e){}
         if (!dob) return '';
         try{
           const today=new Date(); const birth=new Date(dob); let age=today.getFullYear()-birth.getFullYear(); const m=today.getMonth()-birth.getMonth(); if(m<0 || (m===0 && today.getDate()<birth.getDate())) age--; return String(age);
@@ -270,8 +313,7 @@
       }
       // phone (mobile preferred)
       if (t === 'phone'){
-        const j = await apiQuick('demographics');
-        const d = j?.demographics || {};
+        const d = await getDemographics();
         const entries = Object.entries(d);
         const byKey = (needleArr)=>{
           const low = (s)=> String(s||'').toLowerCase();
@@ -448,9 +490,12 @@
         let status='current', type='all', days=7;
         if(t.includes(':')){ const argStr = t.split(':',2)[1] || ''; const parsed = parseOrdersArgs(argStr); status=parsed.status; type=parsed.type; days=parsed.days; }
         else if(t.includes('/')){ const segs=t.split('/').filter(Boolean); if(segs[1]) status = ordersStatusAlias(segs[1]); if(segs[2]) type = ordersTypeAlias(segs[2]); if(segs[3]){ const n=parseInt(segs[3],10); if(Number.isFinite(n) && n>0) days=n; } }
-        const path = `/fhir/orders/${encodeURIComponent(status)}/${encodeURIComponent(type)}/${encodeURIComponent(String(days))}`;
-        const j = await getJson(path);
-        const arr = j?.orders || [];
+        const params = {};
+        if(status) params.status = status;
+        if(type) params.type = type;
+        if(Number.isFinite(days) && days!=null && days!==''){ const n=Math.max(0, parseInt(String(days),10)); if(Number.isFinite(n) && n>0) params.days = String(n); }
+        const j = await apiQuick('orders', params);
+        const arr = Array.isArray(j) ? j : (Array.isArray(j?.orders) ? j.orders : []);
         return fmtOrders(arr);
       }
     }catch(_e){ return null; }

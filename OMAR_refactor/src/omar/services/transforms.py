@@ -1165,6 +1165,487 @@ def vpr_to_quick_problems(vpr_payload: Any) -> List[Dict[str, Any]]:
     return out
 
 
+# ===================== Orders =====================
+
+_ORDER_COMPLETED_TOKENS = (
+    'complete', 'completed', 'comp', 'resulted', 'done', 'finished', 'final', 'finalized'
+)
+_ORDER_DISCONTINUED_TOKENS = (
+    'discontinue', 'discontinued', 'cancel', 'cancelled', 'canceled', 'void', 'voided',
+    'stopped', 'stop', 'expired', 'exp', 'lapsed'
+)
+_ORDER_PENDING_TOKENS = (
+    'pending', 'pend', 'hold', 'draft', 'unsigned', 'pre-release', 'prerelease',
+    'in process', 'inprocess', 'in-progress', 'new', 'not signed', 'requires signature'
+)
+_ORDER_ACTIVE_TOKENS = (
+    'active', 'current', 'released', 'processing', 'in effect', 'in-effect', 'in force',
+    'inforce'
+)
+
+
+def _order_extract_value(node: Any) -> Optional[Any]:
+    if node is None:
+        return None
+    if isinstance(node, dict):
+        # Prefer common attribute-style keys (supports xmltodict-style '@' keys as well)
+        preferred = ('value', 'name', 'text', 'content', 'string', 'code', 'id', 'number', '#text')
+        for cand_key in preferred:
+            for key, val in node.items():
+                try:
+                    norm = str(key).lstrip('@').lower()
+                except Exception:
+                    norm = ''
+                if norm == cand_key.lstrip('@').lower():
+                    if isinstance(val, (list, dict)):
+                        extracted = _order_extract_value(val)
+                    else:
+                        extracted = val
+                    if extracted not in (None, ''):
+                        return extracted
+        # Fallback: inspect remaining nested values
+        for candidate in node.values():
+            extracted = _order_extract_value(candidate)
+            if extracted not in (None, ''):
+                return extracted
+        return None
+    if isinstance(node, list):
+        for item in node:
+            extracted = _order_extract_value(item)
+            if extracted not in (None, ''):
+                return extracted
+        return None
+    return node
+
+
+def _order_extract_string(node: Any) -> Optional[str]:
+    if node is None:
+        return None
+    if isinstance(node, list):
+        pieces = [ _order_extract_string(item) for item in node ]
+        pieces = [p for p in pieces if p]
+        if pieces:
+            return '\n'.join(pieces)
+        return None
+    if isinstance(node, dict):
+        value = _order_extract_value(node)
+    else:
+        value = node
+    if value is None:
+        return None
+    text = str(value).strip()
+    return text or None
+
+
+def _order_extract_datetime(node: Any) -> tuple[Optional[str], Optional[str]]:
+    raw_val = _order_extract_value(node)
+    if raw_val is None:
+        return None, None
+    raw_str = str(raw_val).strip()
+    if not raw_str:
+        return None, None
+    iso = _parse_any_datetime_to_iso(raw_str)
+    return raw_str, iso
+
+
+def _order_attr(node: Any, key: str) -> Optional[str]:
+    if not isinstance(node, dict):
+        return None
+    target = key.lower()
+    for cand, value in node.items():
+        try:
+            norm = str(cand).lstrip('@').lower()
+        except Exception:
+            norm = ''
+        if norm == target:
+            if isinstance(value, (dict, list)):
+                extracted = _order_extract_value(value)
+            else:
+                extracted = value
+            if extracted in (None, ''):
+                continue
+            text = str(extracted).strip()
+            if text:
+                return text
+    return None
+
+
+def _order_status_bucket(name: Optional[str], code: Optional[str]) -> str:
+    tokens: list[str] = []
+    for raw in (name, code):
+        if raw is None:
+            continue
+        norm = str(raw).strip().lower()
+        if norm:
+            tokens.append(norm)
+    for token in tokens:
+        if any(marker in token for marker in _ORDER_DISCONTINUED_TOKENS):
+            return 'discontinued'
+    for token in tokens:
+        if any(marker in token for marker in _ORDER_COMPLETED_TOKENS):
+            return 'completed'
+    for token in tokens:
+        if any(marker in token for marker in _ORDER_PENDING_TOKENS):
+            return 'pending'
+    for token in tokens:
+        if any(marker in token for marker in _ORDER_ACTIVE_TOKENS):
+            return 'active'
+    if tokens:
+        return 'other'
+    return 'unknown'
+
+
+def _order_categorize(service: Optional[str], group: Optional[str], order_type: Optional[str], name: Optional[str]) -> str:
+    service_low = (service or '').strip().lower()
+    group_low = (group or '').strip().lower()
+    type_low = (order_type or '').strip().lower()
+    name_low = (name or '').strip().lower()
+
+    def contains_any(text: str, needles: tuple[str, ...]) -> bool:
+        return any(needle in text for needle in needles if needle)
+
+    if (
+        service_low.startswith('lr')
+        or group_low in {'ch', 'mi', 'sp', 'cy', 'ap', 'lab'}
+        or contains_any(type_low, ('lab', 'chem', 'hemat', 'micro', 'path', 'specimen', 'culture'))
+        or contains_any(name_low, ('lab', 'panel', 'cbc', 'chem', 'culture', 'pathology', 'specimen'))
+    ):
+        return 'labs'
+    if (
+        service_low.startswith('ps')
+        or service_low in {'pha', 'pharm', 'pharmacy'}
+        or group_low in {'med', 'rx', 'ps', 'psj', 'pharm', 'unit dose', 'clinicmed'}
+        or contains_any(type_low, ('med', 'pharm', 'prescription', 'drug', 'dose'))
+        or contains_any(name_low, ('med', 'pharm', 'tablet', 'capsule', 'dose', 'rx'))
+    ):
+        return 'meds'
+    if (
+        service_low.startswith('ra')
+        or 'radiology' in service_low
+        or 'imaging' in service_low
+        or group_low in {'imaging', 'rad', 'ra'}
+        or contains_any(type_low, ('imaging', 'radiology', 'x-ray', 'xray', 'ct', 'mri', 'ultrasound', 'nuclear'))
+        or contains_any(name_low, ('imaging', 'radiology', 'x-ray', 'xray', 'ct ', ' mri', 'ultrasound', 'nuclear', 'pet'))
+    ):
+        return 'imaging'
+    if (
+        service_low in {'gmrc', 'consult', 'con'}
+        or contains_any(type_low, ('consult', 'referral'))
+        or contains_any(name_low, ('consult', 'referral'))
+    ):
+        return 'consults'
+    if (
+        'nurs' in service_low
+        or 'nurse' in group_low
+        or contains_any(type_low, ('nurs', 'nursing'))
+        or contains_any(name_low, ('nurs', 'nursing'))
+    ):
+        return 'nursing'
+    return 'other'
+
+
+def vpr_to_quick_orders(vpr_payload: Any) -> List[Dict[str, Any]]:
+    items = _get_nested_items(vpr_payload)
+    out: List[Dict[str, Any]] = []
+    for it in items:
+        if not isinstance(it, dict):
+            continue
+
+        order_id = _order_extract_string(it.get('id'))
+        uid_val = _order_extract_string(it.get('uid'))
+        result_id = _order_extract_string(it.get('resultID'))
+
+        name_node = it.get('name')
+        content_preview = (
+            _order_extract_string(it.get('contentPreview'))
+            or _order_extract_string(it.get('contentText'))
+            or _order_extract_string(it.get('content'))
+            or _order_extract_string(it.get('instructionsText'))
+            or _order_extract_string(it.get('instructions'))
+        )
+        order_name = (
+            _order_extract_string(name_node)
+            or _order_extract_string(it.get('summary'))
+            or _order_extract_string(it.get('displayName'))
+            or _order_extract_string(it.get('description'))
+            or _order_extract_string(it.get('text'))
+            or _order_extract_string(it.get('orderName'))
+            or ''
+        )
+        if not order_name and content_preview:
+            first_line = content_preview.splitlines()[0].strip()
+            order_name = first_line or content_preview.strip()
+        if not order_name:
+            order_name = (
+                _order_extract_string(it.get('displayGroup'))
+                or _order_extract_string(it.get('group'))
+                or _order_extract_string(it.get('service'))
+                or _order_extract_string(it.get('typeName'))
+                or _order_extract_string(it.get('type'))
+                or ''
+            )
+        if order_name and len(order_name) > 160:
+            order_name = order_name[:160].rstrip()
+        name_code = None
+        if isinstance(name_node, dict):
+            name_code = (
+                _order_attr(name_node, 'code')
+                or _order_attr(name_node, 'value')
+                or _order_attr(name_node, 'id')
+            )
+
+        group_val = _order_extract_string(it.get('group'))
+        service_val = _order_extract_string(it.get('service'))
+        priority_val = _order_extract_string(it.get('priority'))
+
+        type_node = it.get('type')
+        order_type_name = _order_extract_string(type_node)
+        order_type_code = None
+        if isinstance(type_node, dict):
+            order_type_code = (
+                _order_attr(type_node, 'code')
+                or _order_attr(type_node, 'value')
+            )
+
+        status_node = it.get('status')
+        status_name = _order_extract_string(status_node)
+        status_code = None
+        status_vuid = None
+        if isinstance(status_node, dict):
+            status_code = (
+                _order_attr(status_node, 'code')
+                or _order_attr(status_node, 'value')
+            )
+            status_vuid = _order_attr(status_node, 'vuid')
+            if not status_name:
+                status_name = _order_attr(status_node, 'name')
+
+        signature_status = _order_extract_string(it.get('signatureStatus'))
+
+        facility_dict = it.get('facility')
+        facility_name = None
+        facility_code = None
+        if isinstance(facility_dict, dict):
+            facility_name = _order_extract_string(facility_dict.get('name')) or _order_extract_string(facility_dict)
+            facility_code = _order_attr(facility_dict, 'code')
+
+        location_dict = it.get('location')
+        location_name = None
+        location_code = None
+        if isinstance(location_dict, dict):
+            location_name = _order_extract_string(location_dict.get('name')) or _order_extract_string(location_dict)
+            location_code = _order_attr(location_dict, 'code')
+
+        provider_dict = it.get('provider')
+        provider_obj = None
+        if isinstance(provider_dict, dict):
+            provider_code = (
+                _order_attr(provider_dict, 'code')
+                or _order_attr(provider_dict, 'id')
+                or _order_extract_string(provider_dict.get('code') or provider_dict.get('id'))
+            )
+            provider_name = (
+                _order_attr(provider_dict, 'name')
+                or _order_extract_string(provider_dict.get('name'))
+            )
+            provider_id = (
+                _order_attr(provider_dict, 'id')
+                or _order_extract_string(provider_dict.get('id'))
+            )
+            provider_npi = (
+                _order_attr(provider_dict, 'npi')
+                or _order_extract_string(provider_dict.get('npi'))
+            )
+            provider_phone = (
+                _order_attr(provider_dict, 'officePhone')
+                or _order_attr(provider_dict, 'phone')
+                or _order_extract_string(provider_dict.get('officePhone') or provider_dict.get('phone'))
+            )
+            provider_service = (
+                _order_attr(provider_dict, 'service')
+                or _order_extract_string(provider_dict.get('service'))
+            )
+            provider_title = (
+                _order_attr(provider_dict, 'title')
+                or _order_extract_string(provider_dict.get('title'))
+            )
+            provider_candidate = {
+                'code': provider_code,
+                'name': provider_name,
+                'id': provider_id,
+                'npi': provider_npi,
+                'phone': provider_phone,
+                'service': provider_service,
+                'title': provider_title,
+            }
+            provider_obj = {k: v for k, v in provider_candidate.items() if v}
+            if not provider_obj:
+                provider_obj = None
+
+        entered_raw, entered_iso = _order_extract_datetime(it.get('entered'))
+        start_raw, start_iso = _order_extract_datetime(it.get('start'))
+        stop_raw, stop_iso = _order_extract_datetime(it.get('stop'))
+        released_raw, released_iso = _order_extract_datetime(it.get('released'))
+        signed_raw, signed_iso = _order_extract_datetime(it.get('signed'))
+
+        signed_dict = it.get('signed') if isinstance(it.get('signed'), dict) else {}
+        signed_by = None
+        signed_by_name = None
+        if isinstance(signed_dict, dict):
+            signed_by = (
+                _order_attr(signed_dict, 'by')
+                or _order_attr(signed_dict, 'byCode')
+                or _order_extract_string(signed_dict.get('by') or signed_dict.get('byCode'))
+            )
+            signed_by_name = (
+                _order_attr(signed_dict, 'byName')
+                or _order_attr(signed_dict, 'name')
+                or _order_extract_string(signed_dict.get('byName') or signed_dict.get('name'))
+            )
+
+        discontinued_dict = it.get('discontinued') if isinstance(it.get('discontinued'), dict) else {}
+        discontinued_raw = None
+        discontinued_iso = None
+        discontinued_reason = None
+        discontinued_by = None
+        discontinued_by_name = None
+        if isinstance(discontinued_dict, dict):
+            discontinued_raw = (
+                _order_attr(discontinued_dict, 'date')
+                or _order_attr(discontinued_dict, 'value')
+                or _order_extract_string(discontinued_dict.get('date'))
+                or _order_extract_string(discontinued_dict.get('value'))
+                or _order_extract_string(discontinued_dict)
+            )
+            if discontinued_raw:
+                discontinued_iso = _parse_any_datetime_to_iso(discontinued_raw)
+            discontinued_reason = (
+                _order_attr(discontinued_dict, 'reason')
+                or _order_extract_string(discontinued_dict.get('reason'))
+            )
+            discontinued_by = (
+                _order_attr(discontinued_dict, 'by')
+                or _order_extract_string(discontinued_dict.get('by'))
+            )
+            discontinued_by_name = (
+                _order_attr(discontinued_dict, 'byName')
+                or _order_extract_string(discontinued_dict.get('byName'))
+            )
+
+        instructions_text = (
+            _order_extract_string(it.get('content'))
+            or _order_extract_string(it.get('comment'))
+            or _order_extract_string(it.get('comments'))
+        )
+        sig_text = _order_extract_string(it.get('sig') or it.get('sigText'))
+        indication_text = _order_extract_string(it.get('indication') or it.get('reason') or it.get('diagnosis'))
+
+        category_key = _order_categorize(service_val, group_val, order_type_name, order_name)
+        category_title_map = {
+            'labs': 'Labs',
+            'meds': 'Meds',
+            'imaging': 'Imaging',
+            'consults': 'Consults',
+            'nursing': 'Nursing',
+            'other': 'Other',
+        }
+        type_display = category_title_map.get(category_key, 'Other')
+
+        status_bucket = _order_status_bucket(status_name, status_code)
+        current_status_display = (str(status_name).strip() if status_name else '')
+        if not current_status_display and status_code:
+            current_status_display = str(status_code).upper()
+
+        status_code_disp = str(status_code).upper() if status_code else None
+
+        date_iso = next(
+            (ts for ts in (start_iso, released_iso, entered_iso, signed_iso, stop_iso) if ts),
+            None
+        )
+        fm_date = next(
+            (ts for ts in (start_raw, entered_raw, released_raw, signed_raw, stop_raw) if ts),
+            None
+        )
+
+        record: Dict[str, Any] = {
+            'uid': uid_val,
+            'order_id': order_id,
+            'id': order_id,
+            'result_id': result_id,
+            'name': order_name,
+            'code': name_code,
+            'group': group_val,
+            'service': service_val,
+            'priority': priority_val,
+            'type': type_display,
+            'type_detail': order_type_name,
+            'type_code': order_type_code,
+            'category': category_key,
+            'current_status': current_status_display,
+            'status': current_status_display,
+            'status_code': status_code_disp,
+            'status_bucket': status_bucket,
+            'status_vuid': status_vuid,
+            'signature_status': signature_status,
+            'facility_name': facility_name,
+            'facility_code': facility_code,
+            'location_name': location_name,
+            'location_code': location_code,
+            'provider_name': provider_obj.get('name') if provider_obj else None,
+            'provider': provider_obj,
+            'entered': entered_iso,
+            'entered_fm': entered_raw,
+            'start': start_iso,
+            'start_fm': start_raw,
+            'stop': stop_iso,
+            'stop_fm': stop_raw,
+            'released': released_iso,
+            'released_fm': released_raw,
+            'signed': signed_iso,
+            'signed_fm': signed_raw,
+            'signed_by': signed_by_name or signed_by,
+            'signed_by_id': signed_by,
+            'discontinued_date': discontinued_iso,
+            'discontinued_fm': discontinued_raw,
+            'discontinued_reason': discontinued_reason,
+            'discontinued_by': discontinued_by_name or discontinued_by,
+            'instructions': instructions_text,
+            'content': instructions_text,
+            'sig': sig_text,
+            'indication': indication_text,
+            'fm_date': fm_date,
+            'date': date_iso,
+            'source': 'vpr',
+        }
+
+        # Drop keys with null/empty values except for a few identifiers
+        cleaned: Dict[str, Any] = {}
+        for key, value in record.items():
+            if value is None:
+                continue
+            if isinstance(value, str):
+                text = value.strip()
+                if not text and key not in {'name', 'current_status', 'status', 'status_code', 'category', 'type', 'date', 'fm_date'}:
+                    continue
+                cleaned[key] = text if text else ''
+            else:
+                cleaned[key] = value
+
+        if cleaned.get('name') is None:
+            cleaned['name'] = ''
+        if 'status_code' not in cleaned and status_code_disp:
+            cleaned['status_code'] = status_code_disp
+        if 'status_bucket' not in cleaned:
+            cleaned['status_bucket'] = status_bucket
+        if 'provider' not in cleaned and provider_obj:
+            cleaned['provider'] = provider_obj
+
+        out.append(cleaned)
+
+    out.sort(key=lambda rec: (rec.get('date') or '', rec.get('fm_date') or ''), reverse=True)
+    return out
+
+
 # ===================== Allergies =====================
 
 def vpr_to_quick_allergies(vpr_payload: Any) -> List[Dict[str, Any]]:

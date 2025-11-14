@@ -2,9 +2,10 @@ from __future__ import annotations
 import json
 import os
 import time
-from flask import Blueprint, jsonify, request
+from flask import Blueprint, jsonify, request, current_app
 from ..gateways.factory import get_gateway
 from ..utils.context import merge_context
+from ..services import user_settings
 
 # Exposes the classic OMAR patient search endpoints at the root path
 # - GET  /vista_default_patient_list
@@ -75,6 +76,14 @@ def _get_vista_gateway():
         flask_session['station'] = str(sta_arg)
     if duz_arg:
         flask_session['duz'] = str(duz_arg)
+    if sta_arg or duz_arg:
+        try:
+            user_settings.ensure_user_directory()
+        except Exception as exc:
+            try:
+                current_app.logger.warning('ensure_user_directory failed for patient_search override: %s', exc)
+            except Exception:
+                pass
     station = str(flask_session.get('station') or os.getenv('DEFAULT_STATION','500'))
     duz = str(flask_session.get('duz') or os.getenv('DEFAULT_DUZ','983'))
     return get_gateway(station=station, duz=duz)

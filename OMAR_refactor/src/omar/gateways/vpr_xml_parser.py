@@ -51,6 +51,7 @@ DOMAIN_TAGS: Dict[str, Tuple[str, str]] = {
     'visit': ('visits', 'visit'),
     'problem': ('problems', 'problem'),
     'allergy': ('reactions', 'allergy'),
+    'order': ('orders', 'order'),
 }
 
 

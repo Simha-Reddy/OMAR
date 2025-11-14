@@ -1,3 +1,7 @@
+const PROMPTS_API_ENDPOINT = '/api/user-settings/prompts';
+let summaryPromptState = { defaults: '', override: '', effective: '' };
+let summaryPromptStatusTimer = null;
+
 document.addEventListener("DOMContentLoaded", async () => {
     console.log("Initializing Settings page...");
 
@@ -102,6 +106,18 @@ document.addEventListener("DOMContentLoaded", async () => {
         }
     }
 
+    try {
+        await initSummaryPromptSection();
+    } catch (err) {
+        console.warn('Summary prompt section init failed', err);
+    }
+
+    try {
+        await loadDefaultPromptLibrary();
+    } catch (err) {
+        console.warn('Default prompt library init failed', err);
+    }
+
     // Load the patient instructions prompt into the editor
     loadPatientInstructionsPrompt();
     document.getElementById("savePatientInstructionsPromptBtn").onclick = savePatientInstructionsPrompt;
@@ -176,6 +192,336 @@ document.addEventListener("DOMContentLoaded", async () => {
         }
     } catch(e) { console.warn('Theme selector init failed', e); }
 });
+
+// --- Summary Prompt Functions ---
+
+async function initSummaryPromptSection() {
+    const editor = document.getElementById('summaryPromptText');
+    if (!editor) return;
+
+    await refreshSummaryPromptSection(true);
+
+    const saveBtn = document.getElementById('saveSummaryPromptBtn');
+    if (saveBtn) {
+        saveBtn.addEventListener('click', async () => {
+            await saveSummaryPromptOverride();
+        });
+    }
+
+    const resetBtn = document.getElementById('resetSummaryPromptBtn');
+    if (resetBtn) {
+        resetBtn.addEventListener('click', async () => {
+            await resetSummaryPromptOverride();
+        });
+    }
+
+    const loadBtn = document.getElementById('loadSummaryDefaultBtn');
+    if (loadBtn) {
+        loadBtn.addEventListener('click', () => {
+            const source = summaryPromptState.defaults || summaryPromptState.effective;
+            if (source) {
+                editor.value = source;
+                try { editor.focus(); } catch(_e){}
+                setSummaryPromptStatus('Loaded system default into editor. Save to activate.');
+            } else {
+                setSummaryPromptStatus('No default prompt available to load.', true);
+            }
+        });
+    }
+}
+
+async function refreshSummaryPromptSection(forceRefresh = false) {
+    const editor = document.getElementById('summaryPromptText');
+    const preview = document.getElementById('summaryPromptEffectivePreview');
+    const helper = document.getElementById('summaryPromptHelper');
+    if (!editor) return;
+
+    if (helper) helper.textContent = 'Loading prompt details…';
+
+    try {
+        const payload = await fetchPromptsData({ fields: ['summary_prompt'], forceRefresh, includeDefaults: true });
+        const defaults = (payload && payload.defaults && typeof payload.defaults.summary_prompt === 'string')
+            ? payload.defaults.summary_prompt.trim()
+            : '';
+        const override = (payload && payload.overrides && typeof payload.overrides.summary_prompt === 'string')
+            ? payload.overrides.summary_prompt.trim()
+            : '';
+        let effective = '';
+        if (payload && payload.prompts && typeof payload.prompts.summary_prompt === 'string') {
+            effective = payload.prompts.summary_prompt.trim();
+        } else if (override) {
+            effective = override;
+        } else {
+            effective = defaults;
+        }
+
+        summaryPromptState = { defaults, override, effective };
+
+        editor.value = override || '';
+        if (preview) preview.value = effective || '';
+        if (helper) {
+            helper.textContent = override
+                ? 'Custom summary prompt is active.'
+                : 'Using the system default summary prompt.';
+        }
+    } catch (err) {
+        console.warn('Summary prompt refresh failed', err);
+        if (helper) helper.textContent = 'Unable to load summary prompt settings.';
+    }
+}
+
+function setSummaryPromptStatus(message, isError = false) {
+    const statusEl = document.getElementById('summaryPromptStatus');
+    if (!statusEl) return;
+    if (summaryPromptStatusTimer) {
+        clearTimeout(summaryPromptStatusTimer);
+        summaryPromptStatusTimer = null;
+    }
+    statusEl.style.color = isError ? '#b71c1c' : '#1b5e20';
+    statusEl.textContent = message || '';
+    if (message) {
+        summaryPromptStatusTimer = setTimeout(() => {
+            statusEl.textContent = '';
+            summaryPromptStatusTimer = null;
+        }, 3500);
+    }
+}
+
+async function saveSummaryPromptOverride() {
+    const editor = document.getElementById('summaryPromptText');
+    if (!editor) return;
+    const text = editor.value.trim();
+    if (!text) {
+        setSummaryPromptStatus('Enter prompt text or choose Use System Default.', true);
+        return;
+    }
+
+    try {
+        await patchPromptsPayload({ summary_prompt: text });
+        setSummaryPromptStatus('Saved custom summary prompt.');
+        await refreshSummaryPromptSection(true);
+    } catch (err) {
+        console.error('Summary prompt save failed', err);
+        setSummaryPromptStatus('Could not save prompt.', true);
+    }
+}
+
+async function resetSummaryPromptOverride() {
+    try {
+        await patchPromptsPayload({ summary_prompt: null });
+        const editor = document.getElementById('summaryPromptText');
+        if (editor) editor.value = '';
+        await refreshSummaryPromptSection(true);
+        setSummaryPromptStatus('Reverted to system default.');
+    } catch (err) {
+        console.error('Summary prompt reset failed', err);
+        setSummaryPromptStatus('Could not revert to default.', true);
+    }
+}
+
+async function patchPromptsPayload(payload) {
+    if (window.UserSettingsClient && typeof window.UserSettingsClient.savePrompts === 'function') {
+        await window.UserSettingsClient.savePrompts(payload || {});
+        return;
+    }
+    const resp = await fetch(PROMPTS_API_ENDPOINT, {
+        method: 'PATCH',
+        headers: {
+            'Content-Type': 'application/json',
+            'Accept': 'application/json',
+            'X-CSRF-Token': window.getCsrfToken ? window.getCsrfToken() : ''
+        },
+        credentials: 'same-origin',
+        body: JSON.stringify(payload || {})
+    });
+    if (!resp.ok) {
+        throw new Error(`HTTP ${resp.status}`);
+    }
+}
+
+async function fetchPromptsData(options = {}) {
+    if (window.UserSettingsClient && typeof window.UserSettingsClient.getPrompts === 'function') {
+        return window.UserSettingsClient.getPrompts(options);
+    }
+
+    const params = new URLSearchParams();
+    const fields = options.fields;
+    if (Array.isArray(fields) && fields.length) {
+        params.set('fields', fields.join(','));
+    } else if (typeof fields === 'string' && fields.trim()) {
+        params.set('fields', fields.trim());
+    }
+    if (options.includeDefaults === false) {
+        params.set('include_defaults', '0');
+    }
+    const url = `${PROMPTS_API_ENDPOINT}${params.toString() ? `?${params.toString()}` : ''}`;
+    const resp = await fetch(url, {
+        method: 'GET',
+        headers: { 'Accept': 'application/json' },
+        credentials: 'same-origin',
+        cache: 'no-store'
+    });
+    if (!resp.ok) {
+        throw new Error(`HTTP ${resp.status}`);
+    }
+    return resp.json();
+}
+
+async function loadDefaultPromptLibrary(forceRefresh = false) {
+    const container = document.getElementById('defaultPromptLibrary');
+    if (!container) return;
+
+    container.innerHTML = '<p style="margin:0;color:#48655d;">Loading default prompts…</p>';
+
+    try {
+        const payload = await fetchPromptsData({ forceRefresh, includeDefaults: true });
+        const defaults = (payload && payload.defaults) || {};
+        const fragment = document.createDocumentFragment();
+        let added = 0;
+
+        const summaryText = typeof defaults.summary_prompt === 'string' ? defaults.summary_prompt.trim() : '';
+        if (summaryText) {
+            fragment.appendChild(buildDefaultPromptCard('Clinical Summary Prompt (system)', summaryText, 'Key: summary_prompt'));
+            added++;
+        }
+
+        const oneLinerText = typeof defaults.one_liner === 'string' ? defaults.one_liner.trim() : '';
+        if (oneLinerText) {
+            fragment.appendChild(buildDefaultPromptCard('One-liner Prompt', oneLinerText, 'Key: one_liner'));
+            added++;
+        }
+
+        const patientText = typeof defaults.patient_instructions === 'string' ? defaults.patient_instructions.trim() : '';
+        if (patientText) {
+            fragment.appendChild(buildDefaultPromptCard('Patient Instructions Prompt', patientText, 'Key: patient_instructions'));
+            added++;
+        }
+
+        const scribePrompts = defaults && typeof defaults.scribe_prompts === 'object' ? defaults.scribe_prompts : null;
+        if (scribePrompts) {
+            Object.entries(scribePrompts)
+                .map(([id, info]) => {
+                    if (!info || typeof info !== 'object') return null;
+                    const title = String(info.title || id || '').trim();
+                    const text = String(info.full_text || info.text || '').trim();
+                    if (!title || !text) return null;
+                    return { id, title, text };
+                })
+                .filter(Boolean)
+                .sort((a, b) => a.title.localeCompare(b.title))
+                .forEach(entry => {
+                    fragment.appendChild(buildDefaultPromptCard(`Scribe Prompt • ${entry.title}`, entry.text, `Key: scribe_prompts → ${entry.id}`));
+                    added++;
+                });
+        }
+
+        Object.keys(defaults || {}).forEach(key => {
+            if (['summary_prompt', 'one_liner', 'patient_instructions', 'scribe_prompts'].includes(key)) return;
+            const value = defaults[key];
+            if (typeof value === 'string' && value.trim()) {
+                fragment.appendChild(buildDefaultPromptCard(`Default Prompt • ${key}`, value.trim(), `Key: ${key}`));
+                added++;
+            }
+        });
+
+        container.innerHTML = '';
+        if (added) {
+            container.appendChild(fragment);
+        } else {
+            container.innerHTML = '<p style="margin:0;color:#7b8d86;">No default prompts found.</p>';
+        }
+    } catch (err) {
+        console.error('Default prompt library load failed', err);
+        container.innerHTML = '<p style="margin:0;color:#b71c1c;">Unable to load default prompts.</p>';
+    }
+}
+
+function buildDefaultPromptCard(title, text, metaText) {
+    const details = document.createElement('details');
+    details.className = 'default-prompt-block';
+
+    const summary = document.createElement('summary');
+    summary.textContent = title;
+    details.appendChild(summary);
+
+    if (metaText) {
+        const meta = document.createElement('div');
+        meta.className = 'default-prompt-meta';
+        meta.textContent = metaText;
+        details.appendChild(meta);
+    }
+
+    const toolbar = document.createElement('div');
+    toolbar.className = 'default-prompt-toolbar';
+
+    const copyBtn = document.createElement('button');
+    copyBtn.type = 'button';
+    copyBtn.textContent = 'Copy Prompt';
+
+    const feedback = document.createElement('span');
+    feedback.className = 'default-prompt-meta';
+    feedback.style.marginLeft = 'auto';
+    feedback.textContent = '';
+
+    let resetTimer = null;
+    copyBtn.addEventListener('click', async () => {
+        if (resetTimer) {
+            clearTimeout(resetTimer);
+            resetTimer = null;
+        }
+        const ok = await copyPromptToClipboard(text);
+        if (ok) {
+            feedback.style.color = '#1b5e20';
+            feedback.textContent = 'Copied!';
+        } else {
+            feedback.style.color = '#b71c1c';
+            feedback.textContent = 'Copy failed';
+        }
+        resetTimer = setTimeout(() => {
+            feedback.textContent = '';
+            feedback.style.color = '#2f6f63';
+            resetTimer = null;
+        }, 2200);
+    });
+
+    toolbar.appendChild(copyBtn);
+    toolbar.appendChild(feedback);
+    details.appendChild(toolbar);
+
+    const pre = document.createElement('pre');
+    pre.className = 'default-prompt-text';
+    pre.textContent = text;
+    details.appendChild(pre);
+
+    return details;
+}
+
+async function copyPromptToClipboard(text) {
+    if (!text) return false;
+    try {
+        if (navigator.clipboard && navigator.clipboard.writeText) {
+            await navigator.clipboard.writeText(text);
+            return true;
+        }
+    } catch(_e){}
+
+    try {
+        const temp = document.createElement('textarea');
+        temp.value = text;
+        temp.setAttribute('readonly', '');
+        temp.style.position = 'fixed';
+        temp.style.opacity = '0';
+        document.body.appendChild(temp);
+        temp.focus();
+        temp.select();
+        const ok = document.execCommand('copy');
+        document.body.removeChild(temp);
+        return ok;
+    } catch(err) {
+        console.warn('Clipboard fallback failed', err);
+        return false;
+    }
+}
 
 // --- Custom Prompt Template Functions ---
 async function loadCustomTemplateList() {

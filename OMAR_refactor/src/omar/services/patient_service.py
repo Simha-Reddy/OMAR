@@ -12,6 +12,7 @@ from .transforms import (
     vpr_to_quick_encounters,
     vpr_to_quick_problems,
     vpr_to_quick_allergies,
+    vpr_to_quick_orders,
 )
 from .labs_rpc import rpc_panel_to_quick_tests
 
@@ -242,6 +243,11 @@ class PatientService:
     def get_allergies_quick(self, dfn: str, params: dict | None = None):
         vpr = self._get_vpr_cached(dfn, domain=self.domain_alias['allergies'], params=params)
         return vpr_to_quick_allergies(vpr)
+
+    # --- Orders ---
+    def get_orders_quick(self, dfn: str, params: dict | None = None):
+        vpr = self._get_vpr_cached(dfn, domain=self.domain_alias['orders'], params=params)
+        return vpr_to_quick_orders(vpr)
 
     # Raw VPR passthrough
     def get_vpr_raw(self, dfn: str, domain: str, params: dict | None = None):
