@@ -19,7 +19,7 @@ def create_app():
 
     runtime_root = Path(os.getenv('OMAR_RUNTIME_ROOT', project_root / 'runtime')).resolve()
     runtime_root.mkdir(parents=True, exist_ok=True)
-    for sub in ('archives', 'examples'):
+    for sub in ('archives',):
         (runtime_root / sub).mkdir(parents=True, exist_ok=True)
 
     app = Flask(
@@ -34,7 +34,6 @@ def create_app():
     app.config['PROJECT_ROOT'] = project_root
     app.config['RUNTIME_ROOT'] = runtime_root
     app.config['ARCHIVE_DIR'] = runtime_root / 'archives'
-    app.config['EXAMPLES_DIR'] = runtime_root / 'examples'
     app.config['PROMPTS_ROOT'] = package_root / 'static' / 'prompts'
     app.config['USERS_ROOT'] = package_root / 'users'
 

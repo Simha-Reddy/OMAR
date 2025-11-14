@@ -1,0 +1,81 @@
+trigger:
+  branches:
+    include:
+      - OMAR_deployable
+
+pr:
+  branches:
+    include:
+      - OMAR_deployable
+
+variables:
+  pythonVersion: '3.11'
+  dockerImageName: 'omar-refactor'
+  dockerImageTag: '$(Build.BuildNumber)'
+
+pool:
+  vmImage: 'ubuntu-latest'
+
+stages:
+  - stage: build_and_test
+    displayName: Build and Test
+    jobs:
+      - job: linux
+        displayName: Ubuntu
+        steps:
+          - checkout: self
+            clean: true
+
+          - task: UsePythonVersion@0
+            displayName: 'Use Python $(pythonVersion)'
+            inputs:
+              versionSpec: '$(pythonVersion)'
+              addToPath: true
+
+          - task: DownloadSecureFile@1
+            name: omarEnv
+            displayName: 'Download .env secure file'
+            inputs:
+              secureFile: '.env'
+
+          - task: DownloadSecureFile@1
+            name: vistaCipher
+            displayName: 'Download cipher.txt secure file'
+            inputs:
+              secureFile: 'cipher.txt'
+
+          - script: |
+              mkdir -p OMAR_refactor/runtime/config
+              cp "$(omarEnv.secureFilePath)" OMAR_refactor/runtime/config/.env
+              cp "$(vistaCipher.secureFilePath)" OMAR_refactor/runtime/config/cipher.txt
+            displayName: 'Stage secure files for tests'
+
+          - script: |
+              python -m pip install --upgrade pip
+              pip install -r OMAR_refactor/requirements.txt
+            displayName: 'Install Python dependencies'
+
+          - script: |
+              cd OMAR_refactor
+              python -m pytest
+            displayName: 'Run unit tests'
+            env:
+              OMAR_ENV_FILE: $(System.DefaultWorkingDirectory)/OMAR_refactor/runtime/config/.env
+              VISTARPC_CIPHER_FILE: $(System.DefaultWorkingDirectory)/OMAR_refactor/runtime/config/cipher.txt
+
+          - task: Docker@2
+            displayName: 'Build Docker image'
+            inputs:
+              command: build
+              dockerfile: OMAR_refactor/Dockerfile
+              buildContext: OMAR_refactor
+              tags: |
+                $(dockerImageTag)
+              repository: $(dockerImageName)
+
+          - script: |
+              rm -f "$(omarEnv.secureFilePath)" "$(vistaCipher.secureFilePath)" \
+                    "$(System.DefaultWorkingDirectory)/OMAR_refactor/runtime/config/.env" \
+                    "$(System.DefaultWorkingDirectory)/OMAR_refactor/runtime/config/cipher.txt"
+            displayName: 'Remove secure files'
+            condition: always()

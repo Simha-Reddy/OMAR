@@ -16,10 +16,9 @@ RUN pip install --upgrade pip \
     && pip install --no-cache-dir -r requirements.txt
 
 COPY src ./src
-COPY runtime ./runtime
 COPY gunicorn.conf.py wsgi.py ./
 
-RUN mkdir -p runtime/archives runtime/examples
+RUN mkdir -p runtime/archives runtime/config
 
 RUN useradd --create-home --shell /bin/bash omar \
     && chown -R omar:omar /app
@@ -27,6 +26,7 @@ USER omar
 
 ENV PYTHONPATH=/app/src \
     OMAR_RUNTIME_ROOT=/app/runtime \
+    OMAR_ENV_FILE=/app/runtime/config/.env \
     HOST=0.0.0.0 \
     PORT=5050 \
     USE_FAKEREDIS=0
