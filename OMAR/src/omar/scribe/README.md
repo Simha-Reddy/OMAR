@@ -6,11 +6,11 @@ Overview
 The scribe feature is composed of two complementary blueprints:
 
 1. `/api/scribe/*` (audio ingestion + incremental transcript)
-	 Implemented in `app/scribe/blueprints/scribe_api.py`.
+	 Implemented in `omar/scribe/blueprints/scribe_api.py`.
 	 Handles creation of a scribe session, streaming audio chunks, live transcript accumulation, and stop events.
 
 2. `/scribe/*` (note drafting + refinement chat)
-	 Implemented in `app/scribe/blueprints/note_api.py`.
+	 Implemented in `omar/scribe/blueprints/note_api.py`.
 	 Converts the evolving transcript (plus an optional template/prompt and previous draft) into a structured clinical note and supports iterative refinement via chat-style feedback.
 
 High-level data flow
@@ -131,5 +131,5 @@ Future enhancements (ideas)
 
 Changelog note
 --------------
-The ingestion blueprint formerly lived at `app/blueprints/scribe_api.py`; it was relocated to `app/scribe/blueprints/scribe_api.py` to align all scribe code under one package.
+The ingestion blueprint formerly lived at `app/blueprints/scribe_api.py`; it was relocated to `omar/scribe/blueprints/scribe_api.py` to align all scribe code under one package.
 

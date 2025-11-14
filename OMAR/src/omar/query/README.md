@@ -4,7 +4,7 @@ Hey OMAR Query backend
   Input JSON: { "prompt": "...", "model_id": "default" (or your model id), "patient": {optional} }
   Output JSON: { "answer": "...", "citations": [ ... ], "model_id": "..." }
 
-Query models live under `app/query/query_models/`.
+Query models live under `omar/query/query_models/`.
 - `default/` contains the current Hey OMAR baseline.
 - `template_model/` is a copy-ready starting point with docs.
 

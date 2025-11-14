@@ -6,7 +6,7 @@ This template's full documentation has moved to `docs/query_model_template.md`.
 Quick start:
 1. Copy this folder, rename it (`my_team_model`).
 2. Edit `provider.py`: set `model_id`, `name`, customize `answer()` / `rag_results()`.
-3. Add prompts (`PROMPT_answer.md`, etc.) and tests under `OMAR_refactor/tests/`.
+3. Add prompts (`PROMPT_answer.md`, etc.) and tests under `OMAR/tests/`.
 
 Contract summary (see full docs for details):
 Input payload:

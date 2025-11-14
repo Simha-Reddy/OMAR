@@ -3,7 +3,7 @@ RPC Inventory (Socket and HTTP VistA Calls)
 
 Last updated: 2025-11-07
 
-This document lists every VistA RPC invoked directly or via vista-api-x within OMAR_refactor.
+This document lists every VistA RPC invoked directly or via vista-api-x within OMAR.
 Top list: RPC name | Context(s) | Purpose.
 Below: detailed sections with parameters, response parsing, and usage sites.
 
@@ -30,7 +30,7 @@ Summary table
 Maintaining this table
 ----------------------
 
-Previously, this document referenced a helper script under `OMAR_refactor/scripts/` to auto-generate the table. The scripts folder has been removed from the repository and is now ignored.
+Previously, this document referenced a helper script under `OMAR/scripts/` to auto-generate the table. The scripts folder has been removed from the repository and is now ignored.
 
 If you need to regenerate or audit this inventory:
 

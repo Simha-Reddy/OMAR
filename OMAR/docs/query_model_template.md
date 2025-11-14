@@ -24,7 +24,7 @@ Creating your own model
    - Set unique `model_id` and human-friendly `name`.
    - Customize retrieval (add embeddings, scoring heuristics) & prompt composition.
 3. Store prompts in `.md` files; load them in code.
-4. Add tests under `OMAR_refactor/tests/`.
+4. Add tests under `OMAR/tests/`.
 
 Contract (payloads)
 -------------------

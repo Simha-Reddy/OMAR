@@ -2,7 +2,7 @@
 
 Last updated: 2025-11-07
 
-This note summarizes how to run OMAR_refactor as a SMART-on-FHIR app inside the VA Clinical Decision Support (CDS) Console ("smart-on-fhir-container"). It’s based on the Console’s README (added under `Helpful Resources/README_for_CDS_SMART_on_FHIR_app_compliance.md`) and OMAR_refactor’s architecture.
+This note summarizes how to run OMAR as a SMART-on-FHIR app inside the VA Clinical Decision Support (CDS) Console ("smart-on-fhir-container"). It’s based on the Console’s README (added under `Helpful Resources/README_for_CDS_SMART_on_FHIR_app_compliance.md`) and OMAR’s architecture.
 
 ## How the Console launches apps
 - The Console launches your app via URL and adds `iss=<FHIR base>` and `launch=<base64 JSON>` query params.
@@ -72,6 +72,6 @@ This note summarizes how to run OMAR_refactor as a SMART-on-FHIR app inside the 
 ## References
 - Console README: `Helpful Resources/README_for_CDS_SMART_on_FHIR_app_compliance.md`
 - Lighthouse Clinical Health API Authorization: https://developer.va.gov/explore/authorization/docs/authorization-code?api=clinical_health
-- OMAR_refactor app factory/CSP: `OMAR_refactor/app/__init__.py`
-- Service/gateway boundaries: `app/services/patient_service.py`, `app/gateways/*.py`
-- Transforms & RAG: `app/services/transforms.py`, `app/query/services/{rag.py,rag_store.py}`
+- OMAR app factory/CSP: `OMAR/src/omar/__init__.py`
+- Service/gateway boundaries: `omar/services/patient_service.py`, `omar/gateways/*.py`
+- Transforms & RAG: `omar/services/transforms.py`, `omar/query/services/{rag.py,rag_store.py}`

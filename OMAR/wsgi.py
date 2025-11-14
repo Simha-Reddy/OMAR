@@ -1,4 +1,4 @@
-"""Gunicorn entrypoint for OMAR_refactor."""
+"""Gunicorn entrypoint for OMAR."""
 from omar import create_app
 
 app = create_app()

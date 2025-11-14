@@ -42,7 +42,7 @@ set "OMAR_ENV_FILE=%PORTABLE_DIR%\.env"
 
 rem Change to portable directory (so .env resolves) and run the server
 cd /d "%PORTABLE_DIR%"
-echo [OMAR] Starting OMAR Refactor server...
+echo [OMAR] Starting OMAR server...
 
 rem Determine port (default 5050) and auto-open browser to landing page
 if "%PORT%"=="" set "PORT=5050"

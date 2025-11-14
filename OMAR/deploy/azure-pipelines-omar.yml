@@ -45,37 +45,37 @@ stages:
               secureFile: 'cipher.txt'
 
           - script: |
-              mkdir -p OMAR_refactor/runtime/config
-              cp "$(omarEnv.secureFilePath)" OMAR_refactor/runtime/config/.env
-              cp "$(vistaCipher.secureFilePath)" OMAR_refactor/runtime/config/cipher.txt
+              mkdir -p OMAR/runtime/config
+              cp "$(omarEnv.secureFilePath)" OMAR/runtime/config/.env
+              cp "$(vistaCipher.secureFilePath)" OMAR/runtime/config/cipher.txt
             displayName: 'Stage secure files for tests'
 
           - script: |
               python -m pip install --upgrade pip
-              pip install -r OMAR_refactor/requirements.txt
+              pip install -r OMAR/requirements.txt
             displayName: 'Install Python dependencies'
 
           - script: |
-              cd OMAR_refactor
+              cd OMAR
               python -m pytest
             displayName: 'Run unit tests'
             env:
-              OMAR_ENV_FILE: $(System.DefaultWorkingDirectory)/OMAR_refactor/runtime/config/.env
-              VISTARPC_CIPHER_FILE: $(System.DefaultWorkingDirectory)/OMAR_refactor/runtime/config/cipher.txt
+              OMAR_ENV_FILE: $(System.DefaultWorkingDirectory)/OMAR/runtime/config/.env
+              VISTARPC_CIPHER_FILE: $(System.DefaultWorkingDirectory)/OMAR/runtime/config/cipher.txt
 
           - task: Docker@2
             displayName: 'Build Docker image'
             inputs:
               command: build
-              dockerfile: OMAR_refactor/Dockerfile
-              buildContext: OMAR_refactor
+              dockerfile: OMAR/Dockerfile
+              buildContext: OMAR
               tags: |
                 $(dockerImageTag)
               repository: $(dockerImageName)
 
           - script: |
               rm -f "$(omarEnv.secureFilePath)" "$(vistaCipher.secureFilePath)" \
-                    "$(System.DefaultWorkingDirectory)/OMAR_refactor/runtime/config/.env" \
-                    "$(System.DefaultWorkingDirectory)/OMAR_refactor/runtime/config/cipher.txt"
+                    "$(System.DefaultWorkingDirectory)/OMAR/runtime/config/.env" \
+                    "$(System.DefaultWorkingDirectory)/OMAR/runtime/config/cipher.txt"
             displayName: 'Remove secure files'
             condition: always()

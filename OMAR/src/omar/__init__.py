@@ -98,15 +98,18 @@ def create_app():
     from flask import request, session as flask_session, jsonify
     import secrets
 
-    # Distinctive debug coloring so it's obvious this is the refactor server
-    _USE_COLOR_BANNER = str(os.getenv('OMAR_REFACTOR_DEBUG_COLOR', '1')).strip().lower() in ('1','true','yes','on')
+    # Distinctive debug coloring so it's obvious this is the OMAR server
+    _debug_color_flag = os.getenv('OMAR_DEBUG_COLOR')
+    if _debug_color_flag is None:
+        _debug_color_flag = os.getenv('OMAR_REFACTOR_DEBUG_COLOR', '1')  # backwards compatibility
+    _USE_COLOR_BANNER = str(_debug_color_flag).strip().lower() in ('1','true','yes','on')
     _CLR_MAGENTA = "\033[95m"
     _CLR_CYAN = "\033[96m"
     _CLR_RESET = "\033[0m"
     try:
         if _USE_COLOR_BANNER:
-            print(f"{_CLR_MAGENTA}[OMAR_refactor] Flask app initializing (refactor) {_CLR_RESET}")
-            app.logger.info(f"{_CLR_CYAN}[OMAR_refactor] create_app ready{_CLR_RESET}")
+            print(f"{_CLR_MAGENTA}[OMAR] Flask app initializing {_CLR_RESET}")
+            app.logger.info(f"{_CLR_CYAN}[OMAR] create_app ready{_CLR_RESET}")
     except Exception:
         pass
 
@@ -154,8 +157,8 @@ def create_app():
                 "connect-src 'self'",
                 "frame-ancestors 'none'",
             ])
-            # Tag responses so the client/network tab can verify the refactor server
-            resp.headers['X-OMAR-Server'] = 'OMAR_refactor'
+            # Tag responses so the client/network tab can verify the OMAR server
+            resp.headers['X-OMAR-Server'] = 'OMAR'
             # Set/update CSRF cookie
             tok = flask_session.get('csrf_token')
             if tok:
@@ -167,18 +170,18 @@ def create_app():
 
     # Minimal per-request colored trace so you can visually confirm the server in logs
     @app.before_request
-    def _refactor_trace_before():
+    def _omar_trace_before():
         try:
             if _USE_COLOR_BANNER and not request.path.startswith('/static'):
-                print(f"{_CLR_MAGENTA}→ [OMAR_refactor] {request.method} {request.path}{_CLR_RESET}")
+                print(f"{_CLR_MAGENTA}→ [OMAR] {request.method} {request.path}{_CLR_RESET}")
         except Exception:
             pass
 
     @app.after_request
-    def _refactor_trace_after(resp):
+    def _omar_trace_after(resp):
         try:
             if _USE_COLOR_BANNER and not request.path.startswith('/static'):
-                app.logger.info(f"{_CLR_CYAN}✓ [OMAR_refactor] {request.method} {request.path} {resp.status_code}{_CLR_RESET}")
+                app.logger.info(f"{_CLR_CYAN}✓ [OMAR] {request.method} {request.path} {resp.status_code}{_CLR_RESET}")
         except Exception:
             pass
         return resp

@@ -1,4 +1,4 @@
-"""Gunicorn runtime configuration for OMAR_refactor."""
+"""Gunicorn runtime configuration for OMAR."""
 
 import multiprocessing
 import os

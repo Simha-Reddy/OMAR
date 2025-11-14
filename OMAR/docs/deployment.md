@@ -1,6 +1,6 @@
-# OMAR_refactor Deployment Plan and Docker Stack
+# OMAR Deployment Plan and Docker Stack
 
-This document captures the deployment approach for running OMAR_refactor on a multi-user server and details the Docker-based implementation that accompanies it.
+This document captures the deployment approach for running OMAR on a multi-user server and details the Docker-based implementation that accompanies it.
 
 ## 1. Deployment goals
 

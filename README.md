@@ -79,24 +79,23 @@ This section explains where key code lives, how patient data is obtained, and ho
 
 Project layout (important folders)
 
-- `OMAR_refactor/` — active application code used for development and deployment.
-- `OMAR_refactor/app/` — Flask application package (blueprints, services, query model providers).
-- `OMAR_refactor/static/` — front-end JavaScript, CSS, images. Look under `static/js/workspace/modules/` for tab modules like `heyomar.js` and `snapshot.js`.
-- `OMAR_refactor/templates/` — HTML templates and prompt templates used by the backend.
-- `OMAR_refactor/app/query/query_models/` — Hey OMAR providers live here. See `default/` for the built-in model and `template_model/` for a copyable starting point (with its own README).
-- `OMAR_refactor/app/gateways/` - Gateway implementations
+- `OMAR/src/omar/` — Flask application package used for development and deployment.
+- `OMAR/src/omar/static/` — front-end JavaScript, CSS, images. Look under `static/js/workspace/modules/` for tab modules like `heyomar.js` and `snapshot.js`.
+- `OMAR/src/omar/templates/` — HTML templates and prompt templates used by the backend.
+- `OMAR/src/omar/query/query_models/` — Hey OMAR providers live here. See `default/` for the built-in model and `template_model/` for a copyable starting point (with its own README).
+- `OMAR/src/omar/gateways/` - Gateway implementations
   - `vista_api_x_gateway.py` (DEMO HTTP)
   - `vista_socket_gateway.py` (Broker socket via JLV XML)
   - `factory.py` (runtime selection based on login)
-- `OMAR_refactor/static/js/note.js` — browser-side audio capture (NoteRecorder) used by the Note (scribe) tab.
-- `requirements.txt` — Python dependencies for the environment used to run OMAR.
+- `OMAR/src/omar/static/js/note.js` — browser-side audio capture (NoteRecorder) used by the Note (scribe) tab.
+- `OMAR/requirements.txt` — Python dependencies for the environment used to run OMAR.
 
 How patient data is obtained
 
 - Two modes:
   - DEMO (vista-api-x): fetches VPR JSON via HTTP; used when the landing page selects DEMO.
   - Socket (Broker): connects directly to VistA; uses JLV WEB SERVICES + `VPR GET PATIENT DATA` (XML) per-domain and normalizes it to a JSON-like shape consumed by the same transforms. Login with ACCESS/VERIFY via `/api/login`.
-- The returned VPR payload (JSON in DEMO, XML→normalized lists in Socket) feeds transforms in `app/services/transforms.py` (demographics, meds, labs, vitals, notes, etc.).
+- The returned VPR payload (JSON in DEMO, XML→normalized lists in Socket) feeds transforms in `omar/services/transforms.py` (demographics, meds, labs, vitals, notes, etc.).
 - TIU documents are included in VPR (domain `document`); text may be requested with `text=1` where supported.
 
 See `docs/gateways.md` for environment variables and operational details.
@@ -107,7 +106,7 @@ Privacy note about patient data
 
 ---
 
-## Data flow (OMAR_refactor)
+## Data flow (OMAR)
 
 High-level flow from data sources to the UI:
 
@@ -120,7 +119,7 @@ High-level flow from data sources to the UI:
   |                                        (CPRS ACCESS/VERIFY handled server-side)
   v
 [VPR GET PATIENT DATA JSON (patient bundle)]
-  |-- quick mappings --> app/services/transforms.py
+  |-- quick mappings --> omar/services/transforms.py
   |                     (demographics, meds, labs, vitals, notes)
   |                         -> Snapshot / Explore
   |
@@ -137,9 +136,9 @@ Hey OMAR (Query Provider)
 ```
 
 Notes:
-- vista-api-x is the single gateway OMAR_refactor uses for VistA data.
+- vista-api-x is the single gateway OMAR uses for VistA data.
 - VPR GET PATIENT DATA JSON is consumed directly.
-- Transforms in `app/services/transforms.py` produce lightweight, UI-friendly shapes.
+- Transforms in `omar/services/transforms.py` produce lightweight, UI-friendly shapes.
 - The per-patient DocumentSearchIndex powers RAG for Hey OMAR.
 
 
@@ -147,7 +146,7 @@ Notes:
 
 ## How the Note Scribe works (high-level)
 
-- Audio capture (front-end): The user must get explicit consent from anyone being recorded. `OMAR_refactor/static/js/note.js` (NoteRecorder) captures microphone input in the browser using MediaRecorder/WebAudio, chunks audio (WAV), and streams it to the server. 
+- Audio capture (front-end): The user must get explicit consent from anyone being recorded. `OMAR/src/omar/static/js/note.js` (NoteRecorder) captures microphone input in the browser using MediaRecorder/WebAudio, chunks audio (WAV), and streams it to the server. 
 - Transcription: audio segments are sent to the configured speech-to-text provider (Azure Speech or another configured provider). Transcription results are returned in near-real-time.
 - Assembly: Transcripts are combined with anything currently in the editable Draft Note box, and the user selected prompt. These are sent to the LLM and a draft note is returned. If the default prompts are not sufficient, the user can add a custom prompt on the Settings page.
 - Draft lifecycle: drafts are saved in the session workspace and may be copied. They are not automatically signed or sent to the EHR — that remains a clinician action.
@@ -163,8 +162,8 @@ What Hey OMAR is
 Where the code lives
 
 - Front-end: `static/js/workspace/modules/heyomar.js` (UI logic, rendering early RAG lists, clickable citations, and modal note viewers).
-- Backend endpoints: `app/query/blueprints/query_api.py` exposes `/api/query/ask`, `/api/query/rag_results`, and `/api/query/reset`.
-- Model providers: `OMAR_refactor/app/query/query_models/<provider>/provider.py` — pluggable providers implement the same interface.
+- Backend endpoints: `omar/query/blueprints/query_api.py` exposes `/api/query/ask`, `/api/query/rag_results`, and `/api/query/reset`.
+- Model providers: `OMAR/src/omar/query/query_models/<provider>/provider.py` — pluggable providers implement the same interface.
 
 Multi-model plan (how multiple models are supported)
 
@@ -179,13 +178,13 @@ Multi-model plan (how multiple models are supported)
 The default provider performs an in-model Retrieval-Augmented-Generation (RAG) pipeline with these highlights:
 
 1. Document processing
-- Remove boilerplate and duplicates: common headers/footers, signature blocks, page banners, and date/signed lines are stripped; empty and duplicate chunks are dropped. (see `OMAR_refactor/app/query/query_models/default/services/rag.py`: `remove_boilerplate_phrases`, `clean_chunks_remove_duplicates_and_boilerplate`).
+- Remove boilerplate and duplicates: common headers/footers, signature blocks, page banners, and date/signed lines are stripped; empty and duplicate chunks are dropped. (see `OMAR/src/omar/query/query_models/default/services/rag.py`: `remove_boilerplate_phrases`, `clean_chunks_remove_duplicates_and_boilerplate`).
 - Page tagging: simple page detection assigns page numbers and offsets to chunks when markers are present. (see `default/services/rag.py`: `tag_chunks_with_page`).
 - Sliding-window chunking: TIU notes are split with a large window and overlap; stable excerpt indices are assigned per note in first-appearance order. (see `default/services/rag.py`: `sliding_window_chunk`; chunks built in `default/provider.py`: `_build_chunks_from_document_index`).
 - Metadata: each chunk retains note id, local title, nationalTitle (if available, these can help distinguish categories of notes like nursing or social work), date/time, and the excerpt index. (set in `default/provider.py`: `_build_chunks_from_document_index`).
 
 2. Retrieval
- - A hybrid search combines semantic embeddings (Azure OpenAI/text-embedding-3-large or similar) and a BM25 keyword index. (see `default/services/rag.py`: `build_bm25_index`, `hybrid_search`; embeddings via `app/ai_tools/embeddings`).
+ - A hybrid search combines semantic embeddings (Azure OpenAI/text-embedding-3-large or similar) and a BM25 keyword index. (see `default/services/rag.py`: `build_bm25_index`, `hybrid_search`; embeddings via `omar/ai_tools/embeddings`).
  - Hybrid scores are fused, and additional boosts are applied: recency, section-type (e.g., Assessment/Plan), title overlap, and a tag boost computed from the nationalTitle when available. (nationalTitle tag boost is added at search time via per-chunk `tag_boost` in `default/provider.py`: `answer` using `default/services/title_tagging.py`: `score_for_title`; consumed in `rag.py`: `hybrid_search`).
  - Where the nationalTitle boost applies: the nationalTitle-based boost is injected at search time as a per-chunk `tag_boost` and fused into the hybrid score. After retrieval, an optional light re-ranker may sort by title tags again; this post-step currently uses the local title, not the nationalTitle. (see `default/provider.py`: `answer` post-retrieval sort by `score_for_title`).
 - The retriever returns up to 12 candidate chunks per query with a per-note cap of 3 chunks to maintain diversity.
@@ -212,7 +211,7 @@ Contract (what your provider must do)
 
 Recommended location and pattern
 
-- Create a folder `OMAR_refactor/app/query/query_models/<your_provider>/` and add `provider.py`. Look at `OMAR_refactor/app/query/query_models/default/provider.py` as a reference for how to:
+- Create a folder `OMAR/src/omar/query/query_models/<your_provider>/` and add `provider.py`. Look at `OMAR/src/omar/query/query_models/default/provider.py` as a reference for how to:
   - Use the DocumentSearchIndex
   - Build prompts from templates in `templates/` (e.g., `health_summary_prompt.txt`)
   - Respect chat history per patient
@@ -251,7 +250,7 @@ Testing
   - List helpers: `GET /api/patient/{DFN}/list/{domain}` → `Api.list('documents', { limit: 50 })`
   - Documents: `GET /api/patient/{DFN}/documents/search?query=...`, `POST /api/patient/{DFN}/documents/text-batch` → `Api.documentsSearch({...})`, `Api.documentsTextBatch(ids)`
   - Query/RAG: `POST /api/query/ask`, `POST /api/query/rag_results`, `POST /api/query/reset` → `Api.ask(q, { model_id })`, `Api.ragResults(q, { model_id })`, `Api.resetQueryHistory({ model_id })`
-- For custom functionality, add a Flask blueprint under `app/blueprints/yourtab.py` with routes such as:
+- For custom functionality, add a Flask blueprint under `omar/blueprints/yourtab.py` with routes such as:
   - Patient-scoped: `GET /api/patient/<dfn>/yourtab/stats`, `POST /api/patient/<dfn>/yourtab/action`
   - App-scoped: `GET /api/yourtab/options`, `POST /api/yourtab/compute`
   - Prefer JSON responses; include CSRF for mutating requests. The front end’s `csrf_fetch.js` automatically attaches the CSRF header when you call `Api.csrfFetch()` or `Api.*` helpers.

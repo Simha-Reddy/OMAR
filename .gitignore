@@ -8,29 +8,29 @@
 !.gitignore
 
 # Whitelist allowed top-level folders
-!/OMAR_refactor/
+!/OMAR/
 !/flyers/
 !/Helpful\ Resources/
 !README.md
 
 # Allow all contents within the whitelisted folders
-!/OMAR_refactor/**
+!/OMAR/**
 !/flyers/**
 !/Helpful\ Resources/**
 
-# Inside OMAR_refactor, keep sensitive or generated content out of git
-OMAR_refactor/portable/.env
-OMAR_refactor/portable/.env.*
-OMAR_refactor/portable/cipher.txt
-OMAR_refactor/portable/python/
-OMAR_refactor/runtime/archives/
-OMAR_refactor/deploy/.env
-OMAR_refactor/deploy/.env.*
-OMAR_refactor/.venv/
-OMAR_refactor/.venv/**
+# Inside OMAR, keep sensitive or generated content out of git
+OMAR/portable/.env
+OMAR/portable/.env.*
+OMAR/portable/cipher.txt
+OMAR/portable/python/
+OMAR/runtime/archives/
+OMAR/deploy/.env
+OMAR/deploy/.env.*
+OMAR/.venv/
+OMAR/.venv/**
 
 # Drop compiled Python artifacts that may be generated locally
-OMAR_refactor/src/**/__pycache__/
-OMAR_refactor/src/**/*.py[co]
-OMAR_refactor/portable/**/__pycache__/
-OMAR_refactor/portable/**/*.py[co]
+OMAR/src/**/__pycache__/
+OMAR/src/**/*.py[co]
+OMAR/portable/**/__pycache__/
+OMAR/portable/**/*.py[co]
